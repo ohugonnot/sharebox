@@ -4,7 +4,9 @@
 
 Share files and folders instantly with human-readable links. Stream videos directly in the browser with on-the-fly transcoding -- no pre-processing required.
 
-![Screenshot placeholder](https://via.placeholder.com/900x500?text=Screenshot+coming+soon)
+![Admin Panel](https://i.postimg.cc/dsFd7Cgz/image.png)
+
+![Video Streaming](https://i.postimg.cc/HLNk9fBn/image.png)
 
 ## Features
 
