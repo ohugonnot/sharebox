@@ -640,8 +640,19 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var step = isVideo ? 'remux' : 'native';
 
     player.addEventListener('playing', function() {
-        if (step === 'remux') hint.textContent = '';
-        else if (step === 'transcode') { hint.textContent = 'Transcodage en cours (720p)'; hint.className = 'player-hint transcoding'; }
+        if (step === 'remux' && isVideo) {
+            // Attendre un court instant puis vérifier si la vidéo a une image
+            // HEVC 10-bit : l'audio joue mais videoWidth reste 0
+            setTimeout(function() {
+                if (player.videoWidth === 0) {
+                    onFail();
+                } else {
+                    hint.textContent = '';
+                }
+            }, 800);
+            return;
+        }
+        if (step === 'transcode') { hint.textContent = 'Transcodage en cours (720p)'; hint.className = 'player-hint transcoding'; }
         else hint.textContent = '';
     });
 
