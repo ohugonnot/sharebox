@@ -89,7 +89,7 @@ if (is_file($resolvedPath)) {
         }
     }
 
-    // Mode streaming : sert avec le bon MIME pour lecture inline
+    // Mode streaming natif : sert le fichier brut (audio uniquement, ou fallback)
     if (isset($_GET['stream']) && $_GET['stream'] === '1') {
         $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
         if ($mime) {
@@ -101,7 +101,25 @@ if (is_file($resolvedPath)) {
         }
     }
 
-    // Mode transcodage : ffmpeg convertit en MP4 streamable à la volée
+    // Mode remux : repackage MKV→MP4 sans ré-encoder la vidéo (quasi zéro CPU)
+    // Audio transcodé en AAC pour compatibilité (AC3/DTS → AAC, léger)
+    if (isset($_GET['stream']) && $_GET['stream'] === 'remux') {
+        $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
+        if ($mime && str_starts_with($mime, 'video/')) {
+            header('Content-Type: video/mp4');
+            header('Content-Disposition: inline');
+            header('X-Accel-Buffering: no');
+            header('Cache-Control: no-cache');
+            $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
+                . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
+                . ' -movflags frag_keyframe+empty_moov+default_base_moof'
+                . ' -f mp4 -y pipe:1 2>/dev/null';
+            passthru($cmd);
+            exit;
+        }
+    }
+
+    // Mode transcodage complet : ré-encode vidéo + audio (CPU intensif)
     if (isset($_GET['stream']) && $_GET['stream'] === 'transcode') {
         $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
         if ($mime && str_starts_with($mime, 'video/')) {
@@ -109,11 +127,6 @@ if (is_file($resolvedPath)) {
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
-            // -movflags frag_keyframe+empty_moov = fragmented MP4, streamable sans seek
-            // -preset ultrafast = minimum CPU
-            // -crf 23 = qualité correcte
-            // -vf scale=-2:720 = max 720p pour limiter le CPU
-            // -ac 2 = stéréo (compatibilité max)
             $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
                 . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(720,ih)\'" -pix_fmt yuv420p'
                 . ' -c:a aac -ac 2 -b:a 128k'
@@ -545,13 +558,17 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     $fileName = $subPath ? basename($subPath) : $shareName;
     $fileNameHtml = htmlspecialchars($fileName);
 
-    $streamUrl = $subPath
-        ? $baseUrl . '?p=' . rawurlencode($subPath) . '&amp;stream=1'
-        : $baseUrl . '?stream=1';
+    $remuxUrl = $subPath
+        ? $baseUrl . '?p=' . rawurlencode($subPath) . '&amp;stream=remux'
+        : $baseUrl . '?stream=remux';
 
     $transcodeUrl = $subPath
         ? $baseUrl . '?p=' . rawurlencode($subPath) . '&amp;stream=transcode'
         : $baseUrl . '?stream=transcode';
+
+    $nativeUrl = $subPath
+        ? $baseUrl . '?p=' . rawurlencode($subPath) . '&amp;stream=1'
+        : $baseUrl . '?stream=1';
 
     $dlUrl = $subPath
         ? $baseUrl . '?p=' . rawurlencode($subPath)
@@ -569,6 +586,8 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     }
 
     $tag = $mediaType === 'video' ? 'video' : 'audio';
+    // Vidéo : remux d'abord (MKV→MP4, zéro CPU). Audio : natif direct.
+    $srcUrl = $isVideo ? $remuxUrl : $nativeUrl;
     $css = css_public();
     $backHtml = $backUrl
         ? '<a class="player-btn" href="' . $backUrl . '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Retour</a>'
@@ -607,46 +626,42 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     </div>
     <div class="player-container">
         <{$tag} id="player" controls autoplay preload="metadata">
-            <source src="{$streamUrl}" id="src-native">
+            <source src="{$srcUrl}">
         </{$tag}>
-        <div class="player-hint" id="hint">Lecture en cours...</div>
+        <div class="player-hint" id="hint">Chargement...</div>
     </div>
 </div>
 <script>
 (function() {
-    const player = document.getElementById('player');
-    const hint = document.getElementById('hint');
-    const isVideo = {$isVideo};
-    const transcodeUrl = '{$transcodeUrl}'.replace(/&amp;/g, '&');
-    let triedTranscode = false;
+    var player = document.getElementById('player');
+    var hint = document.getElementById('hint');
+    var isVideo = {$isVideo};
+    var transcodeUrl = '{$transcodeUrl}'.replace(/&amp;/g, '&');
+    var step = isVideo ? 'remux' : 'native';
 
-    // Si la lecture native démarre, tout va bien
     player.addEventListener('playing', function() {
-        hint.textContent = triedTranscode ? 'Transcodage en cours (qualité réduite)' : '';
-        hint.className = 'player-hint' + (triedTranscode ? ' transcoding' : '');
+        if (step === 'remux') hint.textContent = '';
+        else if (step === 'transcode') { hint.textContent = 'Transcodage en cours (720p)'; hint.className = 'player-hint transcoding'; }
+        else hint.textContent = '';
     });
 
-    // Si erreur de lecture native → tenter le transcodage (vidéo seulement)
-    player.addEventListener('error', function() {
-        if (triedTranscode || !isVideo) {
-            hint.textContent = 'Format non supporté par votre navigateur. Utilisez le bouton Télécharger.';
+    function onFail() {
+        if (step === 'remux') {
+            step = 'transcode';
+            hint.textContent = 'Remux échoué, transcodage en cours...';
+            hint.className = 'player-hint transcoding';
+            player.src = transcodeUrl;
+            player.load();
+            player.play().catch(function(){});
+        } else {
+            hint.textContent = 'Lecture impossible. Utilisez le bouton Télécharger.';
             hint.className = 'player-hint error';
-            return;
         }
-        triedTranscode = true;
-        hint.textContent = 'Format non supporté, transcodage en cours...';
-        hint.className = 'player-hint transcoding';
-        player.src = transcodeUrl;
-        player.load();
-        player.play().catch(function(){});
-    });
+    }
 
-    // Aussi écouter l'erreur sur la source
-    var src = document.getElementById('src-native');
-    if (src) src.addEventListener('error', function() {
-        if (triedTranscode || !isVideo) return;
-        player.dispatchEvent(new Event('error'));
-    });
+    player.addEventListener('error', onFail);
+    var src = player.querySelector('source');
+    if (src) src.addEventListener('error', onFail);
 })();
 </script>
 </body>
