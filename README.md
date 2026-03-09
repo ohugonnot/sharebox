@@ -2,6 +2,11 @@
 
 **Self-hosted file sharing with built-in video streaming.**
 
+![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777BB4?logo=php&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)
+![PHPUnit](https://img.shields.io/badge/tests-PHPUnit-success)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
 Share files and folders instantly with human-readable links. Stream videos directly in the browser with on-the-fly transcoding -- no pre-processing required.
 
 ![Admin Panel](https://i.postimg.cc/dsFd7Cgz/image.png)
@@ -12,7 +17,7 @@ Share files and folders instantly with human-readable links. Stream videos direc
 
 ## Features
 
-- **Zero dependencies** -- pure PHP, no Composer, no framework
+- **Zero runtime dependencies** -- pure PHP, no framework. Composer used only for dev tooling (PHPUnit)
 - **SQLite database** -- auto-created on first use, zero configuration
 - **Human-readable links** -- slugs generated from filenames (e.g., `/dl/batman-begins-2005-x7k2`)
 - **Password protection** -- optional, bcrypt-hashed
@@ -31,6 +36,9 @@ Share files and folders instantly with human-readable links. Stream videos direc
 - **Dark theme UI** -- clean, modern, mobile-responsive interface
 - **Efficient file serving** -- nginx X-Accel-Redirect (sendfile) support
 - **Admin panel** -- protected by HTTP basic auth, manage all share links
+- **CSRF protection** -- token-based protection on all admin actions
+- **Security hardened** -- session fixation prevention, mail header injection protection, ZIP size limits
+- **PHPUnit test suite** -- 44 tests covering security, slug generation, file format utilities
 
 ## Requirements
 
@@ -176,6 +184,7 @@ define('DL_BASE_URL', '/dl/');
 | `DB_PATH` | Path to the SQLite database file. Default: `data/share.db` relative to the app. |
 | `XACCEL_PREFIX` | Nginx internal redirect prefix. Must match the `location` block in your nginx config. Set to `''` for Apache. |
 | `DL_BASE_URL` | URL prefix for public download links. Must match your web server rewrite rules. |
+| `MAX_ZIP_SIZE` | Maximum total size for ZIP downloads (bytes). Default: 10 GB. |
 
 ---
 
@@ -187,6 +196,13 @@ define('DL_BASE_URL', '/dl/');
 - Share passwords are hashed with **bcrypt** (`password_hash` / `password_verify`).
 - Public download URLs (`/dl/...`) are the only unauthenticated endpoints.
 - PHP execution is disabled in download-related locations to prevent code injection.
+- CSRF tokens verified with `hash_equals` on all POST actions.
+- `session_regenerate_id(true)` after password authentication to prevent session fixation.
+- Mail header sanitisation prevents header injection attacks.
+- ZIP download size is capped by `MAX_ZIP_SIZE` (default 10 GB).
+- Internal PHP files (`db.php`, `config.php`, `functions.php`) are blocked by nginx.
+- HTTP security headers: `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`.
+- Restrictive CORS policy on subtitle extraction endpoint.
 - **HTTPS is strongly recommended.** Use Let's Encrypt or a similar CA for production deployments.
 
 ---
@@ -206,11 +222,32 @@ sharebox/
 ├── style.css           # Styles (dark theme)
 ├── favicon.svg         # App icon
 ├── nginx.conf.example  # Nginx configuration template
+├── functions.php       # Shared utility functions (slug, path validation, mime)
 ├── .htaccess           # Apache rewrite rules
+├── composer.json       # Dev dependencies (PHPUnit)
+├── phpunit.xml         # Test configuration
+├── tests/              # PHPUnit test suite
+│   ├── SecurityTest.php
+│   ├── SlugTest.php
+│   ├── FormatAndMimeTest.php
+│   └── SemaphoreTest.php
 ├── data/               # SQLite database (auto-created, gitignored)
 │   └── share.db
 └── LICENSE
 ```
+
+## Testing
+
+```bash
+composer install
+vendor/bin/phpunit
+```
+
+The test suite covers:
+- **Security** — token regex validation, path traversal prevention (including symlinks)
+- **Slug generation** — film names, accents, truncation, uniqueness, collision avoidance
+- **File utilities** — size formatting, MIME type detection, media type classification
+- **Concurrency** — stream slot acquisition and release
 
 ## License
 
