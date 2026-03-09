@@ -710,6 +710,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var pp = '{$pParamJs}';
     var audioIdx = 0;
     var step = isVideo ? 'remux' : 'native';
+    var confirmedStep = ''; // mode confirmé qui fonctionne (évite de re-tester)
     var seekOffset = 0;
     var totalDuration = 0;
     var dragging = false;
@@ -721,11 +722,23 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         return url;
     }
 
+    // Figer la taille du player pendant un reload pour éviter le "saut"
+    function lockSize() {
+        if (isVideo && player.videoWidth > 0) {
+            player.style.minHeight = player.offsetHeight + 'px';
+        }
+    }
+    function unlockSize() {
+        player.style.minHeight = '';
+    }
+
     function startStream(resumeAt) {
         seekOffset = resumeAt || 0;
+        lockSize();
         var url;
         if (isVideo) {
-            url = buildUrl(step === 'transcode' ? 'transcode' : 'remux', audioIdx, seekOffset);
+            var mode = confirmedStep || step;
+            url = buildUrl(mode, audioIdx, seekOffset);
         } else {
             url = base + '?' + pp + 'stream=1';
         }
@@ -849,7 +862,6 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
                 sel.addEventListener('change', function() {
                     var pos = realTime();
                     audioIdx = parseInt(sel.value);
-                    step = isVideo ? 'remux' : 'native';
                     hint.textContent = 'Changement de piste...';
                     hint.className = 'player-hint';
                     startStream(pos);
@@ -882,17 +894,21 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     startStream(0);
 
     player.addEventListener('playing', function() {
-        if (step === 'remux' && isVideo) {
+        unlockSize();
+        var mode = confirmedStep || step;
+        if (mode === 'remux' && isVideo && !confirmedStep) {
+            // Première fois en remux : vérifier si HEVC décodé (videoWidth > 0)
             setTimeout(function() {
                 if (player.videoWidth === 0) {
                     onFail();
                 } else {
-                    hint.textContent = step === 'transcode' ? 'Transcodage 720p' : '';
+                    confirmedStep = 'remux';
+                    hint.textContent = '';
                 }
             }, 800);
             return;
         }
-        if (step === 'transcode') {
+        if (mode === 'transcode') {
             hint.textContent = 'Transcodage 720p';
             hint.className = 'player-hint transcoding';
         } else {
@@ -901,8 +917,9 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     });
 
     function onFail() {
-        if (step === 'remux') {
+        if (!confirmedStep && step === 'remux') {
             step = 'transcode';
+            confirmedStep = 'transcode';
             var pos = realTime();
             hint.textContent = 'Transcodage en cours...';
             hint.className = 'player-hint transcoding';
