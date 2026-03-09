@@ -176,6 +176,7 @@ if (is_file($resolvedPath)) {
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
+            header('Accept-Ranges: none');
             $cmd = 'ffmpeg' . $seekArgBefore . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
                 . $audioMap . $seekArgAfter . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
                 . ' -af "aresample=async=1000:first_pts=0"'
@@ -203,6 +204,7 @@ if (is_file($resolvedPath)) {
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
+            header('Accept-Ranges: none');
             $cmd = 'ffmpeg' . $seekArgBefore . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
                 . $audioMap . $seekArgAfter . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
                 . ' -c:a aac -ac 2 -b:a 128k'
@@ -674,6 +676,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     .track-select { padding: .3rem .5rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,.03); color: var(--text-primary); font-family: var(--font-sans); font-size: .78rem; outline: none; cursor: pointer; -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .4rem center; padding-right: 1.4rem; }
     .track-select option { background: #1a1d28; color: #e8eaf0; }
     .track-select:focus { border-color: var(--accent); }
+    .tap-play-btn { margin: .6rem auto; gap: .4rem; font-size: .9rem; padding: .65rem 1.6rem; }
     @media (max-width: 480px) { .page { padding: 1rem .75rem; } .player-name { display: none; } }
     </style>
 </head>
@@ -685,7 +688,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         <a class="player-btn accent" href="{$dlUrl}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Télécharger</a>
     </div>
     <div class="player-container">
-        <{$tag} id="player" controls autoplay preload="metadata" crossorigin="anonymous"></{$tag}>
+        <{$tag} id="player" controls autoplay playsinline preload="metadata" crossorigin="anonymous"></{$tag}>
         <div class="player-hint" id="hint">Chargement...</div>
         <div class="seek-bar" id="seek-bar" style="display:none">
             <div class="seek-track"></div>
@@ -725,6 +728,9 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 
     var currentQuality = 720;
     var videoHeight = 0;
+    var tapBtn = null;
+    var hasFailed = false;
+    var videoWidthTimer = null;
 
     function buildUrl(mode, audio, startSec) {
         var url = base + '?' + pp + 'stream=' + mode + '&audio=' + (audio || 0);
@@ -745,7 +751,10 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 
     function startStream(resumeAt) {
         seekOffset = resumeAt || 0;
+        hasFailed = false;
+        clearTimeout(videoWidthTimer);
         lockSize();
+        if (tapBtn) { tapBtn.remove(); tapBtn = null; }
         var url;
         if (isVideo) {
             var mode = confirmedStep || step;
@@ -755,7 +764,26 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         }
         player.src = url;
         player.load();
-        player.play().catch(function(){});
+        player.play().catch(function(e) {
+            if (e && e.name === 'NotAllowedError') showTapToPlay();
+        });
+    }
+
+    function showTapToPlay() {
+        if (tapBtn) return;
+        tapBtn = document.createElement('button');
+        tapBtn.className = 'player-btn tap-play-btn';
+        tapBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><polygon points="5,3 19,12 5,21"/></svg> Appuyer pour lire';
+        tapBtn.addEventListener('click', function() {
+            tapBtn.remove(); tapBtn = null;
+            hint.textContent = 'Chargement...';
+            hint.className = 'player-hint';
+            player.load();
+            player.play().catch(function(){});
+        });
+        hint.textContent = '';
+        hint.className = 'player-hint';
+        hint.appendChild(tapBtn);
     }
 
     function realTime() {
@@ -796,6 +824,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 
     // Seek par clic/drag sur la barre
     function seekToFraction(frac) {
+        if (tapBtn) return; // pas de seek avant le premier tap utilisateur
         var targetSec = Math.max(0, Math.min(totalDuration, frac * totalDuration));
         // Mettre à jour visuellement tout de suite
         var pct = (targetSec / totalDuration) * 100;
@@ -942,11 +971,16 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         startStream(0);
     }
 
-    // Charger le probe AVANT de démarrer la lecture
+    // Charger le probe AVANT de démarrer la lecture (timeout 5s pour mobile)
     if (isVideo) {
-        fetch(base + '?' + pp + 'probe=1').then(function(r){ return r.json(); }).then(function(data) {
-            setupAndStart(data);
-        }).catch(function(){ setupAndStart(null); });
+        hint.textContent = 'Analyse du fichier...';
+        var probeCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        var probeTimer = setTimeout(function() { if (probeCtrl) probeCtrl.abort(); }, 5000);
+        var fetchOpts = probeCtrl ? { signal: probeCtrl.signal } : {};
+        fetch(base + '?' + pp + 'probe=1', fetchOpts)
+            .then(function(r) { clearTimeout(probeTimer); return r.json(); })
+            .then(function(data) { hint.textContent = 'Chargement...'; setupAndStart(data); })
+            .catch(function() { clearTimeout(probeTimer); hint.textContent = 'Chargement...'; setupAndStart(null); });
     } else {
         setupAndStart(null);
     }
@@ -955,15 +989,16 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         unlockSize();
         var mode = confirmedStep || step;
         if (mode === 'remux' && isVideo && !confirmedStep) {
-            // Première fois en remux : vérifier si HEVC décodé (videoWidth > 0)
-            setTimeout(function() {
+            // Première fois en remux : vérifier si le codec est décodé (videoWidth > 0)
+            // 1500ms pour laisser le temps aux décodeurs mobiles plus lents
+            videoWidthTimer = setTimeout(function() {
                 if (player.videoWidth === 0) {
                     onFail();
                 } else {
                     confirmedStep = 'remux';
                     hint.textContent = '';
                 }
-            }, 800);
+            }, 1500);
             return;
         }
         if (mode === 'transcode') {
@@ -975,6 +1010,8 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     });
 
     function onFail() {
+        if (tapBtn || hasFailed) return;
+        hasFailed = true;
         if (!confirmedStep && step === 'remux') {
             step = 'transcode';
             confirmedStep = 'transcode';
