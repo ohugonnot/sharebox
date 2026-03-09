@@ -4,9 +4,9 @@
 # Self-hosted file sharing with built-in video streaming
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/YOURUSER/sharebox/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/ohugonnot/sharebox/main/install.sh | sudo bash
 #   # or
-#   wget -qO- https://raw.githubusercontent.com/YOURUSER/sharebox/main/install.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ohugonnot/sharebox/main/install.sh | sudo bash
 # ============================================================================
 
 set -euo pipefail
@@ -183,7 +183,7 @@ else
         warn "$INSTALL_DIR already exists (not a git repo). Backing up..."
         mv "$INSTALL_DIR" "${INSTALL_DIR}.bak.$(date +%s)"
     fi
-    git clone -q https://github.com/YOURUSER/sharebox.git "$INSTALL_DIR"
+    git clone -q https://github.com/ohugonnot/sharebox.git "$INSTALL_DIR"
 fi
 
 cd "$INSTALL_DIR"
