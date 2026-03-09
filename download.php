@@ -92,10 +92,11 @@ if (is_file($resolvedPath)) {
     // Probe : retourne les pistes audio/sous-titres en JSON (pour le player)
     if (isset($_GET['probe']) && $_GET['probe'] === '1') {
         header('Content-Type: application/json; charset=utf-8');
-        $cmd = 'ffprobe -v error -show_entries stream=index,codec_type,codec_name:stream_tags=language,title -of json '
+        $cmd = 'ffprobe -v error -show_entries format=duration -show_entries stream=index,codec_type,codec_name:stream_tags=language,title -of json '
             . escapeshellarg($resolvedPath) . ' 2>/dev/null';
         $output = shell_exec($cmd);
         $data = json_decode($output, true);
+        $duration = (float)($data['format']['duration'] ?? 0);
         $audio = [];
         $subs = [];
         $audioIdx = 0;
@@ -115,7 +116,7 @@ if (is_file($resolvedPath)) {
                 $subIdx++;
             }
         }
-        echo json_encode(['audio' => $audio, 'subtitles' => $subs]);
+        echo json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration]);
         exit;
     }
 
@@ -650,9 +651,18 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     .player-container { background: rgba(26,29,40,.7); border: 1px solid rgba(255,255,255,.08); border-radius: var(--radius-lg); overflow: hidden; backdrop-filter: blur(12px); }
     video { display: block; width: 100%; max-height: 80vh; background: #000; }
     audio { display: block; width: 100%; padding: 2.5rem 1.5rem; }
-    .player-hint { text-align: center; padding: .8rem; color: var(--text-muted); font-size: .78rem; transition: all .2s; }
+    .player-hint { text-align: center; padding: .8rem; color: var(--text-muted); font-size: .78rem; transition: all .2s; min-height: 2rem; }
     .player-hint.transcoding { color: var(--accent); }
     .player-hint.error { color: var(--red); }
+    .seek-bar { position: relative; margin: 0 1rem .6rem; height: 28px; display: flex; align-items: center; cursor: pointer; user-select: none; -webkit-user-select: none; }
+    .seek-track { position: absolute; left: 0; right: 0; height: 4px; background: rgba(255,255,255,.08); border-radius: 2px; }
+    .seek-buffered { position: absolute; left: 0; height: 4px; background: rgba(255,255,255,.12); border-radius: 2px; transition: width .3s; }
+    .seek-fill { position: absolute; left: 0; height: 4px; background: var(--accent); border-radius: 2px; }
+    .seek-thumb { position: absolute; width: 14px; height: 14px; background: var(--accent); border-radius: 50%; top: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 6px rgba(240,160,48,.4); transition: transform .1s; z-index: 2; }
+    .seek-thumb:hover, .seek-bar.dragging .seek-thumb { transform: translate(-50%, -50%) scale(1.3); }
+    .seek-bar.dragging .seek-fill { transition: none; }
+    .seek-time { display: flex; justify-content: space-between; padding: 0 1rem .8rem; font-size: .75rem; font-family: var(--font-mono); color: var(--text-muted); }
+    .seek-time .current { color: var(--text-primary); }
     .track-bar { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; flex-wrap: wrap; }
     .track-bar label { color: var(--text-muted); font-size: .78rem; font-weight: 600; }
     .track-select { padding: .3rem .5rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,.03); color: var(--text-primary); font-family: var(--font-sans); font-size: .78rem; outline: none; cursor: pointer; -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .4rem center; padding-right: 1.4rem; }
@@ -670,6 +680,16 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     <div class="player-container">
         <{$tag} id="player" controls autoplay preload="metadata" crossorigin="anonymous"></{$tag}>
         <div class="player-hint" id="hint">Chargement...</div>
+        <div class="seek-bar" id="seek-bar" style="display:none">
+            <div class="seek-track"></div>
+            <div class="seek-buffered" id="seek-buffered"></div>
+            <div class="seek-fill" id="seek-fill"></div>
+            <div class="seek-thumb" id="seek-thumb"></div>
+        </div>
+        <div class="seek-time" id="seek-time" style="display:none">
+            <span class="current" id="time-current">0:00</span>
+            <span id="time-total">0:00</span>
+        </div>
     </div>
     <div class="track-bar" id="track-bar" style="display:none"></div>
 </div>
@@ -678,13 +698,22 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var player = document.getElementById('player');
     var hint = document.getElementById('hint');
     var trackBar = document.getElementById('track-bar');
+    var seekBar = document.getElementById('seek-bar');
+    var seekFill = document.getElementById('seek-fill');
+    var seekThumb = document.getElementById('seek-thumb');
+    var seekBuffered = document.getElementById('seek-buffered');
+    var seekTimeEl = document.getElementById('seek-time');
+    var timeCurrent = document.getElementById('time-current');
+    var timeTotal = document.getElementById('time-total');
     var isVideo = {$isVideo};
     var base = '{$baseUrl}';
     var pp = '{$pParamJs}';
     var audioIdx = 0;
     var step = isVideo ? 'remux' : 'native';
-    var seekOffset = 0; // décalage serveur (ffmpeg -ss)
-    var pendingSeek = 0; // position à restaurer après reload
+    var seekOffset = 0;
+    var totalDuration = 0;
+    var dragging = false;
+    var seekDebounce = null;
 
     function buildUrl(mode, audio, startSec) {
         var url = base + '?' + pp + 'stream=' + mode + '&audio=' + (audio || 0);
@@ -694,7 +723,6 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 
     function startStream(resumeAt) {
         seekOffset = resumeAt || 0;
-        pendingSeek = 0;
         var url;
         if (isVideo) {
             url = buildUrl(step === 'transcode' ? 'transcode' : 'remux', audioIdx, seekOffset);
@@ -706,13 +734,12 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         player.play().catch(function(){});
     }
 
-    // Position réelle = position dans le flux + décalage serveur
     function realTime() {
         return seekOffset + (player.currentTime || 0);
     }
 
     function fmtTime(s) {
-        s = Math.floor(s);
+        s = Math.max(0, Math.floor(s));
         var h = Math.floor(s / 3600);
         var m = Math.floor((s % 3600) / 60);
         var sec = s % 60;
@@ -720,10 +747,91 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         return m + ':' + (sec < 10 ? '0' : '') + sec;
     }
 
-    // Charger les pistes audio/sous-titres
+    // Mise à jour de la barre de progression
+    function updateSeekUI() {
+        if (totalDuration <= 0) return;
+        var pos = realTime();
+        var pct = Math.min(100, Math.max(0, (pos / totalDuration) * 100));
+        seekFill.style.width = pct + '%';
+        seekThumb.style.left = pct + '%';
+        timeCurrent.textContent = fmtTime(pos);
+    }
+
+    // Mise à jour du buffer
+    function updateBuffered() {
+        if (totalDuration <= 0 || !player.buffered || !player.buffered.length) return;
+        var buffEnd = player.buffered.end(player.buffered.length - 1);
+        var buffPct = Math.min(100, ((seekOffset + buffEnd) / totalDuration) * 100);
+        seekBuffered.style.width = buffPct + '%';
+    }
+
+    player.addEventListener('timeupdate', function() {
+        if (!dragging) updateSeekUI();
+        updateBuffered();
+    });
+
+    // Seek par clic/drag sur la barre
+    function seekToFraction(frac) {
+        var targetSec = Math.max(0, Math.min(totalDuration, frac * totalDuration));
+        // Mettre à jour visuellement tout de suite
+        var pct = (targetSec / totalDuration) * 100;
+        seekFill.style.width = pct + '%';
+        seekThumb.style.left = pct + '%';
+        timeCurrent.textContent = fmtTime(targetSec);
+        // Debounce le seek serveur (éviter de spammer pendant le drag)
+        clearTimeout(seekDebounce);
+        seekDebounce = setTimeout(function() {
+            hint.textContent = 'Chargement à ' + fmtTime(targetSec) + '...';
+            hint.className = 'player-hint';
+            startStream(targetSec);
+        }, 300);
+    }
+
+    function getFraction(e) {
+        var rect = seekBar.getBoundingClientRect();
+        var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+        return Math.max(0, Math.min(1, x / rect.width));
+    }
+
+    seekBar.addEventListener('mousedown', function(e) {
+        if (totalDuration <= 0) return;
+        dragging = true;
+        seekBar.classList.add('dragging');
+        seekToFraction(getFraction(e));
+    });
+    seekBar.addEventListener('touchstart', function(e) {
+        if (totalDuration <= 0) return;
+        dragging = true;
+        seekBar.classList.add('dragging');
+        seekToFraction(getFraction(e));
+    }, {passive: true});
+
+    document.addEventListener('mousemove', function(e) {
+        if (dragging) seekToFraction(getFraction(e));
+    });
+    document.addEventListener('touchmove', function(e) {
+        if (dragging) seekToFraction(getFraction(e));
+    }, {passive: true});
+
+    document.addEventListener('mouseup', function() {
+        if (dragging) { dragging = false; seekBar.classList.remove('dragging'); }
+    });
+    document.addEventListener('touchend', function() {
+        if (dragging) { dragging = false; seekBar.classList.remove('dragging'); }
+    });
+
+    // Charger les pistes audio/sous-titres + durée
     if (isVideo) {
         fetch(base + '?' + pp + 'probe=1').then(function(r){ return r.json(); }).then(function(data) {
             var hasControls = false;
+
+            // Durée totale
+            if (data.duration > 0) {
+                totalDuration = data.duration;
+                timeTotal.textContent = fmtTime(totalDuration);
+                seekBar.style.display = 'flex';
+                seekTimeEl.style.display = 'flex';
+            }
 
             // Sélecteur audio
             if (data.audio && data.audio.length > 1) {
@@ -779,13 +887,13 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
                 if (player.videoWidth === 0) {
                     onFail();
                 } else {
-                    hint.textContent = seekOffset > 0 ? 'Reprise à ' + fmtTime(seekOffset) : '';
+                    hint.textContent = step === 'transcode' ? 'Transcodage 720p' : '';
                 }
             }, 800);
             return;
         }
         if (step === 'transcode') {
-            hint.textContent = 'Transcodage 720p' + (seekOffset > 0 ? ' — reprise à ' + fmtTime(seekOffset) : '');
+            hint.textContent = 'Transcodage 720p';
             hint.className = 'player-hint transcoding';
         } else {
             hint.textContent = '';
