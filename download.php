@@ -101,6 +101,29 @@ if (is_file($resolvedPath)) {
         }
     }
 
+    // Mode transcodage : ffmpeg convertit en MP4 streamable à la volée
+    if (isset($_GET['stream']) && $_GET['stream'] === 'transcode') {
+        $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
+        if ($mime && str_starts_with($mime, 'video/')) {
+            header('Content-Type: video/mp4');
+            header('Content-Disposition: inline');
+            header('X-Accel-Buffering: no');
+            header('Cache-Control: no-cache');
+            // -movflags frag_keyframe+empty_moov = fragmented MP4, streamable sans seek
+            // -preset ultrafast = minimum CPU
+            // -crf 23 = qualité correcte
+            // -vf scale=-2:720 = max 720p pour limiter le CPU
+            // -ac 2 = stéréo (compatibilité max)
+            $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
+                . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(720,ih)\'" -pix_fmt yuv420p'
+                . ' -c:a aac -ac 2 -b:a 128k'
+                . ' -movflags frag_keyframe+empty_moov+default_base_moof'
+                . ' -f mp4 -y pipe:1 2>/dev/null';
+            passthru($cmd);
+            exit;
+        }
+    }
+
     // Téléchargement direct via nginx
     if (!$subPath) {
         $stmt = $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id");
@@ -526,9 +549,15 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         ? $baseUrl . '?p=' . rawurlencode($subPath) . '&amp;stream=1'
         : $baseUrl . '?stream=1';
 
+    $transcodeUrl = $subPath
+        ? $baseUrl . '?p=' . rawurlencode($subPath) . '&amp;stream=transcode'
+        : $baseUrl . '?stream=transcode';
+
     $dlUrl = $subPath
         ? $baseUrl . '?p=' . rawurlencode($subPath)
         : $baseUrl;
+
+    $isVideo = $mediaType === 'video';
 
     // URL retour vers le listing parent
     if ($subPath && str_contains($subPath, '/')) {
@@ -563,7 +592,9 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     .player-container { background: rgba(26,29,40,.7); border: 1px solid rgba(255,255,255,.08); border-radius: var(--radius-lg); overflow: hidden; backdrop-filter: blur(12px); }
     video { display: block; width: 100%; max-height: 80vh; background: #000; }
     audio { display: block; width: 100%; padding: 2.5rem 1.5rem; }
-    .player-hint { text-align: center; padding: .8rem; color: var(--text-muted); font-size: .78rem; }
+    .player-hint { text-align: center; padding: .8rem; color: var(--text-muted); font-size: .78rem; transition: all .2s; }
+    .player-hint.transcoding { color: var(--accent); }
+    .player-hint.error { color: var(--red); }
     @media (max-width: 480px) { .page { padding: 1rem .75rem; } .player-name { display: none; } }
     </style>
 </head>
@@ -575,12 +606,49 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         <a class="player-btn accent" href="{$dlUrl}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Télécharger</a>
     </div>
     <div class="player-container">
-        <{$tag} controls autoplay preload="metadata">
-            <source src="{$streamUrl}">
+        <{$tag} id="player" controls autoplay preload="metadata">
+            <source src="{$streamUrl}" id="src-native">
         </{$tag}>
-        <div class="player-hint">Si la lecture ne fonctionne pas, utilisez le bouton Télécharger</div>
+        <div class="player-hint" id="hint">Lecture en cours...</div>
     </div>
 </div>
+<script>
+(function() {
+    const player = document.getElementById('player');
+    const hint = document.getElementById('hint');
+    const isVideo = {$isVideo};
+    const transcodeUrl = '{$transcodeUrl}'.replace(/&amp;/g, '&');
+    let triedTranscode = false;
+
+    // Si la lecture native démarre, tout va bien
+    player.addEventListener('playing', function() {
+        hint.textContent = triedTranscode ? 'Transcodage en cours (qualité réduite)' : '';
+        hint.className = 'player-hint' + (triedTranscode ? ' transcoding' : '');
+    });
+
+    // Si erreur de lecture native → tenter le transcodage (vidéo seulement)
+    player.addEventListener('error', function() {
+        if (triedTranscode || !isVideo) {
+            hint.textContent = 'Format non supporté par votre navigateur. Utilisez le bouton Télécharger.';
+            hint.className = 'player-hint error';
+            return;
+        }
+        triedTranscode = true;
+        hint.textContent = 'Format non supporté, transcodage en cours...';
+        hint.className = 'player-hint transcoding';
+        player.src = transcodeUrl;
+        player.load();
+        player.play().catch(function(){});
+    });
+
+    // Aussi écouter l'erreur sur la source
+    var src = document.getElementById('src-native');
+    if (src) src.addEventListener('error', function() {
+        if (triedTranscode || !isVideo) return;
+        player.dispatchEvent(new Event('error'));
+    });
+})();
+</script>
 </body>
 </html>
 HTML;
