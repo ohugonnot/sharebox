@@ -152,9 +152,18 @@ if (is_file($resolvedPath)) {
     $audioTrack = isset($_GET['audio']) ? max(0, (int)$_GET['audio']) : 0;
     $audioMap = ' -map 0:v:0 -map 0:a:' . $audioTrack;
 
-    // Seek : démarrer à une position donnée (en secondes)
+    // Seek : double seeking pour synchro audio/vidéo exacte
+    // -ss avant -i = seek rapide au keyframe, -ss après -i = seek précis frame-exact
     $startSec = isset($_GET['start']) ? max(0, (float)$_GET['start']) : 0;
-    $seekArg = ' -ss ' . escapeshellarg(sprintf('%.3f', $startSec));
+    if ($startSec > 0) {
+        $roughSeek = max(0, $startSec - 5);
+        $fineSeek = $startSec - $roughSeek;
+        $seekArgBefore = ' -ss ' . escapeshellarg(sprintf('%.3f', $roughSeek));
+        $seekArgAfter = ' -ss ' . escapeshellarg(sprintf('%.3f', $fineSeek));
+    } else {
+        $seekArgBefore = '';
+        $seekArgAfter = '';
+    }
 
     // Mode remux : repackage MKV→MP4 sans ré-encoder la vidéo (quasi zéro CPU)
     // Audio transcodé en AAC pour compatibilité (AC3/DTS → AAC, léger)
@@ -165,8 +174,11 @@ if (is_file($resolvedPath)) {
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
-            $cmd = 'ffmpeg' . $seekArg . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 128k -async 1'
+            $cmd = 'ffmpeg' . $seekArgBefore . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+                . $audioMap . $seekArgAfter . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
+                . ' -af "aresample=async=1000:first_pts=0"'
+                . ' -avoid_negative_ts make_zero -start_at_zero'
+                . ' -min_frag_duration 2000000'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
             passthru($cmd);
@@ -186,9 +198,12 @@ if (is_file($resolvedPath)) {
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
-            $cmd = 'ffmpeg' . $seekArg . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                . $audioMap . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
-                . ' -c:a aac -ac 2 -b:a 128k -async 1'
+            $cmd = 'ffmpeg' . $seekArgBefore . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+                . $audioMap . $seekArgAfter . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
+                . ' -c:a aac -ac 2 -b:a 128k'
+                . ' -af "aresample=async=1000:first_pts=0"'
+                . ' -avoid_negative_ts make_zero -start_at_zero'
+                . ' -min_frag_duration 2000000'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
             passthru($cmd);
@@ -900,29 +915,27 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
                 var qualities = [480, 720, 1080].filter(function(q) { return q <= videoHeight; });
                 if (qualities.length > 0) {
                     currentQuality = qualities.indexOf(720) !== -1 ? 720 : qualities[qualities.length - 1];
-                    if (qualities.length > 1) {
-                        hasControls = true;
-                        var lbl3 = document.createElement('label');
-                        lbl3.textContent = 'Qualité :';
-                        var sel3 = document.createElement('select');
-                        sel3.className = 'track-select';
-                        qualities.forEach(function(q) {
-                            var opt = document.createElement('option');
-                            opt.value = q;
-                            opt.textContent = q + 'p';
-                            if (q === currentQuality) opt.selected = true;
-                            sel3.appendChild(opt);
-                        });
-                        sel3.addEventListener('change', function() {
-                            var pos = realTime();
-                            currentQuality = parseInt(sel3.value);
-                            confirmedStep = 'transcode';
-                            hint.textContent = 'Transcodage ' + currentQuality + 'p...';
-                            hint.className = 'player-hint transcoding';
-                            startStream(pos);
-                        });
-                        trackBar.append(lbl3, sel3);
-                    }
+                    hasControls = true;
+                    var lbl3 = document.createElement('label');
+                    lbl3.textContent = 'Qualité :';
+                    var sel3 = document.createElement('select');
+                    sel3.className = 'track-select';
+                    qualities.forEach(function(q) {
+                        var opt = document.createElement('option');
+                        opt.value = q;
+                        opt.textContent = q + 'p';
+                        if (q === currentQuality) opt.selected = true;
+                        sel3.appendChild(opt);
+                    });
+                    sel3.addEventListener('change', function() {
+                        var pos = realTime();
+                        currentQuality = parseInt(sel3.value);
+                        confirmedStep = 'transcode';
+                        hint.textContent = 'Transcodage ' + currentQuality + 'p...';
+                        hint.className = 'player-hint transcoding';
+                        startStream(pos);
+                    });
+                    trackBar.append(lbl3, sel3);
                 }
             }
 
