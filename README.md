@@ -29,6 +29,10 @@ Share files and folders instantly with human-readable links. Stream videos direc
   - Seek support in transcoded streams
   - Audio track selection
   - Subtitle extraction to WebVTT
+  - ffprobe results cached in SQLite (instant reload, no re-probe on unchanged files)
+  - vmtouch page-cache warming for files < 2 GB (reduces I/O latency at stream start)
+  - A/V sync hardening: `aresample async=2000`, `-g 50`, `-thread_queue_size 512`, `-max_muxing_queue_size 1024`
+  - **Resync button** -- one-click A/V resync at current position without reloading the page
 - **Folder sharing** -- browsable directory listing with per-file download
 - **ZIP download** -- download entire folders as a single ZIP archive
 - **QR code generation** -- pure JavaScript, no external library
@@ -39,6 +43,7 @@ Share files and folders instantly with human-readable links. Stream videos direc
 - **CSRF protection** -- token-based protection on all admin actions
 - **Security hardened** -- session fixation prevention, mail header injection protection, ZIP size limits
 - **PHPUnit test suite** -- 44 tests covering security, slug generation, file format utilities
+- **SQLite probe cache** -- `probe_cache` table stores ffprobe results keyed by path+mtime
 
 ## Requirements
 
