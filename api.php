@@ -92,9 +92,6 @@ try {
             $type = is_dir($fullPath) ? 'folder' : 'file';
             $name = basename($fullPath);
 
-            // Générer un slug lisible à partir du nom + suffixe random
-            $token = generate_slug($name, $db);
-
             // Hacher le mot de passe si fourni
             $passwordHash = !empty($password) ? password_hash($password, PASSWORD_BCRYPT) : null;
 
@@ -105,6 +102,9 @@ try {
             }
 
             $db = get_db();
+
+            // Générer un slug lisible à partir du nom + suffixe random
+            $token = generate_slug($name, $db);
             $stmt = $db->prepare("
                 INSERT INTO links (token, path, type, name, password_hash, password_plain, expires_at)
                 VALUES (:token, :path, :type, :name, :password_hash, :password_plain, :expires_at)
