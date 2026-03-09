@@ -28,7 +28,7 @@ async function navigateTo(path) {
     currentPath = path;
 
     try {
-        const resp = await fetch('/share/api.php?action=browse&path=' + encodeURIComponent(path));
+        const resp = await fetch('/share/ctrl.php?action=browse&path=' + encodeURIComponent(path));
         if (!resp.ok) {
             alert('Erreur HTTP ' + resp.status);
             return;
@@ -232,7 +232,7 @@ async function creerLien(path, password, expiresStr, container) {
     const expires = expiresStr ? parseInt(expiresStr) : null;
 
     try {
-        const resp = await fetch('/share/api.php?action=create', {
+        const resp = await fetch('/share/ctrl.php?action=create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: path, password: password || '', expires: expires }),
@@ -313,7 +313,7 @@ async function supprimerLien(id) {
     if (!confirm('Supprimer ce lien de partage ?')) return;
 
     try {
-        const resp = await fetch('/share/api.php?action=delete', {
+        const resp = await fetch('/share/ctrl.php?action=delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: id }),
@@ -373,7 +373,7 @@ async function envoyerEmail(linkId) {
     if (!email || !email.trim()) return;
 
     try {
-        const resp = await fetch('/share/api.php?action=send_email', {
+        const resp = await fetch('/share/ctrl.php?action=send_email', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: linkId, email: email.trim() }),
