@@ -12,6 +12,18 @@ header('Content-Type: application/json; charset=utf-8');
 
 $action = $_GET['action'] ?? '';
 
+// Validation CSRF pour les requêtes POST
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    session_start();
+    $input = json_decode(file_get_contents('php://input'), true);
+    $csrfToken = $input['csrf_token'] ?? '';
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $csrfToken)) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Token CSRF invalide']);
+        exit;
+    }
+}
+
 try {
     switch ($action) {
 
@@ -24,9 +36,7 @@ try {
             $relPath = $_GET['path'] ?? '';
             $fullPath = realpath(BASE_PATH . $relPath);
 
-            // Sécurité anti path-traversal : le chemin résolu doit rester sous BASE_PATH
-            $base = rtrim(BASE_PATH, '/');
-            if ($fullPath === false || ($fullPath !== $base && strpos($fullPath, $base . '/') !== 0)) {
+            if (!is_path_within($fullPath, BASE_PATH)) {
                 http_response_code(403);
                 echo json_encode(['error' => 'Chemin interdit']);
                 exit;
@@ -74,16 +84,13 @@ try {
                 exit;
             }
 
-            $input = json_decode(file_get_contents('php://input'), true);
             $relPath = $input['path'] ?? '';
             $password = $input['password'] ?? '';
             $expiresHours = $input['expires'] ?? null;
 
             $fullPath = realpath(BASE_PATH . $relPath);
 
-            // Sécurité anti path-traversal
-            $base = rtrim(BASE_PATH, '/');
-            if ($fullPath === false || ($fullPath !== $base && strpos($fullPath, $base . '/') !== 0)) {
+            if (!is_path_within($fullPath, BASE_PATH)) {
                 http_response_code(403);
                 echo json_encode(['error' => 'Chemin interdit']);
                 exit;
@@ -141,7 +148,6 @@ try {
                 exit;
             }
 
-            $input = json_decode(file_get_contents('php://input'), true);
             $id = (int)($input['id'] ?? 0);
 
             if ($id <= 0) {
@@ -168,7 +174,6 @@ try {
                 exit;
             }
 
-            $input = json_decode(file_get_contents('php://input'), true);
             $id = (int)($input['id'] ?? 0);
             $email = trim($input['email'] ?? '');
 
@@ -197,8 +202,8 @@ try {
             }
 
             // Construire l'URL complète
+            $host = preg_replace('/[^a-z0-9.\-:]/i', '', $_SERVER['HTTP_HOST'] ?? 'localhost');
             $proto = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-            $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
             $fullUrl = $proto . '://' . $host . '/dl/' . $link['token'];
 
             // Construire le corps du mail
@@ -215,7 +220,7 @@ try {
             $body .= "\nBonne réception !";
 
             // Envoyer le mail via la fonction PHP mail()
-            $subject = "Partage : " . $link['name'];
+            $subject = str_replace(["\r", "\n"], '', "Partage : " . $link['name']);
             $headers = "From: Share <noreply@" . $host . ">\r\n";
             $headers .= "Content-Type: text/plain; charset=UTF-8\r\n";
 

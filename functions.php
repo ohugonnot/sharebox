@@ -103,7 +103,11 @@ function generate_slug(string $name, PDO $db): string {
 
     // Ajouter suffixe random (4 chars alphanum)
     $chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    $attempts = 0;
     do {
+        if (++$attempts > 100) {
+            throw new RuntimeException('Impossible de générer un token unique après 100 tentatives');
+        }
         $suffix = '';
         for ($i = 0; $i < 4; $i++) $suffix .= $chars[random_int(0, 35)];
         $candidate = $slug . '-' . $suffix;
@@ -112,4 +116,25 @@ function generate_slug(string $name, PDO $db): string {
     } while ($check->fetchColumn() > 0);
 
     return $candidate;
+}
+
+/**
+ * Calcule la taille totale d'un répertoire récursivement
+ */
+function dir_size(string $path): int {
+    $size = 0;
+    $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS));
+    foreach ($it as $file) {
+        if ($file->isFile()) $size += $file->getSize();
+    }
+    return $size;
+}
+
+/**
+ * Vérifie qu'un chemin résolu reste dans le répertoire de base autorisé
+ */
+function is_path_within(string|false $resolvedPath, string $basePath): bool {
+    if ($resolvedPath === false) return false;
+    $base = rtrim($basePath, '/');
+    return $resolvedPath === $base || str_starts_with($resolvedPath, $base . '/');
 }
