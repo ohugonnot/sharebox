@@ -94,7 +94,17 @@ if (is_file($resolvedPath)) {
     // Probe : retourne les pistes audio/sous-titres en JSON (pour le player)
     if (isset($_GET['probe']) && $_GET['probe'] === '1') {
         header('Content-Type: application/json; charset=utf-8');
-        $cmd = 'ffprobe -v error -show_entries format=duration -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
+
+        // Cache SQLite : évite de relancer ffprobe si le fichier n'a pas changé
+        $mtime = filemtime($resolvedPath);
+        $cached = $db->prepare("SELECT result FROM probe_cache WHERE path = :p AND mtime = :m");
+        $cached->execute([':p' => $resolvedPath, ':m' => $mtime]);
+        if ($row = $cached->fetch()) {
+            echo $row['result'];
+            exit;
+        }
+
+        $cmd = 'timeout 10 ffprobe -v error -show_entries format=duration -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
             . escapeshellarg($resolvedPath) . ' 2>/dev/null';
         $output = shell_exec($cmd);
         $data = json_decode($output, true);
@@ -123,7 +133,13 @@ if (is_file($resolvedPath)) {
                 $subIdx++;
             }
         }
-        echo json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec]);
+        $result = json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec]);
+
+        // Stocker en cache (INSERT OR REPLACE pour upsert)
+        $db->prepare("INSERT OR REPLACE INTO probe_cache (path, mtime, result) VALUES (:p, :m, :r)")
+           ->execute([':p' => $resolvedPath, ':m' => $mtime, ':r' => $result]);
+
+        echo $result;
         exit;
     }
 
@@ -177,15 +193,17 @@ if (is_file($resolvedPath)) {
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
             header('Accept-Ranges: none');
-            $cmd = 'ffmpeg' . $seekArgBefore . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+            $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
                 . $audioMap . $seekArgAfter . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
-                . ' -af "aresample=async=1000:first_pts=0"'
+                . ' -af "aresample=async=2000:first_pts=0"'
                 . ' -avoid_negative_ts make_zero -start_at_zero'
+                . ' -max_muxing_queue_size 1024'
                 . ' -min_frag_duration 2000000'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
             [$slotFp, $queued] = acquireStreamSlot();
             if ($queued) header('X-Stream-Queued: 1');
+            if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) shell_exec('vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &');
             passthru($cmd);
             releaseStreamSlot($slotFp);
             exit;
@@ -205,16 +223,19 @@ if (is_file($resolvedPath)) {
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
             header('Accept-Ranges: none');
-            $cmd = 'ffmpeg' . $seekArgBefore . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                . $audioMap . $seekArgAfter . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
+            $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+                . $audioMap . $seekArgAfter . ' -c:v libx264 -preset ultrafast -crf 23 -g 50'
+                . ' -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
                 . ' -c:a aac -ac 2 -b:a 128k'
-                . ' -af "aresample=async=1000:first_pts=0"'
+                . ' -af "aresample=async=2000:first_pts=0"'
                 . ' -avoid_negative_ts make_zero -start_at_zero'
+                . ' -max_muxing_queue_size 1024'
                 . ' -min_frag_duration 2000000'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
             [$slotFp, $queued] = acquireStreamSlot();
             if ($queued) header('X-Stream-Queued: 1');
+            if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) shell_exec('vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &');
             passthru($cmd);
             releaseStreamSlot($slotFp);
             exit;
@@ -719,6 +740,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var base = '{$baseUrl}';
     var pp = '{$pParamJs}';
     var audioIdx = 0;
+    var resyncBtn = null;
     var step = isVideo ? 'remux' : 'native';
     var confirmedStep = ''; // mode confirmé qui fonctionne (évite de re-tester)
     var seekOffset = 0;
@@ -965,6 +987,20 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
             }
 
             if (hasControls) trackBar.style.display = 'flex';
+        }
+
+        if (isVideo) {
+            resyncBtn = document.createElement('button');
+            resyncBtn.className = 'player-btn';
+            resyncBtn.title = 'Resynchroniser son et image';
+            resyncBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Resync';
+            resyncBtn.addEventListener('click', function() {
+                hint.textContent = 'Resync...';
+                hint.className = 'player-hint';
+                startStream(realTime());
+            });
+            trackBar.appendChild(resyncBtn);
+            trackBar.style.display = 'flex';
         }
 
         // Démarrer la lecture

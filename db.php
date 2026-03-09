@@ -24,6 +24,14 @@ function get_db(): PDO {
 
     // Crée la table si elle n'existe pas
     $db->exec("
+        CREATE TABLE IF NOT EXISTS probe_cache (
+            path TEXT NOT NULL PRIMARY KEY,
+            mtime INTEGER NOT NULL,
+            result TEXT NOT NULL
+        )
+    ");
+
+    $db->exec("
         CREATE TABLE IF NOT EXISTS links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             token TEXT NOT NULL UNIQUE,
