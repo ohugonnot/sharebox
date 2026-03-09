@@ -16,6 +16,9 @@ const DUREES_EXPIRATION = [
     { value: '720', label: '1 mois' },
 ];
 
+// Token CSRF pour les requêtes POST
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
 // Au chargement de la page
 document.addEventListener('DOMContentLoaded', () => {
     navigateTo('');
@@ -235,7 +238,7 @@ async function creerLien(path, password, expiresStr, container) {
         const resp = await fetch('/share/ctrl.php?action=create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path: path, password: password || '', expires: expires }),
+            body: JSON.stringify({ path: path, password: password || '', expires: expires, csrf_token: CSRF_TOKEN }),
         });
 
         const data = await resp.json();
@@ -316,7 +319,7 @@ async function supprimerLien(id) {
         const resp = await fetch('/share/ctrl.php?action=delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: id }),
+            body: JSON.stringify({ id: id, csrf_token: CSRF_TOKEN }),
         });
 
         const data = await resp.json();
@@ -376,7 +379,7 @@ async function envoyerEmail(linkId) {
         const resp = await fetch('/share/ctrl.php?action=send_email', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: linkId, email: email.trim() }),
+            body: JSON.stringify({ id: linkId, email: email.trim(), csrf_token: CSRF_TOKEN }),
         });
 
         const data = await resp.json();

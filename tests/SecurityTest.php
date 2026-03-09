@@ -77,46 +77,41 @@ class SecurityTest extends TestCase
         ];
     }
 
-    // --- Path traversal tests ---
+    // --- Path traversal tests (via is_path_within) ---
 
-    /**
-     * Reproduit la logique realpath + strpos de download.php
-     */
-    private function isPathAllowed(string $basePath, string $subPath): bool
+    public function testIsPathWithinBaseSeul(): void
     {
-        $base = rtrim($basePath, '/');
-        $targetPath = $subPath ? $base . '/' . $subPath : $base;
-        $resolvedPath = realpath($targetPath);
-
-        if ($resolvedPath === false) return false;
-        if ($resolvedPath === $base) return true;
-        return strpos($resolvedPath, $base . '/') === 0;
+        $this->assertTrue(is_path_within(realpath($this->tmpDir), $this->tmpDir));
     }
 
-    public function testPathBaseSeul(): void
+    public function testIsPathWithinSousFichier(): void
     {
-        $this->assertTrue($this->isPathAllowed($this->tmpDir, ''));
+        $resolved = realpath($this->tmpDir . '/sub/file.txt');
+        $this->assertTrue(is_path_within($resolved, $this->tmpDir));
     }
 
-    public function testPathSousFichier(): void
+    public function testIsPathWithinTraversalBloque(): void
     {
-        $this->assertTrue($this->isPathAllowed($this->tmpDir, 'sub/file.txt'));
+        $resolved = realpath($this->tmpDir . '/../../etc/passwd');
+        $this->assertFalse(is_path_within($resolved, $this->tmpDir));
     }
 
-    public function testPathTraversalBloque(): void
+    public function testIsPathWithinInexistant(): void
     {
-        $this->assertFalse($this->isPathAllowed($this->tmpDir, '../../etc/passwd'));
+        // realpath returns false for non-existent paths
+        $this->assertFalse(is_path_within(false, $this->tmpDir));
     }
 
-    public function testPathInexistant(): void
-    {
-        $this->assertFalse($this->isPathAllowed($this->tmpDir, 'nonexistent/file.txt'));
-    }
-
-    public function testSymlinkExterieur(): void
+    public function testIsPathWithinSymlinkExterieur(): void
     {
         $link = $this->tmpDir . '/outside';
         symlink('/etc', $link);
-        $this->assertFalse($this->isPathAllowed($this->tmpDir, 'outside/passwd'));
+        $resolved = realpath($this->tmpDir . '/outside/passwd');
+        $this->assertFalse(is_path_within($resolved, $this->tmpDir));
+    }
+
+    public function testIsPathWithinTrailingSlash(): void
+    {
+        $this->assertTrue(is_path_within(realpath($this->tmpDir), $this->tmpDir . '/'));
     }
 }
