@@ -46,6 +46,9 @@ function get_db(): PDO {
         )
     ");
 
+    // Purge les entrées probe_cache dont le fichier n'est plus partagé
+    $db->exec("DELETE FROM probe_cache WHERE path NOT IN (SELECT path FROM links)");
+
     // Migration : ajouter password_plain si la colonne n'existe pas encore
     $cols = $db->query("PRAGMA table_info(links)")->fetchAll();
     $colNames = array_column($cols, 'name');

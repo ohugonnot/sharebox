@@ -127,9 +127,12 @@ if (is_file($resolvedPath)) {
                 $audio[] = ['index' => $audioIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label];
                 $audioIdx++;
             } elseif ($s['codec_type'] === 'subtitle') {
+                $imageCodecs = ['hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'dvb_teletext', 'xsub'];
+                $subType = in_array($s['codec_name'] ?? '', $imageCodecs) ? 'image' : 'text';
                 $label = $lang ? strtoupper($lang) : 'Sous-titre ' . ($subIdx + 1);
                 if ($title) $label .= ' — ' . $title;
-                $subs[] = ['index' => $subIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label];
+                if ($subType === 'image') $label .= ' ★'; // indique burn-in requis
+                $subs[] = ['index' => $subIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label, 'type' => $subType];
                 $subIdx++;
             }
         }
@@ -147,10 +150,16 @@ if (is_file($resolvedPath)) {
     if (isset($_GET['subtitle'])) {
         $trackIdx = (int)$_GET['subtitle'];
         header('Content-Type: text/vtt; charset=utf-8');
-        header('Access-Control-Allow-Origin: ' . ($_SERVER['HTTP_ORIGIN'] ?? '*'));
+        $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+        if ($origin) {
+            header('Access-Control-Allow-Origin: ' . $origin);
+            header('Access-Control-Allow-Credentials: true');
+        }
         $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
             . ' -map 0:s:' . $trackIdx . ' -f webvtt pipe:1 2>/dev/null';
+        [$slotFp] = acquireStreamSlot();
         passthru($cmd);
+        releaseStreamSlot($slotFp);
         exit;
     }
 
@@ -214,25 +223,43 @@ if (is_file($resolvedPath)) {
     if (isset($_GET['stream']) && $_GET['stream'] === 'transcode') {
         $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
         if ($mime && str_starts_with($mime, 'video/')) {
-            // Qualité demandée (hauteur en pixels), par défaut 720
             $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
             $allowedQualities = [480, 720, 1080];
             if (!in_array($quality, $allowedQualities)) $quality = 720;
+            $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
             header('Content-Type: video/mp4');
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
             header('Accept-Ranges: none');
-            $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                . $audioMap . $seekArgAfter . ' -c:v libx264 -preset ultrafast -crf 23 -g 50'
-                . ' -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
-                . ' -c:a aac -ac 2 -b:a 128k'
-                . ' -af "aresample=async=2000:first_pts=0"'
-                . ' -avoid_negative_ts make_zero -start_at_zero'
-                . ' -max_muxing_queue_size 1024'
-                . ' -min_frag_duration 2000000'
-                . ' -movflags frag_keyframe+empty_moov+default_base_moof'
-                . ' -f mp4 -y pipe:1 2>/dev/null';
+            if ($burnSub >= 0) {
+                // Burn-in sous-titre image (PGS/VOBSUB) via filter_complex
+                // Pad à 1920x1080 (résolution native des sous-titres DVD/Blu-ray)
+                // avant l'overlay pour que les coordonnées x,y du subtitle soient correctes
+                $fc = '"[0:v]pad=1920:1080:(1920-iw)/2:(1080-ih)/2:black[padded];[padded][0:s:' . $burnSub . ']overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v]"';
+                $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+                    . $seekArgAfter . ' -filter_complex ' . $fc
+                    . ' -map "[v]" -map 0:a:' . $audioTrack
+                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 50'
+                    . ' -c:a aac -ac 2 -b:a 128k'
+                    . ' -af "aresample=async=2000:first_pts=0"'
+                    . ' -avoid_negative_ts make_zero -start_at_zero'
+                    . ' -max_muxing_queue_size 1024'
+                    . ' -min_frag_duration 2000000'
+                    . ' -movflags frag_keyframe+empty_moov+default_base_moof'
+                    . ' -f mp4 -y pipe:1 2>/dev/null';
+            } else {
+                $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+                    . $audioMap . $seekArgAfter . ' -c:v libx264 -preset ultrafast -crf 23 -g 50'
+                    . ' -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
+                    . ' -c:a aac -ac 2 -b:a 128k'
+                    . ' -af "aresample=async=2000:first_pts=0"'
+                    . ' -avoid_negative_ts make_zero -start_at_zero'
+                    . ' -max_muxing_queue_size 1024'
+                    . ' -min_frag_duration 2000000'
+                    . ' -movflags frag_keyframe+empty_moov+default_base_moof'
+                    . ' -f mp4 -y pipe:1 2>/dev/null';
+            }
             [$slotFp, $queued] = acquireStreamSlot();
             if ($queued) header('X-Stream-Queued: 1');
             if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) shell_exec('vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &');
@@ -740,8 +767,14 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var base = '{$baseUrl}';
     var pp = '{$pParamJs}';
     var audioIdx = 0;
+    var subtitleIdx = -1;
+    var subtitleUrls = [];
+    var subtitleTypes = [];
+    var subtitleCues = [];
+    var currentBurnSub = -1;
+    var subDiv = null;
     var resyncBtn = null;
-    var step = isVideo ? 'remux' : 'native';
+    var step = 'native'; // toujours essayer natif d'abord (native → remux → transcode)
     var confirmedStep = ''; // mode confirmé qui fonctionne (évite de re-tester)
     var seekOffset = 0;
     var totalDuration = 0;
@@ -755,8 +788,12 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var videoWidthTimer = null;
 
     function buildUrl(mode, audio, startSec) {
+        if (mode === 'native') return base + '?' + pp + 'stream=1';
         var url = base + '?' + pp + 'stream=' + mode + '&audio=' + (audio || 0);
-        if (mode === 'transcode') url += '&quality=' + currentQuality;
+        if (mode === 'transcode') {
+            url += '&quality=' + currentQuality;
+            if (currentBurnSub >= 0) url += '&burnSub=' + currentBurnSub;
+        }
         if (startSec > 0) url += '&start=' + startSec.toFixed(1);
         return url;
     }
@@ -842,6 +879,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     player.addEventListener('timeupdate', function() {
         if (!dragging) updateSeekUI();
         updateBuffered();
+        showCue();
     });
 
     // Seek par clic/drag sur la barre
@@ -853,12 +891,18 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         seekFill.style.width = pct + '%';
         seekThumb.style.left = pct + '%';
         timeCurrent.textContent = fmtTime(targetSec);
-        // Debounce le seek serveur (éviter de spammer pendant le drag)
+        // Debounce le seek
         clearTimeout(seekDebounce);
         seekDebounce = setTimeout(function() {
-            hint.textContent = 'Chargement à ' + fmtTime(targetSec) + '...';
-            hint.className = 'player-hint';
-            startStream(targetSec);
+            if (confirmedStep === 'native') {
+                // Seek natif : laisser le navigateur gérer via Range requests
+                player.currentTime = targetSec;
+                hint.textContent = '';
+            } else {
+                hint.textContent = 'Chargement à ' + fmtTime(targetSec) + '...';
+                hint.className = 'player-hint';
+                startStream(targetSec);
+            }
         }, 300);
     }
 
@@ -895,9 +939,6 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         if (dragging) { dragging = false; seekBar.classList.remove('dragging'); }
     });
 
-    // Codecs que le navigateur ne peut pas lire en remux (nécessitent un transcode)
-    var needsTranscode = ['hevc', 'h265', 'av1', 'vp9', 'mpeg2video', 'mpeg4'];
-
     function setupAndStart(probeData) {
         var hasControls = false;
 
@@ -908,12 +949,6 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
                 timeTotal.textContent = fmtTime(totalDuration);
                 seekBar.style.display = 'flex';
                 seekTimeEl.style.display = 'flex';
-            }
-
-            // Si le codec nécessite un transcode, skip le remux
-            if (probeData.videoCodec && needsTranscode.indexOf(probeData.videoCodec) !== -1) {
-                step = 'transcode';
-                confirmedStep = 'transcode';
             }
 
             // Sélecteur audio
@@ -932,8 +967,10 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
                 sel.addEventListener('change', function() {
                     var pos = realTime();
                     audioIdx = parseInt(sel.value);
+                    confirmedStep = 'transcode';
+                    step = 'transcode';
                     hint.textContent = 'Changement de piste...';
-                    hint.className = 'player-hint';
+                    hint.className = 'player-hint transcoding';
                     startStream(pos);
                 });
                 trackBar.append(lbl, sel);
@@ -973,17 +1010,27 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
             if (probeData.subtitles && probeData.subtitles.length > 0) {
                 hasControls = true;
                 probeData.subtitles.forEach(function(s) {
-                    var track = document.createElement('track');
-                    track.kind = 'subtitles';
-                    track.label = s.label;
-                    track.srclang = s.lang || 'und';
-                    track.src = base + '?' + pp + 'subtitle=' + s.index;
-                    player.appendChild(track);
+                    subtitleUrls.push(s.type === 'text' ? base + '?' + pp + 'subtitle=' + s.index : null);
+                    subtitleTypes.push(s.type || 'text');
                 });
                 var lbl2 = document.createElement('label');
-                lbl2.textContent = 'Sous-titres disponibles dans le player';
-                lbl2.style.cssText = 'font-style:italic;color:var(--text-muted);font-size:.72rem;font-weight:400';
-                trackBar.appendChild(lbl2);
+                lbl2.textContent = 'Sous-titres :';
+                var selSub = document.createElement('select');
+                selSub.className = 'track-select';
+                var offOpt = document.createElement('option');
+                offOpt.value = '-1';
+                offOpt.textContent = 'Désactivés';
+                selSub.appendChild(offOpt);
+                probeData.subtitles.forEach(function(s, i) {
+                    var opt = document.createElement('option');
+                    opt.value = i;
+                    opt.textContent = s.label;
+                    selSub.appendChild(opt);
+                });
+                selSub.addEventListener('change', function() {
+                    loadSubtitle(parseInt(selSub.value));
+                });
+                trackBar.append(lbl2, selSub);
             }
 
             if (hasControls) trackBar.style.display = 'flex';
@@ -995,6 +1042,12 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
             resyncBtn.title = 'Resynchroniser son et image';
             resyncBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Resync';
             resyncBtn.addEventListener('click', function() {
+                if (confirmedStep === 'native') {
+                    // Natif : le navigateur gère le décodage, on force juste un seek sur place
+                    var pos = player.currentTime;
+                    player.currentTime = Math.max(0, pos - 0.1);
+                    return;
+                }
                 hint.textContent = 'Resync...';
                 hint.className = 'player-hint';
                 startStream(realTime());
@@ -1021,20 +1074,94 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         setupAndStart(null);
     }
 
+    // Overlay sous-titres custom (indépendant des textTracks navigateur)
+    (function() {
+        var container = player.parentNode;
+        container.style.position = 'relative';
+        subDiv = document.createElement('div');
+        subDiv.style.cssText = 'position:absolute;left:0;right:0;bottom:28%;text-align:center;pointer-events:none;padding:0 8%;z-index:5;';
+        container.appendChild(subDiv);
+    })();
+
+    function vttTime(s) {
+        var p = s.trim().split(':');
+        return p.length === 3 ? +p[0]*3600 + +p[1]*60 + parseFloat(p[2]) : +p[0]*60 + parseFloat(p[1]);
+    }
+
+    function parseVTT(text) {
+        var cues = [], blocks = text.replace(/\\r\\n/g,'\\n').split(/\\n\\n+/);
+        for (var b = 0; b < blocks.length; b++) {
+            var lines = blocks[b].trim().split('\\n'), ti = -1;
+            for (var l = 0; l < lines.length; l++) {
+                if (lines[l].indexOf(' --> ') !== -1) { ti = l; break; }
+            }
+            if (ti < 0) continue;
+            var parts = lines[ti].split(' --> ');
+            var txt = lines.slice(ti+1).join('\\n').trim();
+            if (txt) cues.push({ start: vttTime(parts[0]), end: vttTime(parts[1].split(' ')[0]), text: txt });
+        }
+        return cues;
+    }
+
+    function showCue() {
+        if (!subDiv) return;
+        var t = realTime(), txt = '';
+        for (var i = 0; i < subtitleCues.length; i++) {
+            if (t >= subtitleCues[i].start && t < subtitleCues[i].end) { txt = subtitleCues[i].text; break; }
+        }
+        var html = txt
+            ? '<span style="background:rgba(0,0,0,.78);color:#fff;padding:.2em .6em;border-radius:4px;font-size:1rem;line-height:1.5;display:inline-block;max-width:100%;word-break:break-word;white-space:pre-line">'
+              + txt.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>'
+            : '';
+        if (subDiv.innerHTML !== html) subDiv.innerHTML = html;
+    }
+
+    function loadSubtitle(idx) {
+        subtitleIdx = idx;
+        subtitleCues = [];
+        if (subDiv) subDiv.innerHTML = '';
+        var pos = realTime();
+        var wasBurning = currentBurnSub >= 0;
+
+        if (idx >= 0 && subtitleTypes[idx] === 'image') {
+            // Sous-titre image (PGS) : burn-in via transcode
+            currentBurnSub = idx;
+            confirmedStep = 'transcode';
+            step = 'transcode';
+            hint.textContent = 'Transcodage avec sous-titres...';
+            hint.className = 'player-hint transcoding';
+            startStream(pos);
+        } else if (idx >= 0) {
+            // Sous-titre texte : overlay JS, pas de restart sauf si on sortait du burn-in
+            currentBurnSub = -1;
+            if (wasBurning) startStream(pos);
+            fetch(subtitleUrls[idx], { credentials: 'same-origin' })
+                .then(function(r) { return r.text(); })
+                .then(function(t) { subtitleCues = parseVTT(t); })
+                .catch(function() {});
+        } else {
+            // Désactivés
+            currentBurnSub = -1;
+            if (wasBurning) startStream(pos);
+        }
+    }
+
     player.addEventListener('playing', function() {
         unlockSize();
         var mode = confirmedStep || step;
-        if (mode === 'remux' && isVideo && !confirmedStep) {
-            // Première fois en remux : vérifier si le codec est décodé (videoWidth > 0)
-            // 1500ms pour laisser le temps aux décodeurs mobiles plus lents
+        if ((mode === 'native' || mode === 'remux') && isVideo && !confirmedStep) {
+            // Vérifier que le navigateur décode vraiment (videoWidth > 0)
+            // native : 2s (les décodeurs HEVC/AV1 natifs peuvent être lents)
+            // remux  : 1.5s
+            var delay = mode === 'native' ? 2000 : 1500;
             videoWidthTimer = setTimeout(function() {
                 if (player.videoWidth === 0) {
                     onFail();
                 } else {
-                    confirmedStep = 'remux';
+                    confirmedStep = mode;
                     hint.textContent = '';
                 }
-            }, 1500);
+            }, delay);
             return;
         }
         if (mode === 'transcode') {
@@ -1048,10 +1175,10 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     function onFail() {
         if (tapBtn || hasFailed) return;
         hasFailed = true;
-        if (!confirmedStep && step === 'remux') {
+        var pos = realTime();
+        if (!confirmedStep && step === 'native') {
             step = 'transcode';
             confirmedStep = 'transcode';
-            var pos = realTime();
             hint.textContent = 'Transcodage en cours...';
             hint.className = 'player-hint transcoding';
             startStream(pos);
