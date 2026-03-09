@@ -146,6 +146,10 @@ if (is_file($resolvedPath)) {
     $audioTrack = isset($_GET['audio']) ? max(0, (int)$_GET['audio']) : 0;
     $audioMap = ' -map 0:v:0 -map 0:a:' . $audioTrack;
 
+    // Seek : démarrer à une position donnée (en secondes)
+    $startSec = isset($_GET['start']) ? max(0, (float)$_GET['start']) : 0;
+    $seekArg = $startSec > 0 ? ' -ss ' . escapeshellarg(sprintf('%.3f', $startSec)) : '';
+
     // Mode remux : repackage MKV→MP4 sans ré-encoder la vidéo (quasi zéro CPU)
     // Audio transcodé en AAC pour compatibilité (AC3/DTS → AAC, léger)
     if (isset($_GET['stream']) && $_GET['stream'] === 'remux') {
@@ -155,7 +159,7 @@ if (is_file($resolvedPath)) {
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
-            $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
+            $cmd = 'ffmpeg' . $seekArg . ' -i ' . escapeshellarg($resolvedPath)
                 . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
@@ -172,7 +176,7 @@ if (is_file($resolvedPath)) {
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
-            $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
+            $cmd = 'ffmpeg' . $seekArg . ' -i ' . escapeshellarg($resolvedPath)
                 . $audioMap . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(720,ih)\'" -pix_fmt yuv420p'
                 . ' -c:a aac -ac 2 -b:a 128k'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
@@ -679,16 +683,41 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var pp = '{$pParamJs}';
     var audioIdx = 0;
     var step = isVideo ? 'remux' : 'native';
+    var seekOffset = 0; // décalage serveur (ffmpeg -ss)
+    var pendingSeek = 0; // position à restaurer après reload
 
-    function buildUrl(mode, audio) {
-        return base + '?' + pp + 'stream=' + mode + '&audio=' + (audio || 0);
+    function buildUrl(mode, audio, startSec) {
+        var url = base + '?' + pp + 'stream=' + mode + '&audio=' + (audio || 0);
+        if (startSec > 0) url += '&start=' + startSec.toFixed(1);
+        return url;
     }
 
-    function startStream() {
-        var url = isVideo ? buildUrl(step === 'transcode' ? 'transcode' : 'remux', audioIdx) : (base + '?' + pp + 'stream=1');
+    function startStream(resumeAt) {
+        seekOffset = resumeAt || 0;
+        pendingSeek = 0;
+        var url;
+        if (isVideo) {
+            url = buildUrl(step === 'transcode' ? 'transcode' : 'remux', audioIdx, seekOffset);
+        } else {
+            url = base + '?' + pp + 'stream=1';
+        }
         player.src = url;
         player.load();
         player.play().catch(function(){});
+    }
+
+    // Position réelle = position dans le flux + décalage serveur
+    function realTime() {
+        return seekOffset + (player.currentTime || 0);
+    }
+
+    function fmtTime(s) {
+        s = Math.floor(s);
+        var h = Math.floor(s / 3600);
+        var m = Math.floor((s % 3600) / 60);
+        var sec = s % 60;
+        if (h > 0) return h + ':' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
+        return m + ':' + (sec < 10 ? '0' : '') + sec;
     }
 
     // Charger les pistes audio/sous-titres
@@ -710,11 +739,12 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
                     sel.appendChild(opt);
                 });
                 sel.addEventListener('change', function() {
+                    var pos = realTime();
                     audioIdx = parseInt(sel.value);
                     step = isVideo ? 'remux' : 'native';
                     hint.textContent = 'Changement de piste...';
                     hint.className = 'player-hint';
-                    startStream();
+                    startStream(pos);
                 });
                 trackBar.append(lbl, sel);
             }
@@ -741,7 +771,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     }
 
     // Démarrer la lecture
-    startStream();
+    startStream(0);
 
     player.addEventListener('playing', function() {
         if (step === 'remux' && isVideo) {
@@ -749,21 +779,26 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
                 if (player.videoWidth === 0) {
                     onFail();
                 } else {
-                    hint.textContent = '';
+                    hint.textContent = seekOffset > 0 ? 'Reprise à ' + fmtTime(seekOffset) : '';
                 }
             }, 800);
             return;
         }
-        if (step === 'transcode') { hint.textContent = 'Transcodage en cours (720p)'; hint.className = 'player-hint transcoding'; }
-        else hint.textContent = '';
+        if (step === 'transcode') {
+            hint.textContent = 'Transcodage 720p' + (seekOffset > 0 ? ' — reprise à ' + fmtTime(seekOffset) : '');
+            hint.className = 'player-hint transcoding';
+        } else {
+            hint.textContent = '';
+        }
     });
 
     function onFail() {
         if (step === 'remux') {
             step = 'transcode';
+            var pos = realTime();
             hint.textContent = 'Transcodage en cours...';
             hint.className = 'player-hint transcoding';
-            startStream();
+            startStream(pos);
         } else {
             hint.textContent = 'Lecture impossible. Utilisez le bouton Télécharger.';
             hint.className = 'player-hint error';
