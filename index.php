@@ -30,7 +30,7 @@ function afficher_liens(): void {
     foreach ($links as $link) {
         $name = htmlspecialchars($link['name']);
         $token = htmlspecialchars($link['token']);
-        $shortToken = substr($token, 0, 10);
+        $shortToken = $token;
         $type = $link['type'];
         $dlUrl = '/dl/' . $token;
         $dlCount = (int)$link['download_count'];
@@ -64,7 +64,7 @@ function afficher_liens(): void {
         echo "<div class=\"link-card-icon\">{$typeIcon}</div>";
         echo "<div class=\"link-card-info\">";
         echo "<div class=\"link-card-name\" title=\"" . htmlspecialchars($link['path']) . "\">{$name}</div>";
-        echo "<a class=\"token-link\" href=\"{$dlUrl}\" target=\"_blank\">{$shortToken}&hellip;</a>";
+        echo "<a class=\"token-link\" href=\"{$dlUrl}\" target=\"_blank\">{$shortToken}</a>";
         echo "</div>";
         echo "<button class=\"btn btn-danger btn-sm\" onclick=\"supprimerLien({$linkId})\">";
         echo "<svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2\"/><path d=\"M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6\"/></svg>";
