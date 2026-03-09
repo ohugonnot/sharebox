@@ -1,2 +1,6 @@
 data/
 config.php
+vendor/
+.phpunit.cache/
+composer.lock
+/composer
