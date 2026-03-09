@@ -1,0 +1,52 @@
+RewriteEngine On
+
+# ---------------------------------------------------------
+# Block access to data directory (contains SQLite database)
+# ---------------------------------------------------------
+RewriteRule ^data/ - [F,L]
+
+# ---------------------------------------------------------
+# Block access to config files
+# ---------------------------------------------------------
+RewriteRule ^config\.php$ - [F,L]
+RewriteRule ^config\.example\.php$ - [F,L]
+
+# ---------------------------------------------------------
+# Public download URLs: /dl/{token}
+# No authentication required
+# ---------------------------------------------------------
+RewriteCond %{REQUEST_URI} ^/dl/([a-z0-9][a-z0-9-]{1,50})$
+RewriteRule ^dl/([a-z0-9][a-z0-9-]{1,50})$ download.php?token=$1 [QSA,L]
+
+# ---------------------------------------------------------
+# Admin panel: protect with HTTP basic auth
+# Uncomment and adjust the path to your htpasswd file
+# ---------------------------------------------------------
+# AuthType Basic
+# AuthName "ShareBox Admin"
+# AuthUserFile /etc/sharebox.htpasswd
+# Require valid-user
+
+# ---------------------------------------------------------
+# Front controller: route all non-file requests to index.php
+# ---------------------------------------------------------
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php?$1 [QSA,L]
+
+# ---------------------------------------------------------
+# Prevent PHP execution in data directory
+# ---------------------------------------------------------
+<FilesMatch "\.ph(p|tml)$">
+    <If "%{REQUEST_URI} =~ m#^.*/data/#">
+        Require all denied
+    </If>
+</FilesMatch>
+
+# ---------------------------------------------------------
+# Security headers
+# ---------------------------------------------------------
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+</IfModule>
