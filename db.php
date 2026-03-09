@@ -1,0 +1,49 @@
+<?php
+/**
+ * Gestion de la base de données SQLite
+ * La BDD est créée automatiquement au premier appel
+ */
+
+require_once __DIR__ . '/config.php';
+
+/**
+ * Retourne une connexion PDO vers la base SQLite
+ * Crée la table "links" si elle n'existe pas encore
+ */
+function get_db(): PDO {
+    static $db = null;
+    if ($db !== null) return $db;
+
+    $db = new PDO('sqlite:' . DB_PATH, null, null, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+
+    // Active le mode WAL pour de meilleures performances en lecture
+    $db->exec('PRAGMA journal_mode=WAL');
+
+    // Crée la table si elle n'existe pas
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT NOT NULL UNIQUE,
+            path TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'file',
+            name TEXT NOT NULL,
+            password_hash TEXT DEFAULT NULL,
+            password_plain TEXT DEFAULT NULL,
+            expires_at TEXT DEFAULT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            download_count INTEGER NOT NULL DEFAULT 0
+        )
+    ");
+
+    // Migration : ajouter password_plain si la colonne n'existe pas encore
+    $cols = $db->query("PRAGMA table_info(links)")->fetchAll();
+    $colNames = array_column($cols, 'name');
+    if (!in_array('password_plain', $colNames)) {
+        $db->exec("ALTER TABLE links ADD COLUMN password_plain TEXT DEFAULT NULL");
+    }
+
+    return $db;
+}
