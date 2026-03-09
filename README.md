@@ -44,7 +44,7 @@ PHP extensions needed: `pdo_sqlite`, `session`, `json` (usually enabled by defau
 ### One-line installer (Debian/Ubuntu)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOURUSER/sharebox/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ohugonnot/sharebox/main/install.sh | sudo bash
 ```
 
 The installer will:
@@ -62,7 +62,7 @@ The installer will:
 #### 1. Clone the repository
 
 ```bash
-git clone https://github.com/youruser/sharebox.git /var/www/sharebox
+git clone https://github.com/ohugonnot/sharebox.git /var/www/sharebox
 cd /var/www/sharebox
 ```
 
