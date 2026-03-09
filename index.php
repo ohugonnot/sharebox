@@ -7,6 +7,11 @@
 
 require_once __DIR__ . '/db.php';
 
+session_start();
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
 // Mode fragment : retourne juste le HTML des liens (pour AJAX)
 if (isset($_GET['fragment']) && $_GET['fragment'] === 'links') {
     afficher_liens();
@@ -79,7 +84,6 @@ function afficher_liens(): void {
 
         // Barre d'actions : Copier + Email
         $hasPwd = $link['password_hash'] !== null ? 'true' : 'false';
-        // Double escape : JS d'abord (addcslashes), puis HTML (htmlspecialchars)
         $pwdJs = $link['password_plain'] ? addcslashes($link['password_plain'], "'\\") : '';
         $pwdAttr = htmlspecialchars($pwdJs, ENT_QUOTES);
         echo "<div class=\"link-card-actions\">";
@@ -106,6 +110,7 @@ function afficher_liens(): void {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
+    <meta name="csrf-token" content="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
     <title>ShareBox</title>
     <link rel="stylesheet" href="/share/style.css">
 </head>
