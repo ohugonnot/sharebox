@@ -1,0 +1,48 @@
+# ShareBox — nginx configuration example
+#
+# Adapt paths and server_name to your environment.
+# This can be included in a server block or used as a standalone config.
+#
+# Usage:
+#   Include this file in your server block:
+#     include /etc/nginx/apps/sharebox.conf;
+#
+#   Or copy and adapt as a full server block.
+
+# --- Admin panel (protected by HTTP basic auth) ---
+location ^~ /share {
+    alias /var/www/sharebox;
+    auth_basic "ShareBox Admin";
+    auth_basic_user_file /etc/sharebox.htpasswd;
+
+    # Block access to data directory
+    location ^~ /share/data {
+        deny all;
+    }
+
+    # PHP processing
+    location ~ \.php$ {
+        include fastcgi_params;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $request_filename;
+    }
+
+    index index.php;
+    try_files $uri $uri/ /share/index.php?$query_string;
+}
+
+# --- Public download URLs (no authentication) ---
+location ~ "^/dl/([a-z0-9][a-z0-9-]{1,50})$" {
+    include fastcgi_params;
+    fastcgi_pass unix:/run/php/php-fpm.sock;
+    fastcgi_param SCRIPT_FILENAME /var/www/sharebox/download.php;
+    fastcgi_param QUERY_STRING token=$1&$args;
+}
+
+# --- X-Accel-Redirect internal location ---
+# Used by PHP to serve files efficiently through nginx (sendfile).
+# The prefix must match XACCEL_PREFIX in config.php.
+location /internal-download/ {
+    internal;
+    alias /;
+}
