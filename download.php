@@ -92,7 +92,7 @@ if (is_file($resolvedPath)) {
     // Probe : retourne les pistes audio/sous-titres en JSON (pour le player)
     if (isset($_GET['probe']) && $_GET['probe'] === '1') {
         header('Content-Type: application/json; charset=utf-8');
-        $cmd = 'ffprobe -v error -show_entries format=duration -show_entries stream=index,codec_type,codec_name:stream_tags=language,title -of json '
+        $cmd = 'ffprobe -v error -show_entries format=duration -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
             . escapeshellarg($resolvedPath) . ' 2>/dev/null';
         $output = shell_exec($cmd);
         $data = json_decode($output, true);
@@ -101,10 +101,15 @@ if (is_file($resolvedPath)) {
         $subs = [];
         $audioIdx = 0;
         $subIdx = 0;
+        $videoHeight = 0;
+        $videoCodec = '';
         foreach (($data['streams'] ?? []) as $s) {
             $lang = $s['tags']['language'] ?? '';
             $title = $s['tags']['title'] ?? '';
-            if ($s['codec_type'] === 'audio') {
+            if ($s['codec_type'] === 'video' && !$videoHeight && isset($s['height'])) {
+                $videoHeight = (int)$s['height'];
+                $videoCodec = $s['codec_name'] ?? '';
+            } elseif ($s['codec_type'] === 'audio') {
                 $label = $lang ? strtoupper($lang) : 'Piste ' . ($audioIdx + 1);
                 if ($title) $label .= ' — ' . $title;
                 $audio[] = ['index' => $audioIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label];
@@ -116,7 +121,7 @@ if (is_file($resolvedPath)) {
                 $subIdx++;
             }
         }
-        echo json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration]);
+        echo json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec]);
         exit;
     }
 
@@ -149,7 +154,7 @@ if (is_file($resolvedPath)) {
 
     // Seek : démarrer à une position donnée (en secondes)
     $startSec = isset($_GET['start']) ? max(0, (float)$_GET['start']) : 0;
-    $seekArg = $startSec > 0 ? ' -ss ' . escapeshellarg(sprintf('%.3f', $startSec)) : '';
+    $seekArg = ' -ss ' . escapeshellarg(sprintf('%.3f', $startSec));
 
     // Mode remux : repackage MKV→MP4 sans ré-encoder la vidéo (quasi zéro CPU)
     // Audio transcodé en AAC pour compatibilité (AC3/DTS → AAC, léger)
@@ -160,8 +165,8 @@ if (is_file($resolvedPath)) {
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
-            $cmd = 'ffmpeg' . $seekArg . ' -i ' . escapeshellarg($resolvedPath)
-                . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
+            $cmd = 'ffmpeg' . $seekArg . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+                . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 128k -async 1'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
             passthru($cmd);
@@ -173,13 +178,17 @@ if (is_file($resolvedPath)) {
     if (isset($_GET['stream']) && $_GET['stream'] === 'transcode') {
         $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
         if ($mime && str_starts_with($mime, 'video/')) {
+            // Qualité demandée (hauteur en pixels), par défaut 720
+            $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
+            $allowedQualities = [480, 720, 1080];
+            if (!in_array($quality, $allowedQualities)) $quality = 720;
             header('Content-Type: video/mp4');
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
-            $cmd = 'ffmpeg' . $seekArg . ' -i ' . escapeshellarg($resolvedPath)
-                . $audioMap . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(720,ih)\'" -pix_fmt yuv420p'
-                . ' -c:a aac -ac 2 -b:a 128k'
+            $cmd = 'ffmpeg' . $seekArg . ' -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+                . $audioMap . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
+                . ' -c:a aac -ac 2 -b:a 128k -async 1'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
             passthru($cmd);
@@ -331,9 +340,10 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$shareNameHtml}</title>
     <style>{$css}
-    .page { position: relative; z-index: 1; max-width: 800px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
+    .page { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
     .header { display: flex; align-items: center; gap: .8rem; margin-bottom: .4rem; }
     .header-icon { width: 38px; height: 38px; background: linear-gradient(135deg, var(--accent), #e08820); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 1.1rem; box-shadow: 0 4px 20px rgba(240,160,48,.2); }
     .header-title { font-size: 1.3rem; font-weight: 700; color: #fff; }
@@ -538,6 +548,7 @@ function afficher_formulaire_mdp(string $name, string $erreur = ''): void {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>Accès protégé</title>
     <style>{$css}
     .page { position: relative; z-index: 1; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 1.5rem; }
@@ -639,6 +650,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$fileNameHtml}</title>
     <style>{$css}
     .page { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
@@ -666,6 +678,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     .track-bar { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; flex-wrap: wrap; }
     .track-bar label { color: var(--text-muted); font-size: .78rem; font-weight: 600; }
     .track-select { padding: .3rem .5rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,.03); color: var(--text-primary); font-family: var(--font-sans); font-size: .78rem; outline: none; cursor: pointer; -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .4rem center; padding-right: 1.4rem; }
+    .track-select option { background: #1a1d28; color: #e8eaf0; }
     .track-select:focus { border-color: var(--accent); }
     @media (max-width: 480px) { .page { padding: 1rem .75rem; } .player-name { display: none; } }
     </style>
@@ -716,8 +729,12 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var dragging = false;
     var seekDebounce = null;
 
+    var currentQuality = 720;
+    var videoHeight = 0;
+
     function buildUrl(mode, audio, startSec) {
         var url = base + '?' + pp + 'stream=' + mode + '&audio=' + (audio || 0);
+        if (mode === 'transcode') url += '&quality=' + currentQuality;
         if (startSec > 0) url += '&start=' + startSec.toFixed(1);
         return url;
     }
@@ -833,27 +850,35 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         if (dragging) { dragging = false; seekBar.classList.remove('dragging'); }
     });
 
-    // Charger les pistes audio/sous-titres + durée
-    if (isVideo) {
-        fetch(base + '?' + pp + 'probe=1').then(function(r){ return r.json(); }).then(function(data) {
-            var hasControls = false;
+    // Codecs que le navigateur ne peut pas lire en remux (nécessitent un transcode)
+    var needsTranscode = ['hevc', 'h265', 'av1', 'vp9', 'mpeg2video', 'mpeg4'];
 
+    function setupAndStart(probeData) {
+        var hasControls = false;
+
+        if (probeData) {
             // Durée totale
-            if (data.duration > 0) {
-                totalDuration = data.duration;
+            if (probeData.duration > 0) {
+                totalDuration = probeData.duration;
                 timeTotal.textContent = fmtTime(totalDuration);
                 seekBar.style.display = 'flex';
                 seekTimeEl.style.display = 'flex';
             }
 
+            // Si le codec nécessite un transcode, skip le remux
+            if (probeData.videoCodec && needsTranscode.indexOf(probeData.videoCodec) !== -1) {
+                step = 'transcode';
+                confirmedStep = 'transcode';
+            }
+
             // Sélecteur audio
-            if (data.audio && data.audio.length > 1) {
+            if (probeData.audio && probeData.audio.length > 1) {
                 hasControls = true;
                 var lbl = document.createElement('label');
                 lbl.textContent = 'Audio :';
                 var sel = document.createElement('select');
                 sel.className = 'track-select';
-                data.audio.forEach(function(a) {
+                probeData.audio.forEach(function(a) {
                     var opt = document.createElement('option');
                     opt.value = a.index;
                     opt.textContent = a.label;
@@ -869,10 +894,42 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
                 trackBar.append(lbl, sel);
             }
 
+            // Sélecteur de qualité
+            if (probeData.videoHeight > 0) {
+                videoHeight = probeData.videoHeight;
+                var qualities = [480, 720, 1080].filter(function(q) { return q <= videoHeight; });
+                if (qualities.length > 0) {
+                    currentQuality = qualities.indexOf(720) !== -1 ? 720 : qualities[qualities.length - 1];
+                    if (qualities.length > 1) {
+                        hasControls = true;
+                        var lbl3 = document.createElement('label');
+                        lbl3.textContent = 'Qualité :';
+                        var sel3 = document.createElement('select');
+                        sel3.className = 'track-select';
+                        qualities.forEach(function(q) {
+                            var opt = document.createElement('option');
+                            opt.value = q;
+                            opt.textContent = q + 'p';
+                            if (q === currentQuality) opt.selected = true;
+                            sel3.appendChild(opt);
+                        });
+                        sel3.addEventListener('change', function() {
+                            var pos = realTime();
+                            currentQuality = parseInt(sel3.value);
+                            confirmedStep = 'transcode';
+                            hint.textContent = 'Transcodage ' + currentQuality + 'p...';
+                            hint.className = 'player-hint transcoding';
+                            startStream(pos);
+                        });
+                        trackBar.append(lbl3, sel3);
+                    }
+                }
+            }
+
             // Sous-titres
-            if (data.subtitles && data.subtitles.length > 0) {
+            if (probeData.subtitles && probeData.subtitles.length > 0) {
                 hasControls = true;
-                data.subtitles.forEach(function(s) {
+                probeData.subtitles.forEach(function(s) {
                     var track = document.createElement('track');
                     track.kind = 'subtitles';
                     track.label = s.label;
@@ -887,11 +944,20 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
             }
 
             if (hasControls) trackBar.style.display = 'flex';
-        }).catch(function(){});
+        }
+
+        // Démarrer la lecture
+        startStream(0);
     }
 
-    // Démarrer la lecture
-    startStream(0);
+    // Charger le probe AVANT de démarrer la lecture
+    if (isVideo) {
+        fetch(base + '?' + pp + 'probe=1').then(function(r){ return r.json(); }).then(function(data) {
+            setupAndStart(data);
+        }).catch(function(){ setupAndStart(null); });
+    } else {
+        setupAndStart(null);
+    }
 
     player.addEventListener('playing', function() {
         unlockSize();
@@ -909,7 +975,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
             return;
         }
         if (mode === 'transcode') {
-            hint.textContent = 'Transcodage 720p';
+            hint.textContent = 'Transcodage ' + currentQuality + 'p';
             hint.className = 'player-hint transcoding';
         } else {
             hint.textContent = '';
@@ -952,6 +1018,7 @@ function afficher_erreur(string $titre, string $message): void {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$titreHtml}</title>
     <style>{$css}
     .page { position: relative; z-index: 1; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 1.5rem; }

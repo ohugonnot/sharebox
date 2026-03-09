@@ -105,17 +105,23 @@ function afficher_liens(): void {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Share — Partage de fichiers</title>
+    <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
+    <title>ShareBox</title>
     <link rel="stylesheet" href="/share/style.css">
 </head>
 <body>
 
 <div class="app">
     <header class="app-header">
-        <div class="app-logo">&#x2197;</div>
+        <div class="app-logo">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M21 3h-8v2h5.59L11 12.59 12.41 14 20 6.41V12h2V3z" fill="#0c0e14"/>
+                <path d="M3 5v16h16v-7h-2v5H5V7h5V5H3z" fill="#0c0e14"/>
+            </svg>
+        </div>
         <div>
-            <div class="app-title">Share</div>
-            <div class="app-subtitle">Partage de fichiers</div>
+            <div class="app-title">Share<span style="color:var(--accent)">Box</span></div>
+            <div class="app-subtitle">Secure file sharing & streaming</div>
         </div>
     </header>
 
