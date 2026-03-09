@@ -6,6 +6,7 @@
  */
 
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/functions.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -239,50 +240,3 @@ try {
     echo json_encode(['error' => 'Erreur serveur interne']);
 }
 
-/**
- * Génère un slug lisible depuis un nom de fichier/dossier
- * Ex: "Batman.Begins.2005.MULTI.2160p.mkv" → "batman-begins-2005-x7k2"
- */
-function generate_slug(string $name, PDO $db): string {
-    // Retirer l'extension
-    $slug = pathinfo($name, PATHINFO_FILENAME);
-
-    // Translittérer les accents (é→e, ü→u, etc.)
-    $slug = @iconv('UTF-8', 'ASCII//TRANSLIT', $slug);
-    if (!$slug) $slug = pathinfo($name, PATHINFO_FILENAME);
-    $slug = strtolower($slug);
-
-    // Remplacer séparateurs courants par des tirets
-    $slug = preg_replace('/[\s._()[\]{}]+/', '-', $slug);
-
-    // Couper au premier tag technique (tout ce qui suit est du bruit)
-    $slug = preg_replace('/-(multi|vff|vfq|truefrench|french|english|vostfr|subfrench|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|hdtv|dvdrip|hdrip|x264|x265|h264|h265|hevc|avc|10bit|remux|2160p|1080p|720p|480p|uhd|4k|hdr|hdr10|dts|truehd|atmos|aac|ac3|flac|ddp?\d|proper|repack|internal|extended|unrated|directors?-?cut|complete|s\d{2}e?\d{0,2}).*/i', '', $slug);
-
-    // Ne garder que lettres, chiffres, tirets
-    $slug = preg_replace('/[^a-z0-9-]/', '', $slug);
-
-    // Nettoyer les tirets multiples et aux extrémités
-    $slug = preg_replace('/-{2,}/', '-', $slug);
-    $slug = trim($slug, '-');
-
-    // Tronquer à 40 chars max
-    if (strlen($slug) > 40) {
-        $slug = substr($slug, 0, 40);
-        $slug = rtrim($slug, '-');
-    }
-
-    // Fallback si slug vide
-    if ($slug === '') $slug = 'partage';
-
-    // Ajouter suffixe random (4 chars alphanum)
-    $chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    do {
-        $suffix = '';
-        for ($i = 0; $i < 4; $i++) $suffix .= $chars[random_int(0, 35)];
-        $candidate = $slug . '-' . $suffix;
-        $check = $db->prepare("SELECT COUNT(*) FROM links WHERE token = :t");
-        $check->execute([':t' => $candidate]);
-    } while ($check->fetchColumn() > 0);
-
-    return $candidate;
-}

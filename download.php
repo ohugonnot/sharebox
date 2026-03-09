@@ -8,6 +8,7 @@
  */
 
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/functions.php';
 
 // Récupérer le token depuis l'URL (passé par nginx)
 $token = $_GET['token'] ?? '';
@@ -181,7 +182,10 @@ if (is_file($resolvedPath)) {
                 . ' -min_frag_duration 2000000'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
+            [$slotFp, $queued] = acquireStreamSlot();
+            if ($queued) header('X-Stream-Queued: 1');
             passthru($cmd);
+            releaseStreamSlot($slotFp);
             exit;
         }
     }
@@ -206,7 +210,10 @@ if (is_file($resolvedPath)) {
                 . ' -min_frag_duration 2000000'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
+            [$slotFp, $queued] = acquireStreamSlot();
+            if ($queued) header('X-Stream-Queued: 1');
             passthru($cmd);
+            releaseStreamSlot($slotFp);
             exit;
         }
     }
@@ -537,15 +544,6 @@ function filtrer(q) {
 HTML;
 }
 
-/**
- * Formate une taille en octets
- */
-function format_taille(int $bytes): string {
-    if ($bytes < 1024) return $bytes . ' o';
-    if ($bytes < 1048576) return round($bytes / 1024, 1) . ' Ko';
-    if ($bytes < 1073741824) return round($bytes / 1048576, 1) . ' Mo';
-    return round($bytes / 1073741824, 2) . ' Go';
-}
 
 /**
  * Affiche le formulaire de mot de passe
@@ -598,33 +596,6 @@ function afficher_formulaire_mdp(string $name, string $erreur = ''): void {
 HTML;
 }
 
-/**
- * Retourne le type MIME de streaming pour une extension donnée
- */
-function get_stream_mime(string $ext): ?string {
-    return match($ext) {
-        'mp4', 'm4v', 'mov' => 'video/mp4',
-        'webm' => 'video/webm',
-        'mkv' => 'video/x-matroska',
-        'avi' => 'video/x-msvideo',
-        'mp3' => 'audio/mpeg',
-        'aac', 'm4a' => 'audio/mp4',
-        'ogg', 'oga', 'opus' => 'audio/ogg',
-        'flac' => 'audio/flac',
-        'wav' => 'audio/wav',
-        default => null,
-    };
-}
-
-/**
- * Retourne 'video', 'audio' ou null selon l'extension du fichier
- */
-function get_media_type(string $filename): ?string {
-    $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-    $mime = get_stream_mime($ext);
-    if (!$mime) return null;
-    return str_starts_with($mime, 'video/') ? 'video' : 'audio';
-}
 
 /**
  * Affiche la page du player video/audio
