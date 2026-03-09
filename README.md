@@ -6,7 +6,9 @@ Share files and folders instantly with human-readable links. Stream videos direc
 
 ![Admin Panel](https://i.postimg.cc/dsFd7Cgz/image.png)
 
-![Video Streaming](https://i.postimg.cc/HLNk9fBn/image.png)
+![Folder Sharing](https://i.postimg.cc/HLNk9fBn/image.png)
+
+![Video Streaming](https://i.postimg.cc/Y9gMfj4p/image.png)
 
 ## Features
 
