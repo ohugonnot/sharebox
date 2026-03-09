@@ -12,7 +12,7 @@ require_once __DIR__ . '/db.php';
 // Récupérer le token depuis l'URL (passé par nginx)
 $token = $_GET['token'] ?? '';
 
-if (empty($token) || !preg_match('/^[a-f0-9]{32}$/', $token)) {
+if (empty($token) || !preg_match('/^[a-z0-9][a-z0-9-]{1,50}$/', $token)) {
     http_response_code(404);
     afficher_erreur('Lien introuvable', 'Ce lien de téléchargement n\'existe pas ou est invalide.');
     exit;
