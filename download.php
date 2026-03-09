@@ -89,6 +89,47 @@ if (is_file($resolvedPath)) {
         }
     }
 
+    // Probe : retourne les pistes audio/sous-titres en JSON (pour le player)
+    if (isset($_GET['probe']) && $_GET['probe'] === '1') {
+        header('Content-Type: application/json; charset=utf-8');
+        $cmd = 'ffprobe -v error -show_entries stream=index,codec_type,codec_name:stream_tags=language,title -of json '
+            . escapeshellarg($resolvedPath) . ' 2>/dev/null';
+        $output = shell_exec($cmd);
+        $data = json_decode($output, true);
+        $audio = [];
+        $subs = [];
+        $audioIdx = 0;
+        $subIdx = 0;
+        foreach (($data['streams'] ?? []) as $s) {
+            $lang = $s['tags']['language'] ?? '';
+            $title = $s['tags']['title'] ?? '';
+            if ($s['codec_type'] === 'audio') {
+                $label = $lang ? strtoupper($lang) : 'Piste ' . ($audioIdx + 1);
+                if ($title) $label .= ' — ' . $title;
+                $audio[] = ['index' => $audioIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label];
+                $audioIdx++;
+            } elseif ($s['codec_type'] === 'subtitle') {
+                $label = $lang ? strtoupper($lang) : 'Sous-titre ' . ($subIdx + 1);
+                if ($title) $label .= ' — ' . $title;
+                $subs[] = ['index' => $subIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label];
+                $subIdx++;
+            }
+        }
+        echo json_encode(['audio' => $audio, 'subtitles' => $subs]);
+        exit;
+    }
+
+    // Extraction sous-titre en WebVTT
+    if (isset($_GET['subtitle'])) {
+        $trackIdx = (int)$_GET['subtitle'];
+        header('Content-Type: text/vtt; charset=utf-8');
+        header('Access-Control-Allow-Origin: *');
+        $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
+            . ' -map 0:s:' . $trackIdx . ' -f webvtt pipe:1 2>/dev/null';
+        passthru($cmd);
+        exit;
+    }
+
     // Mode streaming natif : sert le fichier brut (audio uniquement, ou fallback)
     if (isset($_GET['stream']) && $_GET['stream'] === '1') {
         $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
@@ -101,6 +142,10 @@ if (is_file($resolvedPath)) {
         }
     }
 
+    // Sélection de piste audio (paramètre &audio=N, index relatif dans les pistes audio)
+    $audioTrack = isset($_GET['audio']) ? max(0, (int)$_GET['audio']) : 0;
+    $audioMap = ' -map 0:v:0 -map 0:a:' . $audioTrack;
+
     // Mode remux : repackage MKV→MP4 sans ré-encoder la vidéo (quasi zéro CPU)
     // Audio transcodé en AAC pour compatibilité (AC3/DTS → AAC, léger)
     if (isset($_GET['stream']) && $_GET['stream'] === 'remux') {
@@ -111,7 +156,7 @@ if (is_file($resolvedPath)) {
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
             $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
-                . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
+                . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
             passthru($cmd);
@@ -128,7 +173,7 @@ if (is_file($resolvedPath)) {
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
             $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
-                . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(720,ih)\'" -pix_fmt yuv420p'
+                . $audioMap . ' -c:v libx264 -preset ultrafast -crf 23 -vf "scale=-2:\'min(720,ih)\'" -pix_fmt yuv420p'
                 . ' -c:a aac -ac 2 -b:a 128k'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
                 . ' -f mp4 -y pipe:1 2>/dev/null';
@@ -558,23 +603,15 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     $fileName = $subPath ? basename($subPath) : $shareName;
     $fileNameHtml = htmlspecialchars($fileName);
 
-    $remuxUrl = $subPath
-        ? $baseUrl . '?p=' . rawurlencode($subPath) . '&amp;stream=remux'
-        : $baseUrl . '?stream=remux';
-
-    $transcodeUrl = $subPath
-        ? $baseUrl . '?p=' . rawurlencode($subPath) . '&amp;stream=transcode'
-        : $baseUrl . '?stream=transcode';
-
-    $nativeUrl = $subPath
-        ? $baseUrl . '?p=' . rawurlencode($subPath) . '&amp;stream=1'
-        : $baseUrl . '?stream=1';
+    // Base des URLs avec le sous-chemin
+    $pParam = $subPath ? 'p=' . rawurlencode($subPath) . '&amp;' : '';
+    $pParamJs = $subPath ? 'p=' . rawurlencode($subPath) . '&' : '';
 
     $dlUrl = $subPath
         ? $baseUrl . '?p=' . rawurlencode($subPath)
         : $baseUrl;
 
-    $isVideo = $mediaType === 'video';
+    $isVideo = $mediaType === 'video' ? 'true' : 'false';
 
     // URL retour vers le listing parent
     if ($subPath && str_contains($subPath, '/')) {
@@ -586,8 +623,6 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     }
 
     $tag = $mediaType === 'video' ? 'video' : 'audio';
-    // Vidéo : remux d'abord (MKV→MP4, zéro CPU). Audio : natif direct.
-    $srcUrl = $isVideo ? $remuxUrl : $nativeUrl;
     $css = css_public();
     $backHtml = $backUrl
         ? '<a class="player-btn" href="' . $backUrl . '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Retour</a>'
@@ -614,6 +649,10 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     .player-hint { text-align: center; padding: .8rem; color: var(--text-muted); font-size: .78rem; transition: all .2s; }
     .player-hint.transcoding { color: var(--accent); }
     .player-hint.error { color: var(--red); }
+    .track-bar { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; flex-wrap: wrap; }
+    .track-bar label { color: var(--text-muted); font-size: .78rem; font-weight: 600; }
+    .track-select { padding: .3rem .5rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,.03); color: var(--text-primary); font-family: var(--font-sans); font-size: .78rem; outline: none; cursor: pointer; -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .4rem center; padding-right: 1.4rem; }
+    .track-select:focus { border-color: var(--accent); }
     @media (max-width: 480px) { .page { padding: 1rem .75rem; } .player-name { display: none; } }
     </style>
 </head>
@@ -625,24 +664,87 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         <a class="player-btn accent" href="{$dlUrl}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Télécharger</a>
     </div>
     <div class="player-container">
-        <{$tag} id="player" controls autoplay preload="metadata">
-            <source src="{$srcUrl}">
-        </{$tag}>
+        <{$tag} id="player" controls autoplay preload="metadata" crossorigin="anonymous"></{$tag}>
         <div class="player-hint" id="hint">Chargement...</div>
     </div>
+    <div class="track-bar" id="track-bar" style="display:none"></div>
 </div>
 <script>
 (function() {
     var player = document.getElementById('player');
     var hint = document.getElementById('hint');
+    var trackBar = document.getElementById('track-bar');
     var isVideo = {$isVideo};
-    var transcodeUrl = '{$transcodeUrl}'.replace(/&amp;/g, '&');
+    var base = '{$baseUrl}';
+    var pp = '{$pParamJs}';
+    var audioIdx = 0;
     var step = isVideo ? 'remux' : 'native';
+
+    function buildUrl(mode, audio) {
+        return base + '?' + pp + 'stream=' + mode + '&audio=' + (audio || 0);
+    }
+
+    function startStream() {
+        var url = isVideo ? buildUrl(step === 'transcode' ? 'transcode' : 'remux', audioIdx) : (base + '?' + pp + 'stream=1');
+        player.src = url;
+        player.load();
+        player.play().catch(function(){});
+    }
+
+    // Charger les pistes audio/sous-titres
+    if (isVideo) {
+        fetch(base + '?' + pp + 'probe=1').then(function(r){ return r.json(); }).then(function(data) {
+            var hasControls = false;
+
+            // Sélecteur audio
+            if (data.audio && data.audio.length > 1) {
+                hasControls = true;
+                var lbl = document.createElement('label');
+                lbl.textContent = 'Audio :';
+                var sel = document.createElement('select');
+                sel.className = 'track-select';
+                data.audio.forEach(function(a) {
+                    var opt = document.createElement('option');
+                    opt.value = a.index;
+                    opt.textContent = a.label;
+                    sel.appendChild(opt);
+                });
+                sel.addEventListener('change', function() {
+                    audioIdx = parseInt(sel.value);
+                    step = isVideo ? 'remux' : 'native';
+                    hint.textContent = 'Changement de piste...';
+                    hint.className = 'player-hint';
+                    startStream();
+                });
+                trackBar.append(lbl, sel);
+            }
+
+            // Sous-titres
+            if (data.subtitles && data.subtitles.length > 0) {
+                hasControls = true;
+                data.subtitles.forEach(function(s) {
+                    var track = document.createElement('track');
+                    track.kind = 'subtitles';
+                    track.label = s.label;
+                    track.srclang = s.lang || 'und';
+                    track.src = base + '?' + pp + 'subtitle=' + s.index;
+                    player.appendChild(track);
+                });
+                var lbl2 = document.createElement('label');
+                lbl2.textContent = 'Sous-titres disponibles dans le player';
+                lbl2.style.cssText = 'font-style:italic;color:var(--text-muted);font-size:.72rem;font-weight:400';
+                trackBar.appendChild(lbl2);
+            }
+
+            if (hasControls) trackBar.style.display = 'flex';
+        }).catch(function(){});
+    }
+
+    // Démarrer la lecture
+    startStream();
 
     player.addEventListener('playing', function() {
         if (step === 'remux' && isVideo) {
-            // Attendre un court instant puis vérifier si la vidéo a une image
-            // HEVC 10-bit : l'audio joue mais videoWidth reste 0
             setTimeout(function() {
                 if (player.videoWidth === 0) {
                     onFail();
@@ -659,11 +761,9 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     function onFail() {
         if (step === 'remux') {
             step = 'transcode';
-            hint.textContent = 'Remux échoué, transcodage en cours...';
+            hint.textContent = 'Transcodage en cours...';
             hint.className = 'player-hint transcoding';
-            player.src = transcodeUrl;
-            player.load();
-            player.play().catch(function(){});
+            startStream();
         } else {
             hint.textContent = 'Lecture impossible. Utilisez le bouton Télécharger.';
             hint.className = 'player-hint error';
@@ -671,8 +771,6 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     }
 
     player.addEventListener('error', onFail);
-    var src = player.querySelector('source');
-    if (src) src.addEventListener('error', onFail);
 })();
 </script>
 </body>
