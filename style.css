@@ -1,0 +1,631 @@
+/* ============================================================================
+ * Share — Styles admin
+ * Thème : ardoise sombre, accent ambre, glass panels
+ * Police : DM Sans + JetBrains Mono
+ * ============================================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    --bg-deep: #0c0e14;
+    --bg-base: #12141c;
+    --bg-surface: #1a1d28;
+    --bg-elevated: #222530;
+    --bg-hover: #282b38;
+    --accent: #f0a030;
+    --accent-soft: rgba(240, 160, 48, .12);
+    --accent-glow: rgba(240, 160, 48, .06);
+    --text-primary: #e8eaf0;
+    --text-secondary: #8b90a0;
+    --text-muted: #555968;
+    --border: rgba(255, 255, 255, .06);
+    --border-strong: rgba(255, 255, 255, .10);
+    --red: #ef5350;
+    --green: #66bb6a;
+    --blue: #42a5f5;
+    --purple: #ab47bc;
+    --glass-bg: rgba(26, 29, 40, .7);
+    --glass-border: rgba(255, 255, 255, .08);
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 16px;
+    --font-sans: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: var(--font-sans);
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    line-height: 1.5;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(240, 160, 48, .03), transparent),
+        linear-gradient(rgba(255,255,255,.015) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.015) 1px, transparent 1px);
+    background-size: 100% 100%, 48px 48px, 48px 48px;
+    pointer-events: none;
+    z-index: 0;
+}
+
+/* === LAYOUT === */
+
+.app {
+    position: relative;
+    z-index: 1;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 2.5rem 2rem 4rem;
+}
+
+/* === HEADER === */
+
+.app-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2.5rem;
+}
+
+.app-logo {
+    width: 42px;
+    height: 42px;
+    background: linear-gradient(135deg, var(--accent), #e08820);
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    box-shadow: 0 4px 20px rgba(240, 160, 48, .2);
+    flex-shrink: 0;
+}
+
+.app-title {
+    font-size: 1.6rem;
+    font-weight: 700;
+    letter-spacing: -.02em;
+    color: #fff;
+}
+
+.app-subtitle {
+    font-size: .85rem;
+    color: var(--text-muted);
+    font-weight: 400;
+    margin-top: .1rem;
+}
+
+/* === SECTIONS === */
+
+.section { margin-bottom: 2.5rem; }
+
+.section-header {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    margin-bottom: 1rem;
+    font-size: .75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-muted);
+}
+
+.section-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+/* === PANEL GLASS === */
+
+.panel {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    overflow: hidden;
+}
+
+/* ============================================================================
+ * GRILLE DE CARTES — Liens actifs
+ * Desktop : grille 2 colonnes | Mobile : stack vertical
+ * ============================================================================ */
+
+.link-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: .75rem;
+}
+
+.link-card {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    padding: .9rem 1rem;
+    transition: border-color .15s, box-shadow .15s;
+}
+
+.link-card:hover {
+    border-color: rgba(255,255,255,.12);
+    box-shadow: 0 2px 16px rgba(0,0,0,.2);
+}
+
+.link-card.is-expired {
+    opacity: .5;
+}
+
+/* Haut de la carte : icône + nom + token + bouton supprimer */
+.link-card-top {
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    margin-bottom: .7rem;
+}
+
+.link-card-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.link-card-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.link-card-name {
+    font-weight: 600;
+    font-size: .9rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: .15rem;
+}
+
+/* Token cliquable */
+.token-link {
+    font-family: var(--font-mono);
+    font-size: .75rem;
+    color: var(--accent);
+    text-decoration: none;
+    padding: .1rem .4rem;
+    background: var(--accent-soft);
+    border-radius: 4px;
+    transition: all .15s;
+}
+
+.token-link:hover {
+    background: rgba(240, 160, 48, .2);
+    color: #ffc060;
+}
+
+/* Bas de la carte : métadonnées en ligne */
+.link-card-bottom {
+    display: flex;
+    align-items: center;
+    gap: .8rem;
+    flex-wrap: wrap;
+}
+
+.link-meta {
+    display: flex;
+    align-items: center;
+    gap: .3rem;
+    font-size: .78rem;
+}
+
+.link-meta-label {
+    color: var(--text-muted);
+}
+
+.link-meta-val {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.link-meta-val.expired {
+    color: var(--red);
+}
+
+/* Barre d'actions en bas de carte */
+.link-card-actions {
+    display: flex;
+    gap: .4rem;
+    margin-top: .6rem;
+    padding-top: .6rem;
+    border-top: 1px solid var(--border);
+}
+
+.link-card-actions .btn {
+    flex: 1;
+}
+
+/* Badges */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    padding: .12rem .5rem;
+    border-radius: 999px;
+    font-size: .7rem;
+    font-weight: 600;
+    letter-spacing: .02em;
+}
+
+.badge-file { background: rgba(66, 165, 245, .1); color: var(--blue); }
+.badge-folder { background: var(--accent-soft); color: var(--accent); }
+.badge-password { background: rgba(171, 71, 188, .1); color: var(--purple); }
+.badge-expired { background: rgba(239, 83, 80, .1); color: var(--red); }
+
+/* === BOUTONS === */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .4rem;
+    padding: .45rem .9rem;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-sans);
+    font-size: .82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .15s;
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.btn:active { transform: scale(.97); }
+
+.btn-danger {
+    background: rgba(239, 83, 80, .12);
+    color: var(--red);
+    border: 1px solid rgba(239, 83, 80, .15);
+}
+.btn-danger:hover { background: rgba(239, 83, 80, .2); }
+
+.btn-primary {
+    background: var(--accent);
+    color: var(--bg-deep);
+}
+.btn-primary:hover {
+    background: #ffc060;
+    box-shadow: 0 2px 12px rgba(240, 160, 48, .25);
+}
+
+.btn-success {
+    background: rgba(102, 187, 106, .12);
+    color: var(--green);
+    border: 1px solid rgba(102, 187, 106, .15);
+}
+.btn-success:hover { background: rgba(102, 187, 106, .2); }
+
+.btn-ghost {
+    background: rgba(255,255,255,.05);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+}
+.btn-ghost:hover {
+    background: rgba(255,255,255,.08);
+    color: var(--text-primary);
+}
+
+.btn-sm { padding: .3rem .65rem; font-size: .78rem; }
+
+/* === BREADCRUMB === */
+
+.breadcrumb {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .15rem;
+    margin-bottom: 1rem;
+    font-size: .85rem;
+    padding: .6rem 1rem;
+    background: rgba(255,255,255,.02);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+}
+
+.breadcrumb a {
+    color: var(--accent);
+    text-decoration: none;
+    font-weight: 500;
+    transition: color .15s;
+}
+
+.breadcrumb a:hover { color: #ffc060; }
+
+.breadcrumb .sep {
+    color: var(--text-muted);
+    margin: 0 .2rem;
+    font-size: .75rem;
+}
+
+.breadcrumb .current {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+/* ============================================================================
+ * NAVIGATEUR DE FICHIERS
+ * Touch-friendly : zones de tap larges, espacement généreux sur mobile
+ * ============================================================================ */
+
+.file-list { list-style: none; }
+
+.file-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .6rem 1rem;
+    border-bottom: 1px solid var(--border);
+    transition: background .12s;
+    gap: .5rem;
+}
+
+.file-item:last-child { border-bottom: none; }
+.file-item:hover { background: var(--accent-glow); }
+.file-item.is-clickable { cursor: pointer; }
+
+.file-info {
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    flex: 1;
+    min-width: 0;
+}
+
+.file-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.file-icon.is-folder { background: var(--accent-soft); }
+.file-icon.is-file { background: rgba(66, 165, 245, .08); }
+.file-icon.is-up { background: rgba(255,255,255,.04); }
+
+.file-name {
+    cursor: default;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: .88rem;
+    font-weight: 400;
+}
+
+.file-name.is-folder {
+    color: var(--accent);
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.file-name.is-folder:hover { color: #ffc060; }
+
+.file-size {
+    color: var(--text-muted);
+    font-size: .8rem;
+    font-family: var(--font-mono);
+    margin-left: auto;
+    padding-left: 1rem;
+    flex-shrink: 0;
+}
+
+.file-actions {
+    flex-shrink: 0;
+    margin-left: .5rem;
+}
+
+/* === FORMULAIRE DE PARTAGE INLINE === */
+
+.share-form {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    flex-wrap: wrap;
+}
+
+.share-form input[type=password],
+.share-form select {
+    padding: .4rem .6rem;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: .82rem;
+    transition: border-color .15s;
+    outline: none;
+    height: 34px;
+}
+
+.share-form input[type=password] { width: 130px; }
+
+.share-form select {
+    width: 120px;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right .5rem center;
+    padding-right: 1.6rem;
+}
+
+.share-form input:focus,
+.share-form select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.share-form input::placeholder { color: var(--text-muted); }
+
+/* === LIEN COPIÉ === */
+
+.copy-msg {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    color: var(--green);
+    font-size: .82rem;
+    font-weight: 600;
+    animation: slideIn .25s ease-out;
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+/* === VIDE === */
+
+.empty-msg {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 2.5rem 1rem;
+    font-size: .9rem;
+}
+
+.empty-msg .empty-icon {
+    font-size: 2rem;
+    display: block;
+    margin-bottom: .5rem;
+    opacity: .5;
+}
+
+/* === QR CODE POPUP === */
+
+.qr-popup {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .6);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: fadeIn .15s ease-out;
+    padding: 1rem;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.qr-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    text-align: center;
+    max-width: 320px;
+    width: 100%;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, .4);
+}
+
+.qr-title {
+    font-size: .85rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 1rem;
+}
+
+.qr-card canvas {
+    display: block;
+    margin: 0 auto 1rem;
+    border-radius: var(--radius-md);
+    max-width: 100%;
+    height: auto;
+}
+
+.qr-url {
+    font-family: var(--font-mono);
+    font-size: .7rem;
+    color: var(--text-muted);
+    word-break: break-all;
+    margin-bottom: 1rem;
+    padding: .4rem .6rem;
+    background: rgba(255, 255, 255, .03);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+/* ============================================================================
+ * RESPONSIVE
+ * ============================================================================ */
+
+@media (max-width: 768px) {
+    .app { padding: 1.5rem 1rem; }
+
+    /* Cartes : 1 colonne */
+    .link-grid {
+        grid-template-columns: 1fr;
+    }
+
+    /* File browser : plus d'espace pour le doigt */
+    .file-item {
+        padding: .75rem .8rem;
+        flex-wrap: wrap;
+    }
+
+    .file-actions {
+        width: 100%;
+        margin-left: 0;
+        margin-top: .3rem;
+        padding-left: 2.5rem; /* aligné avec le nom (icône 32px + gap) */
+    }
+
+    .share-form {
+        width: 100%;
+    }
+
+    .share-form input[type=password],
+    .share-form select {
+        flex: 1;
+        width: auto;
+        min-width: 0;
+    }
+
+    .breadcrumb { padding: .5rem .7rem; }
+    .file-size { display: none; }
+}
+
+@media (max-width: 480px) {
+    .app { padding: 1rem .75rem; }
+    .app-title { font-size: 1.3rem; }
+
+    .link-card { padding: .75rem .8rem; }
+    .link-card-bottom { gap: .5rem; }
+    .link-meta { font-size: .72rem; }
+
+    .file-item { padding: .7rem .6rem; }
+    .file-actions { padding-left: 2.2rem; }
+}
