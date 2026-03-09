@@ -58,6 +58,7 @@ if ($link['password_hash'] !== null) {
             exit;
         }
         $_SESSION[$sessionKey] = true;
+        session_regenerate_id(true);
     } else {
         afficher_formulaire_mdp($link['name']);
         exit;
@@ -73,7 +74,7 @@ $targetPath = $subPath ? $basePath . '/' . $subPath : $basePath;
 $resolvedPath = realpath($targetPath);
 
 // Sécurité : le chemin résolu doit rester dans le dossier partagé
-if ($resolvedPath === false || ($resolvedPath !== $basePath && strpos($resolvedPath, $basePath . '/') !== 0)) {
+if (!is_path_within($resolvedPath, $basePath)) {
     http_response_code(403);
     afficher_erreur('Accès interdit', 'Ce chemin n\'est pas autorisé.');
     exit;
@@ -130,7 +131,7 @@ if (is_file($resolvedPath)) {
     if (isset($_GET['subtitle'])) {
         $trackIdx = (int)$_GET['subtitle'];
         header('Content-Type: text/vtt; charset=utf-8');
-        header('Access-Control-Allow-Origin: *');
+        header('Access-Control-Allow-Origin: ' . ($_SERVER['HTTP_ORIGIN'] ?? '*'));
         $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
             . ' -map 0:s:' . $trackIdx . ' -f webvtt pipe:1 2>/dev/null';
         passthru($cmd);
@@ -242,6 +243,13 @@ if (is_dir($resolvedPath)) {
 
     // Mode ZIP : télécharger tout le dossier en un seul fichier
     if (isset($_GET['zip']) && $_GET['zip'] === '1') {
+        $maxZipSize = defined('MAX_ZIP_SIZE') ? MAX_ZIP_SIZE : 10 * 1024 * 1024 * 1024;
+        if (dir_size($resolvedPath) > $maxZipSize) {
+            http_response_code(413);
+            afficher_erreur('Trop volumineux', 'Ce dossier dépasse la limite autorisée pour le téléchargement ZIP.');
+            exit;
+        }
+
         $zipName = basename($resolvedPath) . '.zip';
         $parentDir = dirname($resolvedPath);
         $baseName = basename($resolvedPath);
