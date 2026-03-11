@@ -80,6 +80,12 @@ if (!is_path_within($resolvedPath, $basePath)) {
     exit;
 }
 
+function stream_log(string $msg): void {
+    if (!defined('STREAM_LOG') || !STREAM_LOG) return;
+    $line = '[' . date('Y-m-d H:i:s') . '] [' . ($_SERVER['REMOTE_ADDR'] ?? '-') . '] ' . $msg . "\n";
+    @file_put_contents(STREAM_LOG, $line, FILE_APPEND | LOCK_EX);
+}
+
 // Si c'est un fichier
 if (is_file($resolvedPath)) {
     // Mode lecture : page avec player video/audio
@@ -138,9 +144,11 @@ if (is_file($resolvedPath)) {
         }
         $result = json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec]);
 
-        // Stocker en cache (INSERT OR REPLACE pour upsert)
-        $db->prepare("INSERT OR REPLACE INTO probe_cache (path, mtime, result) VALUES (:p, :m, :r)")
-           ->execute([':p' => $resolvedPath, ':m' => $mtime, ':r' => $result]);
+        // Stocker en cache (best-effort : on ignore si la DB est encore verrouillée)
+        try {
+            $db->prepare("INSERT OR REPLACE INTO probe_cache (path, mtime, result) VALUES (:p, :m, :r)")
+               ->execute([':p' => $resolvedPath, ':m' => $mtime, ':r' => $result]);
+        } catch (PDOException $e) { /* lock résiduel — le probe sera recalculé au prochain appel */ }
 
         echo $result;
         exit;
@@ -155,8 +163,10 @@ if (is_file($resolvedPath)) {
             header('Access-Control-Allow-Origin: ' . $origin);
             header('Access-Control-Allow-Credentials: true');
         }
+        $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+        stream_log('SUBTITLE start | track=' . $trackIdx . ' | ' . basename($resolvedPath));
         $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
-            . ' -map 0:s:' . $trackIdx . ' -f webvtt pipe:1 2>/dev/null';
+            . ' -map 0:s:' . $trackIdx . ' -f webvtt pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
         [$slotFp] = acquireStreamSlot();
         passthru($cmd);
         releaseStreamSlot($slotFp);
@@ -179,14 +189,16 @@ if (is_file($resolvedPath)) {
     $audioTrack = isset($_GET['audio']) ? max(0, (int)$_GET['audio']) : 0;
     $audioMap = ' -map 0:v:0 -map 0:a:' . $audioTrack;
 
-    // Seek : double seeking pour synchro audio/vidéo exacte
-    // -ss avant -i = seek rapide au keyframe, -ss après -i = seek précis frame-exact
+    // Seek : on utilise uniquement le seek rapide avant -i (keyframe seek)
+    // Le fine seek après -i a été supprimé : sur 4K HEVC il force le décodage de N secondes
+    // avant le premier frame → trop lent → navigateur time out.
+    // Imprécision max : distance au keyframe précédent (typiquement <2s sur x265 UHD).
     $startSec = isset($_GET['start']) ? max(0, (float)$_GET['start']) : 0;
     if ($startSec > 0) {
-        $roughSeek = max(0, $startSec - 5);
-        $fineSeek = $startSec - $roughSeek;
+        $roughSeek = $startSec;
+        $fineSeek = 0;
         $seekArgBefore = ' -ss ' . escapeshellarg(sprintf('%.3f', $roughSeek));
-        $seekArgAfter = ' -ss ' . escapeshellarg(sprintf('%.3f', $fineSeek));
+        $seekArgAfter = '';
     } else {
         $seekArgBefore = '';
         $seekArgAfter = '';
@@ -202,16 +214,18 @@ if (is_file($resolvedPath)) {
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
             header('Accept-Ranges: none');
+            $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+            stream_log('REMUX start | audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
             $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                . $audioMap . $seekArgAfter . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
+                . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
                 . ' -af "aresample=async=2000:first_pts=0"'
                 . ' -avoid_negative_ts make_zero -start_at_zero'
                 . ' -max_muxing_queue_size 1024'
-                . ' -min_frag_duration 2000000'
+                . ' -min_frag_duration 300000'
                 . ' -movflags frag_keyframe+empty_moov+default_base_moof'
-                . ' -f mp4 -y pipe:1 2>/dev/null';
+                . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
             [$slotFp, $queued] = acquireStreamSlot();
-            if ($queued) header('X-Stream-Queued: 1');
+            if ($queued) { stream_log('REMUX queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }
             if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) shell_exec('vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &');
             passthru($cmd);
             releaseStreamSlot($slotFp);
@@ -232,36 +246,41 @@ if (is_file($resolvedPath)) {
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
             header('Accept-Ranges: none');
+            $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
             if ($burnSub >= 0) {
                 // Burn-in sous-titre image (PGS/VOBSUB) via filter_complex
-                // Pad à 1920x1080 (résolution native des sous-titres DVD/Blu-ray)
-                // avant l'overlay pour que les coordonnées x,y du subtitle soient correctes
-                $fc = '"[0:v]pad=1920:1080:(1920-iw)/2:(1080-ih)/2:black[padded];[padded][0:s:' . $burnSub . ']overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v]"';
+                // Overlay sur la vidéo native puis scale : compatible 1080p et 4K
+                // (le pad=1920:1080 cassait les fichiers 4K → offsets négatifs → crash ffmpeg)
+                stream_log('TRANSCODE+SUB start | quality=' . $quality . 'p audio=' . $audioTrack . ' burnSub=' . $burnSub . ' start=' . $startSec . ' | ' . basename($resolvedPath));
+                $fc = '"[0:v][0:s:' . $burnSub . ']overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v]"';
+                // Pas de fine seek pour burnSub : le fine seek décode N sec de 4K avant le 1er frame
+                // → trop lent → navigateur time out. On accepte ±5s d'imprécision.
                 $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                    . $seekArgAfter . ' -filter_complex ' . $fc
+                    . ' -filter_complex ' . $fc
                     . ' -map "[v]" -map 0:a:' . $audioTrack
                     . ' -c:v libx264 -preset ultrafast -crf 23 -g 50'
                     . ' -c:a aac -ac 2 -b:a 128k'
                     . ' -af "aresample=async=2000:first_pts=0"'
                     . ' -avoid_negative_ts make_zero -start_at_zero'
                     . ' -max_muxing_queue_size 1024'
-                    . ' -min_frag_duration 2000000'
+                    . ' -min_frag_duration 300000'
                     . ' -movflags frag_keyframe+empty_moov+default_base_moof'
-                    . ' -f mp4 -y pipe:1 2>/dev/null';
+                    . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
             } else {
+                stream_log('TRANSCODE start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
                 $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                    . $audioMap . $seekArgAfter . ' -c:v libx264 -preset ultrafast -crf 23 -g 50'
+                    . $audioMap . ' -c:v libx264 -preset ultrafast -crf 23 -g 50'
                     . ' -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
                     . ' -c:a aac -ac 2 -b:a 128k'
                     . ' -af "aresample=async=2000:first_pts=0"'
                     . ' -avoid_negative_ts make_zero -start_at_zero'
                     . ' -max_muxing_queue_size 1024'
-                    . ' -min_frag_duration 2000000'
+                    . ' -min_frag_duration 300000'
                     . ' -movflags frag_keyframe+empty_moov+default_base_moof'
-                    . ' -f mp4 -y pipe:1 2>/dev/null';
+                    . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
             }
             [$slotFp, $queued] = acquireStreamSlot();
-            if ($queued) header('X-Stream-Queued: 1');
+            if ($queued) { stream_log('TRANSCODE queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }
             if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) shell_exec('vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &');
             passthru($cmd);
             releaseStreamSlot($slotFp);
@@ -730,7 +749,12 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 .player-name { flex:1; min-width:0; font-size:.85rem; color:var(--text-secondary); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .player-card { border-radius:var(--radius-lg); overflow:hidden; border:1px solid rgba(255,255,255,.07); box-shadow:0 32px 80px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.03); animation:hintFade .3s ease both; }
 .player-video-wrap { position:relative; background:#000; line-height:0; }
+.player-video-wrap:fullscreen,
+.player-video-wrap:-webkit-full-screen { background:#000; display:flex; align-items:center; justify-content:center; width:100vw; height:100vh; }
+.player-video-wrap:fullscreen video,
+.player-video-wrap:-webkit-full-screen video { max-height:100vh; width:100%; }
 video { display:block; width:100%; max-height:78vh; background:#000; object-fit:contain; }
+.sub-overlay { position:absolute; left:0; right:0; text-align:center; pointer-events:none; padding:0 6%; z-index:10; font-size:1.5rem; }
 audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40,.8); }
 .player-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:10; }
 .player-hint-text { font-family:var(--font-sans); font-size:.78rem; font-weight:600; padding:.4rem 1rem; border-radius:var(--radius-sm); background:rgba(12,14,20,.82); border:1px solid rgba(255,255,255,.08); color:var(--text-muted); backdrop-filter:blur(6px); letter-spacing:.01em; transition:color .2s; white-space:nowrap; }
@@ -796,6 +820,10 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                 <button class="ctrl-mute" id="mute-btn" title="Muet">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
                 </button>
+                <button class="ctrl-mute" id="speed-btn" title="Vitesse de lecture" style="font-size:.7rem;font-weight:700;font-family:var(--font-mono);width:auto;padding:0 .45rem;border-radius:20px;">1×</button>
+                <button class="ctrl-mute" id="fs-btn" title="Plein écran">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                </button>
             </div>
             <div class="track-bar" id="track-bar" style="display:none"></div>
         </div>
@@ -836,6 +864,25 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     var svgVol = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
     var svgMute = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
 
+    var fsBtn = document.getElementById('fs-btn');
+    var svgFs = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+    var svgFsExit = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
+
+    function toggleFs() {
+        var wrap = player.closest('.player-video-wrap') || player;
+        if (!document.fullscreenElement) {
+            (wrap.requestFullscreen || wrap.webkitRequestFullscreen || wrap.mozRequestFullScreen).call(wrap);
+        } else {
+            (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen).call(document);
+        }
+    }
+    document.addEventListener('fullscreenchange', function() {
+        if (fsBtn) fsBtn.innerHTML = document.fullscreenElement ? svgFsExit : svgFs;
+    });
+    document.addEventListener('webkitfullscreenchange', function() {
+        if (fsBtn) fsBtn.innerHTML = document.webkitFullscreenElement ? svgFsExit : svgFs;
+    });
+
     if (isVideo) {
         ctrlRow.style.display = 'flex';
         playBtn.addEventListener('click', function() {
@@ -845,6 +892,17 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         muteBtn.addEventListener('click', function() {
             player.muted = !player.muted;
             muteBtn.innerHTML = player.muted ? svgMute : svgVol;
+        });
+        if (fsBtn) fsBtn.addEventListener('click', toggleFs);
+        player.addEventListener('dblclick', toggleFs);
+        var speedBtn = document.getElementById('speed-btn');
+        var speeds = [1, 1.5, 2];
+        var speedIdx = 0;
+        if (speedBtn) speedBtn.addEventListener('click', function() {
+            speedIdx = (speedIdx + 1) % speeds.length;
+            currentSpeed = speeds[speedIdx];
+            player.playbackRate = currentSpeed;
+            speedBtn.textContent = currentSpeed + '\u00D7';
         });
         player.addEventListener('play', function() { playBtn.innerHTML = svgPause; });
         player.addEventListener('playing', function() { playBtn.innerHTML = svgPause; });
@@ -863,10 +921,12 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     var resyncBtn = null;
     var step = 'native'; // toujours essayer natif d'abord (native → remux → transcode)
     var confirmedStep = ''; // mode confirmé qui fonctionne (évite de re-tester)
+    var currentSpeed = 1; // vitesse de lecture, persistée entre les restarts de stream
     var seekOffset = 0;
     var totalDuration = 0;
     var dragging = false;
     var seekDebounce = null;
+    var seekPending = false;
 
     var currentQuality = 720;
     var videoHeight = 0;
@@ -911,6 +971,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         }
         player.src = url;
         player.load();
+        player.playbackRate = currentSpeed;
         player.play().catch(function(e) {
             if (e && e.name === 'NotAllowedError') showTapToPlay();
         });
@@ -923,9 +984,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         tapBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><polygon points="5,3 19,12 5,21"/></svg> Appuyer pour lire';
         tapBtn.addEventListener('click', function() {
             tapBtn.remove(); tapBtn = null;
-            hintText.textContent = 'Chargement...';
-            hintWrap.className = 'player-hint';
-            player.load();
+            hintText.textContent = '';
             player.play().catch(function(){});
         });
         hintText.textContent = '';
@@ -949,6 +1008,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     // Mise à jour de la barre de progression
     function updateSeekUI() {
         if (totalDuration <= 0) return;
+        if (seekPending) return;
         var pos = realTime();
         var pct = Math.min(100, Math.max(0, (pos / totalDuration) * 100));
         seekFill.style.width = pct + '%';
@@ -974,7 +1034,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     function seekToFraction(frac) {
         if (tapBtn) return; // pas de seek avant le premier tap utilisateur
         var targetSec = Math.max(0, Math.min(totalDuration, frac * totalDuration));
-        // Mettre à jour visuellement tout de suite
+        // Mettre à jour visuellement tout de suite et bloquer timeupdate
+        seekPending = true;
         var pct = (targetSec / totalDuration) * 100;
         seekFill.style.width = pct + '%';
         seekThumb.style.left = pct + '%';
@@ -984,12 +1045,14 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         seekDebounce = setTimeout(function() {
             if (confirmedStep === 'native') {
                 // Seek natif : laisser le navigateur gérer via Range requests
+                seekPending = false;
                 player.currentTime = targetSec;
                 hint.textContent = '';
             } else {
+                startStream(targetSec); // met seekOffset = targetSec et player.currentTime = 0
+                seekPending = false;    // updateSeekUI verra maintenant seekOffset correct
                 hint.textContent = 'Chargement à ' + fmtTime(targetSec) + '...';
                 hint.className = 'player-hint';
-                startStream(targetSec);
             }
         }, 300);
     }
@@ -1027,105 +1090,102 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         if (dragging) { dragging = false; seekBar.classList.remove('dragging'); }
     });
 
-    function setupAndStart(probeData) {
+    // Applique les métadonnées probe (durée, sélecteurs) sans (re)lancer le stream
+    function applyProbe(probeData) {
+        if (!probeData) return;
         var hasControls = false;
 
-        if (probeData) {
-            // Durée totale
-            if (probeData.duration > 0) {
-                totalDuration = probeData.duration;
-                timeTotal.textContent = fmtTime(totalDuration);
-                seekBar.style.display = 'flex';
-                seekTimeEl.style.display = 'flex';
-            }
+        // Durée totale
+        if (probeData.duration > 0) {
+            totalDuration = probeData.duration;
+            timeTotal.textContent = fmtTime(totalDuration);
+            seekBar.style.display = 'flex';
+            seekTimeEl.style.display = 'flex';
+        }
 
-            // Sélecteur audio
-            if (probeData.audio && probeData.audio.length > 1) {
+        // Sélecteur audio
+        if (probeData.audio && probeData.audio.length > 1) {
+            hasControls = true;
+            var lbl = document.createElement('label');
+            lbl.textContent = 'Audio :';
+            var sel = document.createElement('select');
+            sel.className = 'track-select';
+            probeData.audio.forEach(function(a) {
+                var opt = document.createElement('option');
+                opt.value = a.index;
+                opt.textContent = a.label;
+                sel.appendChild(opt);
+            });
+            sel.addEventListener('change', function() {
+                var pos = realTime();
+                audioIdx = parseInt(sel.value);
+                confirmedStep = 'transcode';
+                step = 'transcode';
+                hint.textContent = 'Changement de piste...';
+                hint.className = 'player-hint transcoding';
+                startStream(pos);
+            });
+            trackBar.append(lbl, sel);
+        }
+
+        // Sélecteur de qualité
+        if (probeData.videoHeight > 0) {
+            videoHeight = probeData.videoHeight;
+            var qualities = [480, 720, 1080].filter(function(q) { return q <= videoHeight; });
+            if (qualities.length > 0) {
+                currentQuality = qualities.indexOf(720) !== -1 ? 720 : qualities[qualities.length - 1];
                 hasControls = true;
-                var lbl = document.createElement('label');
-                lbl.textContent = 'Audio :';
-                var sel = document.createElement('select');
-                sel.className = 'track-select';
-                probeData.audio.forEach(function(a) {
+                var lbl3 = document.createElement('label');
+                lbl3.textContent = 'Qualité :';
+                var sel3 = document.createElement('select');
+                sel3.className = 'track-select';
+                qualities.forEach(function(q) {
                     var opt = document.createElement('option');
-                    opt.value = a.index;
-                    opt.textContent = a.label;
-                    sel.appendChild(opt);
+                    opt.value = q;
+                    opt.textContent = q + 'p';
+                    if (q === currentQuality) opt.selected = true;
+                    sel3.appendChild(opt);
                 });
-                sel.addEventListener('change', function() {
+                sel3.addEventListener('change', function() {
                     var pos = realTime();
-                    audioIdx = parseInt(sel.value);
+                    currentQuality = parseInt(sel3.value);
                     confirmedStep = 'transcode';
-                    step = 'transcode';
-                    hint.textContent = 'Changement de piste...';
+                    hint.textContent = 'Transcodage ' + currentQuality + 'p...';
                     hint.className = 'player-hint transcoding';
                     startStream(pos);
                 });
-                trackBar.append(lbl, sel);
+                trackBar.append(lbl3, sel3);
             }
-
-            // Sélecteur de qualité
-            if (probeData.videoHeight > 0) {
-                videoHeight = probeData.videoHeight;
-                var qualities = [480, 720, 1080].filter(function(q) { return q <= videoHeight; });
-                if (qualities.length > 0) {
-                    currentQuality = qualities.indexOf(720) !== -1 ? 720 : qualities[qualities.length - 1];
-                    hasControls = true;
-                    var lbl3 = document.createElement('label');
-                    lbl3.textContent = 'Qualité :';
-                    var sel3 = document.createElement('select');
-                    sel3.className = 'track-select';
-                    qualities.forEach(function(q) {
-                        var opt = document.createElement('option');
-                        opt.value = q;
-                        opt.textContent = q + 'p';
-                        if (q === currentQuality) opt.selected = true;
-                        sel3.appendChild(opt);
-                    });
-                    sel3.addEventListener('change', function() {
-                        var pos = realTime();
-                        currentQuality = parseInt(sel3.value);
-                        confirmedStep = 'transcode';
-                        hint.textContent = 'Transcodage ' + currentQuality + 'p...';
-                        hint.className = 'player-hint transcoding';
-                        startStream(pos);
-                    });
-                    trackBar.append(lbl3, sel3);
-                }
-            }
-
-            // Sous-titres
-            if (probeData.subtitles && probeData.subtitles.length > 0) {
-                hasControls = true;
-                probeData.subtitles.forEach(function(s) {
-                    subtitleUrls.push(s.type === 'text' ? base + '?' + pp + 'subtitle=' + s.index : null);
-                    subtitleTypes.push(s.type || 'text');
-                });
-                var lbl2 = document.createElement('label');
-                lbl2.textContent = 'Sous-titres :';
-                var selSub = document.createElement('select');
-                selSub.className = 'track-select';
-                var offOpt = document.createElement('option');
-                offOpt.value = '-1';
-                offOpt.textContent = 'Désactivés';
-                selSub.appendChild(offOpt);
-                probeData.subtitles.forEach(function(s, i) {
-                    var opt = document.createElement('option');
-                    opt.value = i;
-                    opt.textContent = s.label;
-                    selSub.appendChild(opt);
-                });
-                selSub.addEventListener('change', function() {
-                    loadSubtitle(parseInt(selSub.value));
-                });
-                trackBar.append(lbl2, selSub);
-            }
-
-            if (hasControls) trackBar.style.display = 'flex';
         }
 
-        // Démarrer la lecture
-        startStream(0);
+        // Sous-titres
+        if (probeData.subtitles && probeData.subtitles.length > 0) {
+            hasControls = true;
+            probeData.subtitles.forEach(function(s) {
+                subtitleUrls.push(s.type === 'text' ? base + '?' + pp + 'subtitle=' + s.index : null);
+                subtitleTypes.push(s.type || 'text');
+            });
+            var lbl2 = document.createElement('label');
+            lbl2.textContent = 'Sous-titres :';
+            var selSub = document.createElement('select');
+            selSub.className = 'track-select';
+            var offOpt = document.createElement('option');
+            offOpt.value = '-1';
+            offOpt.textContent = 'Désactivés';
+            selSub.appendChild(offOpt);
+            probeData.subtitles.forEach(function(s, i) {
+                var opt = document.createElement('option');
+                opt.value = i;
+                opt.textContent = s.label;
+                selSub.appendChild(opt);
+            });
+            selSub.addEventListener('change', function() {
+                loadSubtitle(parseInt(selSub.value));
+            });
+            trackBar.append(lbl2, selSub);
+        }
+
+        if (hasControls) trackBar.style.display = 'flex';
     }
 
     // Pour les vidéos : Resync toujours visible immédiatement, indépendamment du probe
@@ -1148,27 +1208,56 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         trackBar.style.display = 'flex';
     }
 
-    // Charger le probe AVANT de démarrer la lecture (timeout 5s pour mobile)
+    // Démarrer le stream immédiatement, puis appliquer le probe en arrière-plan
+    // (évite que les contrôles restent cachés si ffprobe est lent sur cache froid)
     if (isVideo) {
-        hint.textContent = 'Analyse du fichier...';
+        startStream(0);
         var probeCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        var probeTimer = setTimeout(function() { if (probeCtrl) probeCtrl.abort(); }, 5000);
+        var probeTimer = setTimeout(function() { if (probeCtrl) probeCtrl.abort(); }, 12000);
         var fetchOpts = probeCtrl ? { signal: probeCtrl.signal } : {};
         fetch(base + '?' + pp + 'probe=1', fetchOpts)
             .then(function(r) { clearTimeout(probeTimer); return r.json(); })
-            .then(function(data) { hint.textContent = 'Chargement...'; setupAndStart(data); })
-            .catch(function() { clearTimeout(probeTimer); hint.textContent = 'Chargement...'; setupAndStart(null); });
+            .then(function(data) { applyProbe(data); })
+            .catch(function() { clearTimeout(probeTimer); });
     } else {
-        setupAndStart(null);
+        startStream(0);
     }
 
     // Overlay sous-titres custom (indépendant des textTracks navigateur)
     (function() {
-        var container = player.parentNode;
-        container.style.position = 'relative';
         subDiv = document.createElement('div');
-        subDiv.style.cssText = 'position:absolute;left:0;right:0;bottom:28%;text-align:center;pointer-events:none;padding:0 8%;z-index:5;';
-        container.appendChild(subDiv);
+        subDiv.className = 'sub-overlay';
+        player.parentNode.appendChild(subDiv);
+
+        function updateSubPos() {
+            var wrapRect = player.parentNode.getBoundingClientRect();
+            var vidRect  = player.getBoundingClientRect();
+            var vw = player.videoWidth, vh = player.videoHeight;
+            // Espace entre bas de <video> et bas du wrapper (bandes noires du wrapper)
+            var spaceBelow = wrapRect.bottom - vidRect.bottom;
+            // Bandes noires internes à l'élément <video> (object-fit:contain)
+            var barH = 0, contentH = vidRect.height;
+            if (vw && vh && vidRect.width && vidRect.height) {
+                var videoAR = vw / vh, elemAR = vidRect.width / vidRect.height;
+                if (videoAR > elemAR) {
+                    contentH = vidRect.width / videoAR;
+                    barH = (vidRect.height - contentH) / 2;
+                }
+            }
+            subDiv.style.bottom = (spaceBelow + barH + contentH * 0.08) + 'px';
+            subDiv.style.fontSize = Math.max(13, Math.round(vidRect.width * 0.025)) + 'px';
+        }
+
+        updateSubPos();
+        player.addEventListener('loadedmetadata', updateSubPos);
+        player.addEventListener('resize', updateSubPos);
+        document.addEventListener('fullscreenchange', function() { setTimeout(updateSubPos, 50); });
+        document.addEventListener('webkitfullscreenchange', function() { setTimeout(updateSubPos, 50); });
+        if (window.ResizeObserver) {
+            new ResizeObserver(function() { updateSubPos(); }).observe(player);
+        } else {
+            window.addEventListener('resize', updateSubPos);
+        }
     })();
 
     function vttTime(s) {
@@ -1197,9 +1286,11 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         for (var i = 0; i < subtitleCues.length; i++) {
             if (t >= subtitleCues[i].start && t < subtitleCues[i].end) { txt = subtitleCues[i].text; break; }
         }
+        var safe = txt.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                      .replace(/&lt;(\/?(b|i|u|em|strong|s))&gt;/gi,'<$1>');
         var html = txt
-            ? '<span style="background:rgba(0,0,0,.78);color:#fff;padding:.2em .6em;border-radius:4px;font-size:1rem;line-height:1.5;display:inline-block;max-width:100%;word-break:break-word;white-space:pre-line">'
-              + txt.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>'
+            ? '<span style="background:rgba(0,0,0,.78);color:#fff;padding:.2em .6em;border-radius:4px;line-height:1.4;display:inline-block;max-width:100%;word-break:break-word;white-space:pre-line">'
+              + safe + '</span>'
             : '';
         if (subDiv.innerHTML !== html) subDiv.innerHTML = html;
     }
@@ -1272,6 +1363,41 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     }
 
     player.addEventListener('error', onFail);
+
+    // Stall watchdog : si aucune donnée après 25s en mode transcode → retry automatique
+    var stallTimer = null;
+    var stallCount = 0;
+    var stallInterval = null;
+    function startStallWatchdog() {
+        clearStallWatchdog();
+        if (!isVideo || confirmedStep === 'native') return;
+        var elapsed = 0;
+        stallInterval = setInterval(function() {
+            elapsed++;
+            if (!player.paused && player.readyState < 3) {
+                hint.textContent = 'Chargement... ' + elapsed + 's';
+                hint.className = 'player-hint';
+            }
+        }, 1000);
+        stallTimer = setTimeout(function() {
+            clearStallWatchdog();
+            if (player.readyState < 3 && !player.paused) {
+                stallCount++;
+                hint.textContent = 'Retry #' + stallCount + '...';
+                hint.className = 'player-hint';
+                startStream(realTime());
+            }
+        }, 25000);
+    }
+    function clearStallWatchdog() {
+        clearTimeout(stallTimer);
+        clearInterval(stallInterval);
+        stallTimer = null;
+        stallInterval = null;
+    }
+    player.addEventListener('waiting', startStallWatchdog);
+    player.addEventListener('playing', clearStallWatchdog);
+    player.addEventListener('pause',   clearStallWatchdog);
 })();
 </script>
 </body>
