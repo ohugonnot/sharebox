@@ -9,11 +9,10 @@ let currentPath = '';
 // Options d'expiration prédéfinies (valeur en heures, label affiché)
 const DUREES_EXPIRATION = [
     { value: '',    label: 'Jamais' },
-    { value: '12',  label: '12 heures' },
     { value: '24',  label: '1 jour' },
-    { value: '72',  label: '3 jours' },
     { value: '168', label: '1 semaine' },
     { value: '720', label: '1 mois' },
+    { value: 'custom', label: 'Perso…' },
 ];
 
 // Token CSRF pour les requêtes POST
@@ -167,11 +166,13 @@ function afficherFichiers(entries) {
 
         // Bouton Partager
         const actions = creerElement('div', 'file-actions');
-        const shareBtn = creerElement('button', 'btn btn-primary btn-sm');
-        shareBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg> Partager';
+        const shareBtn = creerElement('button', 'btn btn-share-icon');
+        shareBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>';
+        shareBtn.setAttribute('title', 'Partager');
+        shareBtn.setAttribute('aria-label', 'Partager');
         shareBtn.addEventListener('click', (e) => {
-            e.stopPropagation(); // Empêcher l'ouverture du dossier
-            afficherFormPartage(entryPath, entry.name, actions);
+            e.stopPropagation();
+            ouvrirShareSheet(entryPath, entry.name);
         });
         actions.appendChild(shareBtn);
 
@@ -190,42 +191,194 @@ function remonter() {
 }
 
 /**
- * Affiche le formulaire inline pour créer un lien de partage
+ * Ouvre le bottom sheet de création de lien
  */
-function afficherFormPartage(path, name, container) {
-    container.innerHTML = '';
+function ouvrirShareSheet(path, name) {
+    fermerShareSheet();
 
-    const form = creerElement('div', 'share-form');
+    let selectedExpiry = '';
 
-    // Champ mot de passe (optionnel)
+    const overlay = creerElement('div', 'sheet-overlay');
+    overlay.id = 'sheet-overlay';
+    overlay.addEventListener('click', fermerShareSheet);
+
+    const sheet = creerElement('div', 'share-sheet');
+    sheet.id = 'share-sheet';
+
+    // Handle
+    const handle = creerElement('div', 'sheet-handle');
+
+    // Titre + nom du fichier
+    const titleLabel = creerElement('div', 'sheet-label');
+    titleLabel.textContent = 'Partager';
+
+    const filename = creerElement('div', 'sheet-filename');
+    filename.textContent = name;
+
+    // Champ mot de passe
+    const pwdLabel = creerElement('div', 'sheet-field-label');
+    pwdLabel.textContent = 'Mot de passe (optionnel)';
+
+    const pwdWrap = creerElement('div', 'sheet-pwd-wrap');
     const pwdInput = document.createElement('input');
     pwdInput.type = 'password';
-    pwdInput.placeholder = 'Mot de passe';
+    pwdInput.placeholder = 'Laisser vide si public';
+    pwdInput.className = 'sheet-pwd-input';
 
-    // Sélecteur de durée d'expiration
-    const expSelect = document.createElement('select');
-    DUREES_EXPIRATION.forEach(opt => {
-        const option = document.createElement('option');
-        option.value = opt.value;
-        option.textContent = opt.label;
-        expSelect.appendChild(option);
+    const pwdToggle = creerElement('button', 'sheet-pwd-toggle');
+    pwdToggle.type = 'button';
+    pwdToggle.innerHTML = sheetEyeIcon();
+    pwdToggle.addEventListener('click', () => {
+        const show = pwdInput.type === 'password';
+        pwdInput.type = show ? 'text' : 'password';
+        pwdToggle.innerHTML = show ? sheetEyeOffIcon() : sheetEyeIcon();
+    });
+    pwdWrap.append(pwdInput, pwdToggle);
+
+    // Pills expiration
+    const expLabel = creerElement('div', 'sheet-field-label');
+    expLabel.textContent = 'Expiration';
+
+    const pillsWrap = creerElement('div', 'sheet-pills');
+
+    // Champ custom (caché par défaut)
+    const customWrap = creerElement('div', 'sheet-custom-wrap');
+    customWrap.style.display = 'none';
+
+    const customInput = document.createElement('input');
+    customInput.type = 'number';
+    customInput.min = '1';
+    customInput.placeholder = '12';
+    customInput.className = 'sheet-pwd-input';
+    customInput.style.width = '50%';
+
+    const customUnit = document.createElement('select');
+    customUnit.className = 'sheet-custom-unit';
+    [['h', 'heures'], ['j', 'jours']].forEach(([v, l]) => {
+        const o = document.createElement('option');
+        o.value = v; o.textContent = l;
+        customUnit.appendChild(o);
     });
 
-    // Bouton Créer
-    const createBtn = creerElement('button', 'btn btn-success btn-sm');
-    createBtn.textContent = 'Créer';
-    createBtn.addEventListener('click', () => creerLien(path, pwdInput.value, expSelect.value, container));
+    customWrap.append(customInput, customUnit);
 
-    // Bouton Annuler
-    const cancelBtn = creerElement('button', 'btn btn-ghost btn-sm');
-    cancelBtn.textContent = 'Annuler';
-    cancelBtn.addEventListener('click', () => navigateTo(currentPath));
+    DUREES_EXPIRATION.forEach(opt => {
+        const pill = creerElement('button', 'sheet-pill' + (opt.value === '' ? ' is-active' : ''));
+        pill.textContent = opt.label;
+        pill.addEventListener('click', () => {
+            pillsWrap.querySelectorAll('.sheet-pill').forEach(p => p.classList.remove('is-active'));
+            pill.classList.add('is-active');
+            if (opt.value === 'custom') {
+                customWrap.style.display = 'flex';
+                selectedExpiry = 'custom';
+                customInput.focus();
+            } else {
+                customWrap.style.display = 'none';
+                selectedExpiry = opt.value;
+            }
+        });
+        pillsWrap.appendChild(pill);
+    });
 
-    form.append(pwdInput, expSelect, createBtn, cancelBtn);
-    container.appendChild(form);
+    // Bouton créer
+    const createBtn = creerElement('button', 'sheet-create-btn');
+    createBtn.innerHTML = svgUpload() + ' Créer le lien';
+    createBtn.addEventListener('click', () => {
+        let expiry = selectedExpiry;
+        if (expiry === 'custom') {
+            const val = parseInt(customInput.value);
+            const unit = customUnit.value;
+            expiry = isNaN(val) || val < 1 ? '' : String(unit === 'j' ? val * 24 : val);
+        }
+        creerLienSheet(path, pwdInput.value, expiry, sheet);
+    });
 
-    // Focus automatique sur le champ mot de passe
-    pwdInput.focus();
+    sheet.append(handle, titleLabel, filename, pwdLabel, pwdWrap, expLabel, pillsWrap, customWrap, createBtn);
+    document.body.append(overlay, sheet);
+
+    setTimeout(() => pwdInput.focus(), 320);
+}
+
+function fermerShareSheet() {
+    document.getElementById('sheet-overlay')?.remove();
+    document.getElementById('share-sheet')?.remove();
+}
+
+async function creerLienSheet(path, password, expiresStr, sheet) {
+    const expires = expiresStr ? parseInt(expiresStr) : null;
+
+    const createBtn = sheet.querySelector('.sheet-create-btn');
+    if (createBtn) {
+        createBtn.disabled = true;
+        createBtn.innerHTML = svgSpinner() + ' Création…';
+    }
+
+    try {
+        const resp = await fetch('/share/ctrl.php?action=create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, password: password || '', expires, csrf_token: CSRF_TOKEN }),
+        });
+        const data = await resp.json();
+        if (data.error) { alert('Erreur : ' + data.error); if (createBtn) createBtn.disabled = false; return; }
+
+        const fullUrl = window.location.origin + data.url;
+
+        // État succès
+        sheet.innerHTML = '';
+        const handle = creerElement('div', 'sheet-handle');
+
+        const successIcon = creerElement('div', 'sheet-success-icon');
+        successIcon.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+
+        const successLabel = creerElement('div', 'sheet-label');
+        successLabel.textContent = 'Lien créé';
+        successLabel.style.textAlign = 'center';
+        successLabel.style.marginBottom = '.5rem';
+
+        const urlBox = creerElement('div', 'sheet-url-box');
+        urlBox.textContent = fullUrl;
+
+        const copyBtn = creerElement('button', 'sheet-copy-btn');
+        copyBtn.innerHTML = svgCopy() + ' Copier le lien';
+        copyBtn.addEventListener('click', async () => {
+            let text = fullUrl;
+            if (password) text += '\nMot de passe\u00a0: ' + password;
+            try {
+                await navigator.clipboard.writeText(text);
+                copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Copié\u00a0!';
+                copyBtn.classList.add('is-copied');
+                setTimeout(() => {
+                    copyBtn.innerHTML = svgCopy() + ' Copier le lien';
+                    copyBtn.classList.remove('is-copied');
+                }, 2500);
+            } catch { prompt('Lien :', fullUrl); }
+        });
+
+        const closeBtn = creerElement('button', 'sheet-close-btn');
+        closeBtn.textContent = 'Fermer';
+        closeBtn.addEventListener('click', fermerShareSheet);
+
+        sheet.append(handle, successIcon, successLabel, urlBox, copyBtn, closeBtn);
+        rafraichirLiens();
+
+    } catch { alert('Erreur de connexion'); }
+}
+
+function sheetEyeIcon() {
+    return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+}
+function sheetEyeOffIcon() {
+    return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+}
+function svgUpload() {
+    return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>';
+}
+function svgCopy() {
+    return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+}
+function svgSpinner() {
+    return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation:sheet-spin .8s linear infinite"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>';
 }
 
 /**

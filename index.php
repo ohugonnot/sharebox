@@ -7,6 +7,10 @@
 
 require_once __DIR__ . '/db.php';
 
+// Empêche la mise en cache du panneau admin
+header('Cache-Control: no-store, no-cache, must-revalidate');
+header('Pragma: no-cache');
+
 session_start();
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -112,7 +116,7 @@ function afficher_liens(): void {
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <meta name="csrf-token" content="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
     <title>ShareBox</title>
-    <link rel="stylesheet" href="/share/style.css">
+    <link rel="stylesheet" href="/share/style.css?v=d01fe9ad">
 </head>
 <body>
 
@@ -148,6 +152,6 @@ function afficher_liens(): void {
     </section>
 </div>
 
-<script src="/share/app.js"></script>
+<script src="/share/app.js?v=e7fd5558"></script>
 </body>
 </html>

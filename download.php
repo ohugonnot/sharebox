@@ -423,56 +423,62 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$shareNameHtml}</title>
     <style>{$css}
-    .page { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 2.5rem 1.5rem 4rem; }
-    .header { display: flex; align-items: center; gap: .8rem; margin-bottom: .4rem; }
-    .header-icon { width: 38px; height: 38px; background: linear-gradient(135deg, var(--accent), #e08820); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; font-size: 1.1rem; box-shadow: 0 4px 20px rgba(240,160,48,.2); }
-    .header-title { font-size: 1.3rem; font-weight: 700; color: #fff; }
-    .breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: .15rem; margin-bottom: 1.5rem; font-size: .85rem; padding: .5rem .8rem; background: rgba(255,255,255,.02); border-radius: var(--radius-md); border: 1px solid var(--border); }
-    .breadcrumb a { color: var(--accent); text-decoration: none; font-weight: 500; }
-    .breadcrumb a:hover { color: #ffc060; }
-    .breadcrumb .sep { color: var(--text-muted); margin: 0 .2rem; font-size: .75rem; }
-    .breadcrumb .current { color: var(--text-primary); font-weight: 500; }
-    .panel { background: rgba(26,29,40,.7); border: 1px solid rgba(255,255,255,.08); border-radius: var(--radius-lg); backdrop-filter: blur(12px); overflow: hidden; }
-    .row { display: flex; align-items: center; padding: .6rem 1rem; border-bottom: 1px solid var(--border); transition: background .12s; text-decoration: none; color: var(--text-primary); }
-    .row:last-child { border-bottom: none; }
-    .row:hover { background: rgba(240,160,48,.04); }
-    .row-icon { width: 32px; height: 32px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; margin-right: .7rem; flex-shrink: 0; }
-    .row-icon.folder { background: var(--accent-soft); }
-    .row-icon.file { background: rgba(66,165,245,.08); }
-    .row-icon.up { background: rgba(255,255,255,.04); }
-    .row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .88rem; }
-    .row-name.is-folder { color: var(--accent); font-weight: 500; }
-    .row-ext { color: var(--text-muted); font-size: .7rem; font-family: var(--font-mono); text-transform: uppercase; background: rgba(255,255,255,.04); padding: .1rem .4rem; border-radius: 4px; flex-shrink: 0; margin-left: .5rem; letter-spacing: .03em; }
-    .row-meta { color: var(--text-muted); font-size: .8rem; font-family: var(--font-mono); margin-left: auto; padding-left: .5rem; white-space: nowrap; flex-shrink: 0; }
-    .empty { text-align: center; padding: 3rem 1rem; color: var(--text-muted); }
-    .empty-icon { font-size: 2.5rem; display: block; margin-bottom: .6rem; opacity: .4; }
-    .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: .8rem; gap: .5rem; }
-    .toolbar-info { color: var(--text-muted); font-size: .82rem; }
-    .btn-zip { display: inline-flex; align-items: center; gap: .4rem; padding: .5rem 1rem; border: none; border-radius: var(--radius-sm); background: var(--accent); color: var(--bg-deep); font-family: var(--font-sans); font-size: .85rem; font-weight: 700; cursor: pointer; text-decoration: none; transition: all .15s; white-space: nowrap; }
-    .btn-zip:hover { background: #ffc060; box-shadow: 0 2px 12px rgba(240,160,48,.25); }
-    .btn-zip:active { transform: scale(.97); }
-    .btn-zip svg { flex-shrink: 0; }
-    .btn-play { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: var(--radius-sm); background: rgba(102,187,106,.1); color: var(--green); cursor: pointer; flex-shrink: 0; margin-left: .5rem; transition: background .15s; z-index: 1; }
-    .btn-play:hover { background: rgba(102,187,106,.2); }
-    .btn-play:active { transform: scale(.9); }
-    .sort-bar { display: flex; align-items: center; gap: .3rem; }
-    .sort-btn { display: inline-flex; align-items: center; gap: .25rem; padding: .3rem .6rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); font-family: var(--font-sans); font-size: .75rem; font-weight: 600; cursor: pointer; transition: all .15s; white-space: nowrap; }
-    .sort-btn:hover { color: var(--text-secondary); border-color: rgba(255,255,255,.12); }
-    .sort-btn.active { color: var(--accent); border-color: rgba(240,160,48,.25); background: var(--accent-soft); }
-    .sort-btn svg { transition: transform .15s; }
-    .sort-btn.desc svg { transform: rotate(180deg); }
-    .search-box { padding: .35rem .7rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,.03); color: var(--text-primary); font-family: var(--font-sans); font-size: .8rem; outline: none; transition: border-color .15s; width: 180px; }
-    .search-box:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
-    .search-box::placeholder { color: var(--text-muted); }
-    .row.hidden { display: none; }
-    @media (max-width: 640px) { .row-name { white-space: normal; word-break: break-all; } .row-ext { display: none; } .search-box { width: 120px; } }
-    @media (max-width: 480px) { .page { padding: 1.5rem 1rem; } .row { padding: .5rem .7rem; } .btn-zip { width: 100%; justify-content: center; } .toolbar { flex-wrap: wrap; } }
+@keyframes fadeUp { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+.page { position:relative; z-index:1; max-width:1100px; margin:0 auto; padding:2rem 1.25rem 4rem; }
+.header { display:flex; align-items:center; gap:.7rem; margin-bottom:1rem; padding-bottom:1rem; border-bottom:1px solid var(--border); }
+.header-icon { width:36px; height:36px; background:var(--accent-soft); border-radius:var(--radius-md); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.header-title { font-size:1.1rem; font-weight:700; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.breadcrumb { display:flex; align-items:center; gap:.1rem; margin-bottom:1.1rem; font-size:.82rem; overflow-x:auto; white-space:nowrap; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding:.3rem 0; }
+.breadcrumb::-webkit-scrollbar { display:none; }
+.breadcrumb a { color:var(--accent); text-decoration:none; font-weight:500; flex-shrink:0; }
+.breadcrumb a:hover { color:#ffc060; }
+.breadcrumb .sep { color:var(--text-muted); margin:0 .2rem; flex-shrink:0; }
+.breadcrumb .current { color:var(--text-secondary); font-weight:500; flex-shrink:0; }
+.toolbar { display:flex; align-items:center; gap:.4rem; margin-bottom:.7rem; flex-wrap:wrap; }
+.toolbar-info { color:var(--text-muted); font-size:.79rem; margin-right:auto; white-space:nowrap; }
+.sort-bar { display:flex; align-items:center; gap:.25rem; }
+.sort-btn { display:inline-flex; align-items:center; gap:.2rem; padding:.28rem .55rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:transparent; color:var(--text-muted); font-family:var(--font-sans); font-size:.73rem; font-weight:600; cursor:pointer; transition:all .15s; white-space:nowrap; }
+.sort-btn:hover { color:var(--text-secondary); border-color:rgba(255,255,255,.12); }
+.sort-btn.active { color:var(--accent); border-color:rgba(240,160,48,.25); background:var(--accent-soft); }
+.sort-btn svg { transition:transform .15s; }
+.sort-btn.desc svg { transform:rotate(180deg); }
+.search-box { padding:.3rem .65rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.03); color:var(--text-primary); font-family:var(--font-sans); font-size:.8rem; outline:none; transition:border-color .15s; width:175px; }
+.search-box:focus { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+.search-box::placeholder { color:var(--text-muted); }
+.btn-zip { display:inline-flex; align-items:center; gap:.35rem; padding:.38rem .85rem; border:none; border-radius:var(--radius-sm); background:var(--accent); color:var(--bg-deep); font-family:var(--font-sans); font-size:.82rem; font-weight:700; cursor:pointer; text-decoration:none; transition:all .15s; white-space:nowrap; }
+.btn-zip:hover { background:#ffc060; box-shadow:0 2px 12px rgba(240,160,48,.25); }
+.btn-zip:active { transform:scale(.97); }
+.panel { background:rgba(26,29,40,.65); border:1px solid rgba(255,255,255,.07); border-radius:var(--radius-lg); backdrop-filter:blur(12px); overflow:hidden; }
+.row { display:flex; align-items:center; min-height:48px; padding:.5rem 1rem; border-bottom:1px solid var(--border); transition:background .12s; text-decoration:none; color:var(--text-primary); animation:fadeUp .22s ease both; }
+.row:last-child { border-bottom:none; }
+.row:hover { background:rgba(255,255,255,.022); }
+.row:nth-child(1){animation-delay:.03s}.row:nth-child(2){animation-delay:.06s}.row:nth-child(3){animation-delay:.09s}.row:nth-child(4){animation-delay:.12s}.row:nth-child(5){animation-delay:.15s}.row:nth-child(6){animation-delay:.18s}.row:nth-child(7){animation-delay:.21s}.row:nth-child(8){animation-delay:.24s}.row:nth-child(n+9){animation-delay:.27s}
+.row-icon { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; margin-right:.7rem; flex-shrink:0; }
+.row-icon.folder { background:var(--accent-soft); }
+.row-icon.up { background:rgba(255,255,255,.04); }
+.row-icon.vid { background:rgba(102,187,106,.1); }
+.row-icon.aud { background:rgba(171,71,188,.12); }
+.row-icon.img { background:rgba(38,198,218,.1); }
+.row-icon.arc { background:rgba(239,83,80,.1); }
+.row-icon.file { background:rgba(66,165,245,.08); }
+.row-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.875rem; }
+.row-name.is-folder { color:var(--accent); font-weight:500; }
+.row-ext { color:var(--text-muted); font-size:.68rem; font-family:var(--font-mono); text-transform:uppercase; background:rgba(255,255,255,.04); padding:.1rem .35rem; border-radius:4px; flex-shrink:0; margin-left:.5rem; letter-spacing:.04em; }
+.row-meta { color:var(--text-muted); font-size:.78rem; font-family:var(--font-mono); margin-left:auto; padding-left:.6rem; white-space:nowrap; flex-shrink:0; }
+.btn-play { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; background:rgba(102,187,106,.12); color:var(--green); cursor:pointer; flex-shrink:0; margin-left:.5rem; transition:background .15s,transform .12s; border:1px solid rgba(102,187,106,.2); }
+.btn-play:hover { background:rgba(102,187,106,.22); border-color:rgba(102,187,106,.4); transform:scale(1.08); }
+.btn-play:active { transform:scale(.92); }
+.empty { text-align:center; padding:3rem 1rem; color:var(--text-muted); }
+.empty-icon { font-size:2rem; display:block; margin-bottom:.6rem; opacity:.35; }
+.row.hidden { display:none; }
+@media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row{min-height:44px}}
+@media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-box{flex:1;width:auto;min-width:80px}.toolbar-info{display:none}}
     </style>
 </head>
 <body>
 <div class="page">
     <div class="header">
-        <div class="header-icon">&#x1F4C2;</div>
+        <div class="header-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="color:var(--accent)"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg></div>
         <div class="header-title">{$shareNameHtml}</div>
     </div>
     <nav class="breadcrumb">{$breadcrumb}</nav>
@@ -543,8 +549,24 @@ HTML;
         $size = format_taille($file['size']);
         $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
         $mediaType = get_media_type($file['name']);
+        if ($mediaType === 'video') {
+            $iconClass = 'vid';
+            $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg>';
+        } elseif ($mediaType === 'audio') {
+            $iconClass = 'aud';
+            $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#ab47bc"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+        } elseif (in_array($ext, ['jpg','jpeg','png','gif','webp','bmp','svg','tiff','heic','avif','raw','cr2','nef'])) {
+            $iconClass = 'img';
+            $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#26c6da"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+        } elseif (in_array($ext, ['zip','rar','7z','tar','gz','bz2','xz','tgz','iso','cbz','cbr'])) {
+            $iconClass = 'arc';
+            $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#ef5350"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>';
+        } else {
+            $iconClass = 'file';
+            $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+        }
         echo '<a class="row" href="' . $fileUrl . '" title="' . $fileHtml . '" data-type="file" data-name="' . $fileHtml . '" data-size="' . $file['size'] . '">';
-        echo '<div class="row-icon file"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>';
+        echo '<div class="row-icon ' . $iconClass . '">' . $iconSvg . '</div>';
         echo '<span class="row-name">' . $fileHtml . '</span>';
         if ($ext) echo '<span class="row-ext">' . htmlspecialchars($ext) . '</span>';
         echo '<span class="row-meta">' . $size . '</span>';
@@ -683,6 +705,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     }
 
     $tag = $mediaType === 'video' ? 'video' : 'audio';
+    $controlsAttr = $mediaType === 'audio' ? 'controls' : '';
     $css = css_public();
     $backHtml = $backUrl
         ? '<a class="player-btn" href="' . $backUrl . '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Retour</a>'
@@ -697,35 +720,49 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$fileNameHtml}</title>
     <style>{$css}
-    .page { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
-    .player-toolbar { display: flex; align-items: center; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
-    .player-btn { display: inline-flex; align-items: center; gap: .35rem; padding: .45rem .8rem; border: none; border-radius: var(--radius-sm); background: rgba(255,255,255,.05); color: var(--text-secondary); font-family: var(--font-sans); font-size: .82rem; font-weight: 600; cursor: pointer; text-decoration: none; transition: all .15s; border: 1px solid var(--border); }
-    .player-btn:hover { background: rgba(255,255,255,.08); color: var(--text-primary); }
-    .player-btn.accent { background: var(--accent); color: var(--bg-deep); border-color: transparent; }
-    .player-btn.accent:hover { background: #ffc060; }
-    .player-name { flex: 1; min-width: 0; font-size: .9rem; color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .player-container { background: rgba(26,29,40,.7); border: 1px solid rgba(255,255,255,.08); border-radius: var(--radius-lg); overflow: hidden; backdrop-filter: blur(12px); }
-    video { display: block; width: 100%; max-height: 80vh; background: #000; }
-    audio { display: block; width: 100%; padding: 2.5rem 1.5rem; }
-    .player-hint { text-align: center; padding: .8rem; color: var(--text-muted); font-size: .78rem; transition: all .2s; min-height: 2rem; }
-    .player-hint.transcoding { color: var(--accent); }
-    .player-hint.error { color: var(--red); }
-    .seek-bar { position: relative; margin: 0 1rem .6rem; height: 28px; display: flex; align-items: center; cursor: pointer; user-select: none; -webkit-user-select: none; }
-    .seek-track { position: absolute; left: 0; right: 0; height: 4px; background: rgba(255,255,255,.08); border-radius: 2px; }
-    .seek-buffered { position: absolute; left: 0; height: 4px; background: rgba(255,255,255,.12); border-radius: 2px; transition: width .3s; }
-    .seek-fill { position: absolute; left: 0; height: 4px; background: var(--accent); border-radius: 2px; }
-    .seek-thumb { position: absolute; width: 14px; height: 14px; background: var(--accent); border-radius: 50%; top: 50%; transform: translate(-50%, -50%); box-shadow: 0 0 6px rgba(240,160,48,.4); transition: transform .1s; z-index: 2; }
-    .seek-thumb:hover, .seek-bar.dragging .seek-thumb { transform: translate(-50%, -50%) scale(1.3); }
-    .seek-bar.dragging .seek-fill { transition: none; }
-    .seek-time { display: flex; justify-content: space-between; padding: 0 1rem .8rem; font-size: .75rem; font-family: var(--font-mono); color: var(--text-muted); }
-    .seek-time .current { color: var(--text-primary); }
-    .track-bar { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; flex-wrap: wrap; }
-    .track-bar label { color: var(--text-muted); font-size: .78rem; font-weight: 600; }
-    .track-select { padding: .3rem .5rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(255,255,255,.03); color: var(--text-primary); font-family: var(--font-sans); font-size: .78rem; outline: none; cursor: pointer; -webkit-appearance: none; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .4rem center; padding-right: 1.4rem; }
-    .track-select option { background: #1a1d28; color: #e8eaf0; }
-    .track-select:focus { border-color: var(--accent); }
-    .tap-play-btn { margin: .6rem auto; gap: .4rem; font-size: .9rem; padding: .65rem 1.6rem; }
-    @media (max-width: 480px) { .page { padding: 1rem .75rem; } .player-name { display: none; } }
+@keyframes hintFade { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+.page { position:relative; z-index:1; max-width:1200px; margin:0 auto; padding:1.5rem 1.25rem 2rem; min-height:calc(100vh - 2rem); display:flex; flex-direction:column; }
+.player-toolbar { display:flex; align-items:center; gap:.5rem; margin-bottom:1rem; }
+.player-btn { display:inline-flex; align-items:center; gap:.35rem; padding:.4rem .8rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.04); color:var(--text-secondary); font-family:var(--font-sans); font-size:.82rem; font-weight:600; cursor:pointer; text-decoration:none; transition:all .15s; white-space:nowrap; }
+.player-btn:hover { background:rgba(255,255,255,.08); color:var(--text-primary); }
+.player-btn.accent { background:var(--accent); color:var(--bg-deep); border-color:transparent; font-weight:700; }
+.player-btn.accent:hover { background:#ffc060; box-shadow:0 2px 14px rgba(240,160,48,.3); }
+.player-name { flex:1; min-width:0; font-size:.85rem; color:var(--text-secondary); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.player-card { border-radius:var(--radius-lg); overflow:hidden; border:1px solid rgba(255,255,255,.07); box-shadow:0 32px 80px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.03); animation:hintFade .3s ease both; }
+.player-video-wrap { position:relative; background:#000; line-height:0; }
+video { display:block; width:100%; max-height:78vh; background:#000; object-fit:contain; }
+audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40,.8); }
+.player-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:10; }
+.player-hint-text { font-family:var(--font-sans); font-size:.78rem; font-weight:600; padding:.4rem 1rem; border-radius:var(--radius-sm); background:rgba(12,14,20,.82); border:1px solid rgba(255,255,255,.08); color:var(--text-muted); backdrop-filter:blur(6px); letter-spacing:.01em; transition:color .2s; white-space:nowrap; }
+.player-hint-text:empty { display:none; }
+.player-hint.transcoding .player-hint-text { color:var(--accent); border-color:rgba(240,160,48,.2); }
+.player-hint.error .player-hint-text { color:var(--red); border-color:rgba(239,83,80,.2); }
+.tap-play-btn { pointer-events:all; display:inline-flex; align-items:center; gap:.55rem; padding:.75rem 2rem; background:rgba(240,160,48,.92); color:#0c0e14; border:none; border-radius:var(--radius-md); font-family:var(--font-sans); font-size:.9rem; font-weight:700; cursor:pointer; box-shadow:0 4px 32px rgba(240,160,48,.4); backdrop-filter:blur(8px); transition:all .15s; }
+.tap-play-btn:hover { background:var(--accent); transform:scale(1.04); }
+.player-controls { background:#0d0f1a; border-top:1px solid rgba(255,255,255,.055); padding:.8rem 1rem .7rem; }
+.seek-bar { position:relative; height:32px; display:flex; align-items:center; cursor:pointer; user-select:none; -webkit-user-select:none; }
+.seek-track { position:absolute; left:0; right:0; height:5px; background:rgba(255,255,255,.07); border-radius:3px; }
+.seek-buffered { position:absolute; left:0; height:5px; background:rgba(255,255,255,.11); border-radius:3px; transition:width .3s; }
+.seek-fill { position:absolute; left:0; height:5px; background:linear-gradient(90deg, var(--accent) 0%, #ffb020 100%); border-radius:3px; }
+.seek-thumb { position:absolute; width:15px; height:15px; background:var(--accent); border-radius:50%; top:50%; transform:translate(-50%,-50%); box-shadow:0 0 0 3px rgba(240,160,48,.18), 0 2px 8px rgba(0,0,0,.5); transition:transform .1s, box-shadow .1s; z-index:2; }
+.seek-thumb:hover, .seek-bar.dragging .seek-thumb { transform:translate(-50%,-50%) scale(1.3); box-shadow:0 0 0 5px rgba(240,160,48,.22), 0 2px 8px rgba(0,0,0,.5); }
+.seek-bar.dragging .seek-fill { transition:none; }
+.seek-time { display:flex; justify-content:space-between; font-size:.72rem; font-family:var(--font-mono); color:var(--text-muted); margin:.15rem 1px .45rem; }
+.seek-time .current { color:var(--text-primary); font-weight:600; }
+.ctrl-row { display:flex; align-items:center; gap:.6rem; margin-top:.05rem; }
+.ctrl-play { display:flex; align-items:center; justify-content:center; width:38px; height:38px; border-radius:50%; background:var(--accent); color:#0c0e14; border:none; cursor:pointer; flex-shrink:0; transition:all .15s; box-shadow:0 2px 12px rgba(240,160,48,.25); }
+.ctrl-play:hover { background:#ffc060; transform:scale(1.07); box-shadow:0 4px 18px rgba(240,160,48,.4); }
+.ctrl-play:active { transform:scale(.94); }
+.ctrl-spacer { flex:1; }
+.ctrl-mute { display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; background:transparent; color:var(--text-muted); border:1px solid rgba(255,255,255,.08); cursor:pointer; flex-shrink:0; transition:all .15s; }
+.ctrl-mute:hover { background:rgba(255,255,255,.06); color:var(--text-primary); border-color:rgba(255,255,255,.15); }
+.track-bar { display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; padding-top:.55rem; border-top:1px solid rgba(255,255,255,.04); margin-top:.5rem; }
+.track-bar label { color:var(--text-muted); font-size:.74rem; font-weight:600; letter-spacing:.02em; }
+.track-select { padding:.26rem .5rem; border:1px solid var(--border); border-radius:20px; background:rgba(255,255,255,.04); color:var(--text-primary); font-family:var(--font-sans); font-size:.78rem; outline:none; cursor:pointer; -webkit-appearance:none; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right .45rem center; padding-right:1.5rem; transition:border-color .15s; }
+.track-select:hover { border-color:rgba(255,255,255,.14); }
+.track-select:focus { border-color:var(--accent); }
+.track-select option { background:#1a1d28; color:#e8eaf0; }
+@media(max-width:480px){.page{padding:.9rem .75rem 3rem}.player-name{display:none}.ctrl-play{width:34px;height:34px}}
     </style>
 </head>
 <body>
@@ -735,27 +772,54 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         <span class="player-name" title="{$fileNameHtml}">{$fileNameHtml}</span>
         <a class="player-btn accent" href="{$dlUrl}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Télécharger</a>
     </div>
-    <div class="player-container">
-        <{$tag} id="player" controls autoplay playsinline preload="metadata" crossorigin="anonymous"></{$tag}>
-        <div class="player-hint" id="hint">Chargement...</div>
-        <div class="seek-bar" id="seek-bar" style="display:none">
-            <div class="seek-track"></div>
-            <div class="seek-buffered" id="seek-buffered"></div>
-            <div class="seek-fill" id="seek-fill"></div>
-            <div class="seek-thumb" id="seek-thumb"></div>
+    <div class="player-card">
+        <div class="player-video-wrap">
+            <{$tag} id="player" {$controlsAttr} autoplay playsinline preload="metadata" crossorigin="anonymous"></{$tag}>
+            <div class="player-hint" id="hint"><span class="player-hint-text">Chargement...</span></div>
         </div>
-        <div class="seek-time" id="seek-time" style="display:none">
-            <span class="current" id="time-current">0:00</span>
-            <span id="time-total">0:00</span>
+        <div class="player-controls">
+            <div class="seek-bar" id="seek-bar" style="display:none">
+                <div class="seek-track"></div>
+                <div class="seek-buffered" id="seek-buffered"></div>
+                <div class="seek-fill" id="seek-fill"></div>
+                <div class="seek-thumb" id="seek-thumb"></div>
+            </div>
+            <div class="seek-time" id="seek-time" style="display:none">
+                <span class="current" id="time-current">0:00</span>
+                <span id="time-total">0:00</span>
+            </div>
+            <div class="ctrl-row" id="ctrl-row" style="display:none">
+                <button class="ctrl-play" id="play-btn" title="Lecture / Pause">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                </button>
+                <div class="ctrl-spacer"></div>
+                <button class="ctrl-mute" id="mute-btn" title="Muet">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                </button>
+            </div>
+            <div class="track-bar" id="track-bar" style="display:none"></div>
         </div>
     </div>
-    <div class="track-bar" id="track-bar" style="display:none"></div>
 </div>
 <script>
 (function() {
     var player = document.getElementById('player');
-    var hint = document.getElementById('hint');
+    var hintWrap = document.getElementById('hint');
+    var hintText = hintWrap.querySelector('.player-hint-text');
+    // Compat: hint.textContent et hint.className redirigés vers le vrai élément
+    var hint = {
+        get textContent() { return hintText.textContent; },
+        set textContent(v) { hintText.textContent = v; },
+        get className() { return hintWrap.className; },
+        set className(v) { hintWrap.className = v; },
+        get innerHTML() { return hintWrap.innerHTML; },
+        set innerHTML(v) { hintWrap.innerHTML = v; },
+        appendChild: function(el) { hintWrap.appendChild(el); }
+    };
     var trackBar = document.getElementById('track-bar');
+    var ctrlRow = document.getElementById('ctrl-row');
+    var playBtn = document.getElementById('play-btn');
+    var muteBtn = document.getElementById('mute-btn');
     var seekBar = document.getElementById('seek-bar');
     var seekFill = document.getElementById('seek-fill');
     var seekThumb = document.getElementById('seek-thumb');
@@ -765,6 +829,29 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var timeTotal = document.getElementById('time-total');
     var isVideo = {$isVideo};
     var base = '{$baseUrl}';
+
+    // Play/pause + mute controls (vidéo uniquement)
+    var svgPlay = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+    var svgPause = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+    var svgVol = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+    var svgMute = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
+
+    if (isVideo) {
+        ctrlRow.style.display = 'flex';
+        playBtn.addEventListener('click', function() {
+            if (player.paused) player.play().catch(function(){});
+            else player.pause();
+        });
+        muteBtn.addEventListener('click', function() {
+            player.muted = !player.muted;
+            muteBtn.innerHTML = player.muted ? svgMute : svgVol;
+        });
+        player.addEventListener('play', function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('playing', function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('pause', function() { playBtn.innerHTML = svgPlay; });
+        player.addEventListener('waiting', function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('ended', function() { playBtn.innerHTML = svgPlay; });
+    }
     var pp = '{$pParamJs}';
     var audioIdx = 0;
     var subtitleIdx = -1;
@@ -785,6 +872,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     var videoHeight = 0;
     var tapBtn = null;
     var hasFailed = false;
+    var hintTimer = null;
     var videoWidthTimer = null;
 
     function buildUrl(mode, audio, startSec) {
@@ -831,18 +919,18 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     function showTapToPlay() {
         if (tapBtn) return;
         tapBtn = document.createElement('button');
-        tapBtn.className = 'player-btn tap-play-btn';
+        tapBtn.className = 'tap-play-btn';
         tapBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><polygon points="5,3 19,12 5,21"/></svg> Appuyer pour lire';
         tapBtn.addEventListener('click', function() {
             tapBtn.remove(); tapBtn = null;
-            hint.textContent = 'Chargement...';
-            hint.className = 'player-hint';
+            hintText.textContent = 'Chargement...';
+            hintWrap.className = 'player-hint';
             player.load();
             player.play().catch(function(){});
         });
-        hint.textContent = '';
-        hint.className = 'player-hint';
-        hint.appendChild(tapBtn);
+        hintText.textContent = '';
+        hintWrap.className = 'player-hint';
+        hintWrap.appendChild(tapBtn);
     }
 
     function realTime() {
@@ -1036,28 +1124,28 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
             if (hasControls) trackBar.style.display = 'flex';
         }
 
-        if (isVideo) {
-            resyncBtn = document.createElement('button');
-            resyncBtn.className = 'player-btn';
-            resyncBtn.title = 'Resynchroniser son et image';
-            resyncBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Resync';
-            resyncBtn.addEventListener('click', function() {
-                if (confirmedStep === 'native') {
-                    // Natif : le navigateur gère le décodage, on force juste un seek sur place
-                    var pos = player.currentTime;
-                    player.currentTime = Math.max(0, pos - 0.1);
-                    return;
-                }
-                hint.textContent = 'Resync...';
-                hint.className = 'player-hint';
-                startStream(realTime());
-            });
-            trackBar.appendChild(resyncBtn);
-            trackBar.style.display = 'flex';
-        }
-
         // Démarrer la lecture
         startStream(0);
+    }
+
+    // Pour les vidéos : Resync toujours visible immédiatement, indépendamment du probe
+    if (isVideo) {
+        resyncBtn = document.createElement('button');
+        resyncBtn.className = 'player-btn';
+        resyncBtn.title = 'Resynchroniser son et image';
+        resyncBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Resync';
+        resyncBtn.addEventListener('click', function() {
+            if (confirmedStep === 'native') {
+                var pos = player.currentTime;
+                player.currentTime = Math.max(0, pos - 0.1);
+                return;
+            }
+            hint.textContent = 'Resync...';
+            hint.className = 'player-hint';
+            startStream(realTime());
+        });
+        trackBar.appendChild(resyncBtn);
+        trackBar.style.display = 'flex';
     }
 
     // Charger le probe AVANT de démarrer la lecture (timeout 5s pour mobile)
@@ -1164,12 +1252,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
             }, delay);
             return;
         }
-        if (mode === 'transcode') {
-            hint.textContent = 'Transcodage ' + currentQuality + 'p';
-            hint.className = 'player-hint transcoding';
-        } else {
-            hint.textContent = '';
-        }
+        hint.textContent = '';
     });
 
     function onFail() {
