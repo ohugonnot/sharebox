@@ -19,8 +19,10 @@ function get_db(): PDO {
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
 
-    // Active le mode WAL pour de meilleures performances en lecture
+    // WAL : lectures concurrentes sans bloquer les écritures
     $db->exec('PRAGMA journal_mode=WAL');
+    // Attendre jusqu'à 3s si la DB est verrouillée (évite SQLITE_BUSY sur probe concurrent)
+    $db->exec('PRAGMA busy_timeout=3000');
 
     // Crée la table si elle n'existe pas
     $db->exec("

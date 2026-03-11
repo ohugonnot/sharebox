@@ -17,10 +17,17 @@ function acquireStreamSlot(): array {
         }
         fclose($fp);
     }
-    // All slots busy — block on slot 1
+    // Tous les slots occupés — attendre slot 1 avec polling + détection déconnexion
     $fp = fopen('/tmp/sharebox_stream_slot_1.lock', 'w');
-    flock($fp, LOCK_EX);
-    return [$fp, true];
+    $deadline = microtime(true) + 15; // max 15s d'attente
+    while (microtime(true) < $deadline) {
+        if (flock($fp, LOCK_EX | LOCK_NB)) return [$fp, true];
+        if (connection_aborted()) { fclose($fp); exit; }
+        usleep(100000); // 100ms entre chaque essai
+    }
+    fclose($fp);
+    http_response_code(503);
+    exit;
 }
 
 function releaseStreamSlot($fp): void {
