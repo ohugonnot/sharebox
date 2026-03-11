@@ -753,6 +753,18 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 .player-video-wrap:-webkit-full-screen { background:#000; display:flex; align-items:center; justify-content:center; width:100vw; height:100vh; }
 .player-video-wrap:fullscreen video,
 .player-video-wrap:-webkit-full-screen video { max-height:100vh; width:100%; }
+.player-card:fullscreen,
+.player-card:-webkit-full-screen { position:relative; width:100vw; height:100vh; background:#000; border-radius:0; border:none; }
+.player-card:fullscreen .player-video-wrap,
+.player-card:-webkit-full-screen .player-video-wrap { position:absolute; inset:0; }
+.player-card:fullscreen video,
+.player-card:-webkit-full-screen video { position:absolute; inset:0; width:100%; height:100%; max-height:none; object-fit:contain; }
+.player-card:fullscreen .player-controls,
+.player-card:-webkit-full-screen .player-controls { position:absolute; bottom:0; left:0; right:0; z-index:20; background:linear-gradient(transparent, rgba(8,10,18,.9)) !important; padding-top:2rem; transition:opacity .25s; border-top:none !important; }
+.player-card:fullscreen .player-controls .track-bar,
+.player-card:-webkit-full-screen .player-controls .track-bar { border-top:none; }
+.player-card:fullscreen .player-controls.fs-hidden,
+.player-card:-webkit-full-screen .player-controls.fs-hidden { opacity:0; pointer-events:none; }
 video { display:block; width:100%; max-height:78vh; background:#000; object-fit:contain; }
 .sub-overlay { position:absolute; left:0; right:0; text-align:center; pointer-events:none; padding:0 6%; z-index:10; font-size:1.5rem; }
 audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40,.8); }
@@ -761,9 +773,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .player-hint-text:empty { display:none; }
 .player-hint.transcoding .player-hint-text { color:var(--accent); border-color:rgba(240,160,48,.2); }
 .player-hint.error .player-hint-text { color:var(--red); border-color:rgba(239,83,80,.2); }
-.tap-play-btn { pointer-events:all; display:inline-flex; align-items:center; gap:.55rem; padding:.75rem 2rem; background:rgba(240,160,48,.92); color:#0c0e14; border:none; border-radius:var(--radius-md); font-family:var(--font-sans); font-size:.9rem; font-weight:700; cursor:pointer; box-shadow:0 4px 32px rgba(240,160,48,.4); backdrop-filter:blur(8px); transition:all .15s; }
-.tap-play-btn:hover { background:var(--accent); transform:scale(1.04); }
-.player-controls { background:#0d0f1a; border-top:1px solid rgba(255,255,255,.055); padding:.8rem 1rem .7rem; }
+.player-controls { background:#0d0f1a; border-top:1px solid rgba(255,255,255,.055); padding:.5rem .8rem .45rem; }
 .seek-bar { position:relative; height:32px; display:flex; align-items:center; cursor:pointer; user-select:none; -webkit-user-select:none; }
 .seek-track { position:absolute; left:0; right:0; height:5px; background:rgba(255,255,255,.07); border-radius:3px; }
 .seek-buffered { position:absolute; left:0; height:5px; background:rgba(255,255,255,.11); border-radius:3px; transition:width .3s; }
@@ -771,22 +781,20 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .seek-thumb { position:absolute; width:15px; height:15px; background:var(--accent); border-radius:50%; top:50%; transform:translate(-50%,-50%); box-shadow:0 0 0 3px rgba(240,160,48,.18), 0 2px 8px rgba(0,0,0,.5); transition:transform .1s, box-shadow .1s; z-index:2; }
 .seek-thumb:hover, .seek-bar.dragging .seek-thumb { transform:translate(-50%,-50%) scale(1.3); box-shadow:0 0 0 5px rgba(240,160,48,.22), 0 2px 8px rgba(0,0,0,.5); }
 .seek-bar.dragging .seek-fill { transition:none; }
-.seek-time { display:flex; justify-content:space-between; font-size:.72rem; font-family:var(--font-mono); color:var(--text-muted); margin:.15rem 1px .45rem; }
+.seek-time { display:flex; align-items:center; gap:.3rem; font-size:.72rem; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap; }
 .seek-time .current { color:var(--text-primary); font-weight:600; }
-.ctrl-row { display:flex; align-items:center; gap:.6rem; margin-top:.05rem; }
-.ctrl-play { display:flex; align-items:center; justify-content:center; width:38px; height:38px; border-radius:50%; background:var(--accent); color:#0c0e14; border:none; cursor:pointer; flex-shrink:0; transition:all .15s; box-shadow:0 2px 12px rgba(240,160,48,.25); }
-.ctrl-play:hover { background:#ffc060; transform:scale(1.07); box-shadow:0 4px 18px rgba(240,160,48,.4); }
-.ctrl-play:active { transform:scale(.94); }
+.ctrl-row { display:flex; align-items:center; gap:.45rem; margin-top:.3rem; }
 .ctrl-spacer { flex:1; }
-.ctrl-mute { display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:50%; background:transparent; color:var(--text-muted); border:1px solid rgba(255,255,255,.08); cursor:pointer; flex-shrink:0; transition:all .15s; }
-.ctrl-mute:hover { background:rgba(255,255,255,.06); color:var(--text-primary); border-color:rgba(255,255,255,.15); }
-.track-bar { display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; padding-top:.55rem; border-top:1px solid rgba(255,255,255,.04); margin-top:.5rem; }
+.ctrl-play,.ctrl-mute { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; background:transparent; color:var(--text-muted); border:1px solid rgba(255,255,255,.08); cursor:pointer; flex-shrink:0; transition:all .15s; }
+.ctrl-play:hover,.ctrl-mute:hover { background:rgba(255,255,255,.06); color:var(--text-primary); border-color:rgba(255,255,255,.15); }
+.ctrl-play:active,.ctrl-mute:active { transform:scale(.92); }
+.track-bar { display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; padding:.55rem 0 .3rem; border-top:1px solid rgba(255,255,255,.04); margin-top:.4rem; }
 .track-bar label { color:var(--text-muted); font-size:.74rem; font-weight:600; letter-spacing:.02em; }
 .track-select { padding:.26rem .5rem; border:1px solid var(--border); border-radius:20px; background:rgba(255,255,255,.04); color:var(--text-primary); font-family:var(--font-sans); font-size:.78rem; outline:none; cursor:pointer; -webkit-appearance:none; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right .45rem center; padding-right:1.5rem; transition:border-color .15s; }
 .track-select:hover { border-color:rgba(255,255,255,.14); }
 .track-select:focus { border-color:var(--accent); }
 .track-select option { background:#1a1d28; color:#e8eaf0; }
-@media(max-width:480px){.page{padding:.9rem .75rem 3rem}.player-name{display:none}.ctrl-play{width:34px;height:34px}}
+@media(max-width:480px){.page{padding:.9rem .75rem 3rem}.player-name{display:none}}
     </style>
 </head>
 <body>
@@ -808,15 +816,15 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                 <div class="seek-fill" id="seek-fill"></div>
                 <div class="seek-thumb" id="seek-thumb"></div>
             </div>
-            <div class="seek-time" id="seek-time" style="display:none">
-                <span class="current" id="time-current">0:00</span>
-                <span id="time-total">0:00</span>
-            </div>
             <div class="ctrl-row" id="ctrl-row" style="display:none">
+                <div class="seek-time" id="seek-time">
+                    <span class="current" id="time-current">0:00</span>
+                    <span id="time-total">0:00</span>
+                </div>
+                <div class="ctrl-spacer"></div>
                 <button class="ctrl-play" id="play-btn" title="Lecture / Pause">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 </button>
-                <div class="ctrl-spacer"></div>
                 <button class="ctrl-mute" id="mute-btn" title="Muet">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
                 </button>
@@ -868,20 +876,34 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     var svgFs = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
     var svgFsExit = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
 
+    var playerCard = player.closest('.player-card') || player.parentNode;
     function toggleFs() {
-        var wrap = player.closest('.player-video-wrap') || player;
-        if (!document.fullscreenElement) {
-            (wrap.requestFullscreen || wrap.webkitRequestFullscreen || wrap.mozRequestFullScreen).call(wrap);
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+            (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen || playerCard.mozRequestFullScreen).call(playerCard);
         } else {
             (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen).call(document);
         }
     }
+    var fsHideTimer = null;
+    var playerCtrl = document.querySelector('.player-controls');
+    function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+    function showFsControls() {
+        playerCtrl.classList.remove('fs-hidden');
+        clearTimeout(fsHideTimer);
+        if (isFs() && !player.paused) fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); }, 3000);
+    }
     document.addEventListener('fullscreenchange', function() {
-        if (fsBtn) fsBtn.innerHTML = document.fullscreenElement ? svgFsExit : svgFs;
+        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
+        if (isFs()) showFsControls(); else { clearTimeout(fsHideTimer); playerCtrl.classList.remove('fs-hidden'); }
     });
     document.addEventListener('webkitfullscreenchange', function() {
-        if (fsBtn) fsBtn.innerHTML = document.webkitFullscreenElement ? svgFsExit : svgFs;
+        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
+        if (isFs()) showFsControls(); else { clearTimeout(fsHideTimer); playerCtrl.classList.remove('fs-hidden'); }
     });
+    playerCard.addEventListener('click', function() { if (isFs()) showFsControls(); });
+    playerCard.addEventListener('touchstart', function() { if (isFs()) showFsControls(); }, {passive:true});
+    playerCard.addEventListener('mousemove', function() { if (isFs()) showFsControls(); });
+    player.addEventListener('pause', function() { clearTimeout(fsHideTimer); playerCtrl.classList.remove('fs-hidden'); });
 
     if (isVideo) {
         ctrlRow.style.display = 'flex';
@@ -895,6 +917,22 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         });
         if (fsBtn) fsBtn.addEventListener('click', toggleFs);
         player.addEventListener('dblclick', toggleFs);
+        // Tap sur la vidéo : simple tap = play/pause, double tap = fullscreen
+        var tapTimer = null;
+        player.addEventListener('touchend', function(e) {
+            if (e.changedTouches.length !== 1) return;
+            if (tapTimer) {
+                clearTimeout(tapTimer);
+                tapTimer = null;
+                toggleFs();
+            } else {
+                tapTimer = setTimeout(function() {
+                    tapTimer = null;
+                    if (player.paused) player.play().catch(function(){});
+                    else player.pause();
+                }, 250);
+            }
+        });
         var speedBtn = document.getElementById('speed-btn');
         var speeds = [1, 1.5, 2];
         var speedIdx = 0;
@@ -930,7 +968,6 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 
     var currentQuality = 720;
     var videoHeight = 0;
-    var tapBtn = null;
     var hasFailed = false;
     var hintTimer = null;
     var videoWidthTimer = null;
@@ -961,7 +998,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         hasFailed = false;
         clearTimeout(videoWidthTimer);
         lockSize();
-        if (tapBtn) { tapBtn.remove(); tapBtn = null; }
+
         var url;
         if (isVideo) {
             var mode = confirmedStep || step;
@@ -978,18 +1015,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     }
 
     function showTapToPlay() {
-        if (tapBtn) return;
-        tapBtn = document.createElement('button');
-        tapBtn.className = 'tap-play-btn';
-        tapBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0"><polygon points="5,3 19,12 5,21"/></svg> Appuyer pour lire';
-        tapBtn.addEventListener('click', function() {
-            tapBtn.remove(); tapBtn = null;
-            hintText.textContent = '';
-            player.play().catch(function(){});
-        });
-        hintText.textContent = '';
-        hintWrap.className = 'player-hint';
-        hintWrap.appendChild(tapBtn);
+        hint.textContent = 'Appuyer sur ▶ pour lire';
+        hint.className = 'player-hint';
     }
 
     function realTime() {
@@ -1032,7 +1059,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 
     // Seek par clic/drag sur la barre
     function seekToFraction(frac) {
-        if (tapBtn) return; // pas de seek avant le premier tap utilisateur
+
         var targetSec = Math.max(0, Math.min(totalDuration, frac * totalDuration));
         // Mettre à jour visuellement tout de suite et bloquer timeupdate
         seekPending = true;
@@ -1100,7 +1127,6 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             totalDuration = probeData.duration;
             timeTotal.textContent = fmtTime(totalDuration);
             seekBar.style.display = 'flex';
-            seekTimeEl.style.display = 'flex';
         }
 
         // Sélecteur audio
@@ -1347,7 +1373,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     });
 
     function onFail() {
-        if (tapBtn || hasFailed) return;
+        if (hasFailed) return;
         hasFailed = true;
         var pos = realTime();
         if (!confirmedStep && step === 'native') {
