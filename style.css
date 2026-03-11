@@ -35,6 +35,9 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* Empêche tout débordement horizontal de casser la mise en page mobile */
+html, body { overflow-x: hidden; }
+
 body {
     font-family: var(--font-sans);
     background: var(--bg-deep);
@@ -65,6 +68,7 @@ body::before {
     max-width: 1100px;
     margin: 0 auto;
     padding: 2.5rem 2rem 4rem;
+    overflow-x: hidden;
 }
 
 /* === HEADER === */
@@ -156,6 +160,9 @@ body::before {
     -webkit-backdrop-filter: blur(12px);
     padding: .9rem 1rem;
     transition: border-color .15s, box-shadow .15s;
+    /* Empêche le grid item de dépasser sa cellule */
+    min-width: 0;
+    max-width: 100%;
 }
 
 .link-card:hover {
@@ -211,6 +218,13 @@ body::before {
     background: var(--accent-soft);
     border-radius: 4px;
     transition: all .15s;
+    /* Troncature : évite le débordement hors de la carte */
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: middle;
 }
 
 .token-link:hover {
@@ -224,6 +238,7 @@ body::before {
     align-items: center;
     gap: .8rem;
     flex-wrap: wrap;
+    min-width: 0;
 }
 
 .link-meta {
@@ -231,6 +246,7 @@ body::before {
     align-items: center;
     gap: .3rem;
     font-size: .78rem;
+    min-width: 0;
 }
 
 .link-meta-label {
@@ -443,6 +459,25 @@ body::before {
     margin-left: .5rem;
 }
 
+/* Bouton icône partager — inline à droite du nom */
+.btn-share-icon {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    transition: color .15s, background .15s, border-color .15s;
+    flex-shrink: 0;
+}
+
+.btn-share-icon:hover {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: rgba(240, 160, 48, .25);
+}
+
 /* === FORMULAIRE DE PARTAGE INLINE === */
 
 .share-form {
@@ -590,42 +625,419 @@ body::before {
         grid-template-columns: 1fr;
     }
 
-    /* File browser : plus d'espace pour le doigt */
+    /* File browser */
     .file-item {
         padding: .75rem .8rem;
-        flex-wrap: wrap;
-    }
-
-    .file-actions {
-        width: 100%;
-        margin-left: 0;
-        margin-top: .3rem;
-        padding-left: 2.5rem; /* aligné avec le nom (icône 32px + gap) */
-    }
-
-    .share-form {
-        width: 100%;
-    }
-
-    .share-form input[type=password],
-    .share-form select {
-        flex: 1;
-        width: auto;
-        min-width: 0;
+        min-height: 52px;
     }
 
     .breadcrumb { padding: .5rem .7rem; }
     .file-size { display: none; }
 }
 
+/* ============================================================================
+ * MOBILE 480px — cartes, formulaire vertical, breadcrumb scrollable
+ * ============================================================================ */
+
 @media (max-width: 480px) {
     .app { padding: 1rem .75rem; }
     .app-title { font-size: 1.3rem; }
 
-    .link-card { padding: .75rem .8rem; }
-    .link-card-bottom { gap: .5rem; }
-    .link-meta { font-size: .72rem; }
+    /* ---- Cartes de liens actifs ---- */
+    .link-card { padding: .7rem .75rem; }
+    .link-card-icon { width: 28px; height: 28px; }
+    .link-card-name { font-size: .87rem; }
 
-    .file-item { padding: .7rem .6rem; }
-    .file-actions { padding-left: 2.2rem; }
+    /* Métadonnées : flex-wrap, items plus petits */
+    .link-card-bottom { gap: .3rem .6rem; }
+    .link-meta { font-size: .72rem; }
+    .link-meta-val { word-break: break-word; }
+
+    /* Boutons d'action : Copier pleine largeur, Email+QR en dessous */
+    .link-card-actions {
+        flex-wrap: wrap;
+        gap: .3rem;
+        margin-top: .5rem;
+        padding-top: .5rem;
+    }
+
+    /* Copier : ligne entière — Email + QR : côte à côte dessous */
+    .link-card-actions {
+        flex-wrap: wrap;
+    }
+
+    .link-card-actions .btn {
+        flex: 1;
+        min-height: 40px;
+        padding: .4rem .4rem;
+        font-size: .75rem;
+        gap: .25rem;
+        justify-content: center;
+    }
+
+    .link-card-actions .btn:first-child {
+        flex: 0 0 100%;
+        min-height: 42px;
+        font-size: .82rem;
+    }
+
+    .link-card-actions .btn svg { flex-shrink: 0; }
+
+    /* ---- Navigateur de fichiers ---- */
+    .file-item {
+        padding: .7rem .6rem;
+        min-height: 50px;
+    }
+
+    .file-name { font-size: .85rem; }
+
+    /* ---- Formulaire de partage : empilement vertical ---- */
+    .share-form {
+        flex-direction: column;
+        align-items: stretch;
+        gap: .45rem;
+    }
+
+    .share-form input[type=password],
+    .share-form select {
+        width: 100%;
+        flex: none;
+        min-width: 0;
+        height: 42px;
+        font-size: .9rem;
+        padding: .5rem .75rem;
+    }
+
+    /* Rangée Créer / Annuler côte-à-côte */
+    .share-form-btns {
+        display: flex;
+        gap: .4rem;
+    }
+
+    .share-form-btns .btn {
+        flex: 1;
+        min-height: 42px;
+        font-size: .85rem;
+        justify-content: center;
+    }
+
+    /* Message + bouton copier après création */
+    .file-actions .copy-msg { font-size: .8rem; }
+    .file-actions .btn-primary { min-height: 40px; }
+
+    /* ---- Breadcrumb : scroll horizontal sans wrap ---- */
+    .breadcrumb {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        padding: .5rem .7rem;
+    }
+
+    .breadcrumb::-webkit-scrollbar { display: none; }
+
+    .breadcrumb a,
+    .breadcrumb .current,
+    .breadcrumb .sep {
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+}
+
+/* ============================================================================
+ * SHARE BOTTOM SHEET — création de lien, mobile-first
+ * ============================================================================ */
+
+.sheet-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 800;
+    animation: fadeIn .18s ease-out;
+    touch-action: none;
+}
+
+.share-sheet {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 801;
+    background: var(--bg-surface);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 0 1.25rem 1.75rem;
+    width: calc(100% - 2rem);
+    max-width: 440px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, .6);
+    animation: sheetPop .22s cubic-bezier(.34, 1.56, .64, 1);
+    max-height: 90dvh;
+    overflow-y: auto;
+}
+
+@keyframes sheetPop {
+    from { opacity: 0; transform: translate(-50%, -50%) scale(.92); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes sheet-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Handle */
+.sheet-handle {
+    width: 36px;
+    height: 4px;
+    background: rgba(255, 255, 255, .12);
+    border-radius: 2px;
+    margin: .85rem auto .9rem;
+    flex-shrink: 0;
+}
+
+/* Étiquette section */
+.sheet-label {
+    font-size: .68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--text-muted);
+    margin-bottom: .35rem;
+}
+
+/* Nom du fichier */
+.sheet-filename {
+    font-family: var(--font-mono);
+    font-size: .9rem;
+    color: var(--accent);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-bottom: 1rem;
+    margin-bottom: 1.1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+/* Label champ */
+.sheet-field-label {
+    font-size: .68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-muted);
+    margin-bottom: .4rem;
+}
+
+/* Champ mot de passe */
+.sheet-pwd-wrap {
+    position: relative;
+    margin-bottom: 1.15rem;
+}
+
+.sheet-pwd-input {
+    width: 100%;
+    height: 50px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    padding: 0 3rem 0 1rem;
+    outline: none;
+    transition: border-color .15s, box-shadow .15s;
+    -webkit-appearance: none;
+}
+
+.sheet-pwd-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.sheet-pwd-input::placeholder {
+    color: var(--text-muted);
+    font-size: .9rem;
+}
+
+.sheet-pwd-toggle {
+    position: absolute;
+    right: .75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: .25rem;
+    line-height: 0;
+    transition: color .12s;
+}
+
+.sheet-pwd-toggle:hover { color: var(--text-secondary); }
+
+/* Pills expiration */
+.sheet-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .35rem;
+    margin-bottom: 1.4rem;
+}
+
+.sheet-pill {
+    padding: .38rem .8rem;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+    font-size: .8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .12s;
+    white-space: nowrap;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.sheet-pill:active { transform: scale(.95); }
+
+.sheet-pill.is-active {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+/* Champ expiration custom */
+.sheet-custom-wrap {
+    display: flex;
+    gap: .5rem;
+    align-items: center;
+    margin-bottom: 1.2rem;
+    animation: slideIn .2s ease-out;
+}
+
+.sheet-custom-unit {
+    flex: 1;
+    height: 50px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: .95rem;
+    padding: 0 .75rem;
+    outline: none;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.sheet-custom-unit:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Bouton créer */
+.sheet-create-btn {
+    width: 100%;
+    height: 54px;
+    background: var(--accent);
+    color: var(--bg-deep);
+    border: none;
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: .01em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    transition: background .15s, box-shadow .15s, transform .1s;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.sheet-create-btn:hover  { background: #ffc060; box-shadow: 0 4px 20px rgba(240,160,48,.3); }
+.sheet-create-btn:active { transform: scale(.98); }
+.sheet-create-btn:disabled { opacity: .6; cursor: default; }
+
+/* État succès */
+.sheet-success-icon {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: rgba(102, 187, 106, .1);
+    border: 1px solid rgba(102, 187, 106, .2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: .5rem auto 1rem;
+    color: var(--green);
+    animation: successPop .35s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+@keyframes successPop {
+    from { transform: scale(0); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+}
+
+/* URL box */
+.sheet-url-box {
+    background: var(--bg-deep);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    padding: .65rem .9rem;
+    font-family: var(--font-mono);
+    font-size: .72rem;
+    color: var(--accent);
+    word-break: break-all;
+    margin-bottom: .9rem;
+}
+
+/* Bouton copier */
+.sheet-copy-btn {
+    width: 100%;
+    height: 52px;
+    background: rgba(102, 187, 106, .08);
+    color: var(--green);
+    border: 1px solid rgba(102, 187, 106, .2);
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans);
+    font-size: .95rem;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    transition: all .15s;
+    margin-bottom: .5rem;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.sheet-copy-btn:hover,
+.sheet-copy-btn.is-copied {
+    background: rgba(102, 187, 106, .16);
+    box-shadow: 0 2px 14px rgba(102,187,106,.12);
+}
+
+/* Bouton fermer */
+.sheet-close-btn {
+    width: 100%;
+    height: 44px;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    font-family: var(--font-sans);
+    font-size: .88rem;
+    cursor: pointer;
+    transition: all .15s;
+}
+
+.sheet-close-btn:hover {
+    color: var(--text-secondary);
+    border-color: var(--border-strong);
 }
