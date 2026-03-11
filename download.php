@@ -795,6 +795,15 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .track-select:focus { border-color:var(--accent); }
 .track-select option { background:#1a1d28; color:#e8eaf0; }
 @media(max-width:480px){.page{padding:.9rem .75rem 3rem}.player-name{display:none}}
+.seek-tooltip { position:absolute; bottom:calc(100% + 6px); background:rgba(12,14,20,.9); border:1px solid rgba(255,255,255,.1); color:var(--text-primary); font-family:var(--font-mono); font-size:.68rem; padding:.18rem .45rem; border-radius:4px; pointer-events:none; white-space:nowrap; transform:translateX(-50%); display:none; z-index:5; }
+.vol-wrap { display:flex; align-items:center; gap:.3rem; }
+.vol-slider { -webkit-appearance:none; appearance:none; width:60px; height:16px; background:transparent; outline:none; cursor:pointer; vertical-align:middle; }
+.vol-slider::-webkit-slider-runnable-track { height:3px; border-radius:2px; background:linear-gradient(to right,#f0a030 0%,#f0a030 var(--vol-pct,100%),rgba(255,255,255,.15) var(--vol-pct,100%),rgba(255,255,255,.15) 100%); }
+.vol-slider::-webkit-slider-thumb { -webkit-appearance:none; width:11px; height:11px; border-radius:50%; background:var(--accent); cursor:pointer; margin-top:-4px; box-shadow:0 0 0 2px rgba(240,160,48,.2); }
+.vol-slider::-moz-range-track { height:3px; border-radius:2px; background:rgba(255,255,255,.15); }
+.vol-slider::-moz-range-progress { height:3px; border-radius:2px; background:#f0a030; }
+.vol-slider::-moz-range-thumb { width:11px; height:11px; border-radius:50%; background:var(--accent); cursor:pointer; border:none; }
+@media(max-width:480px){.vol-slider{width:44px}}
     </style>
 </head>
 <body>
@@ -815,6 +824,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                 <div class="seek-buffered" id="seek-buffered"></div>
                 <div class="seek-fill" id="seek-fill"></div>
                 <div class="seek-thumb" id="seek-thumb"></div>
+                <div class="seek-tooltip" id="seek-tooltip"></div>
             </div>
             <div class="ctrl-row" id="ctrl-row" style="display:none">
                 <div class="seek-time" id="seek-time">
@@ -825,9 +835,12 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                 <button class="ctrl-play" id="play-btn" title="Lecture / Pause">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 </button>
-                <button class="ctrl-mute" id="mute-btn" title="Muet">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
-                </button>
+                <div class="vol-wrap">
+                    <button class="ctrl-mute" id="mute-btn" title="Muet / Son">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                    </button>
+                    <input type="range" id="vol-slider" class="vol-slider" min="0" max="1" step="0.05" value="1" title="Volume">
+                </div>
                 <button class="ctrl-mute" id="speed-btn" title="Vitesse de lecture" style="font-size:.7rem;font-weight:700;font-family:var(--font-mono);width:auto;padding:0 .45rem;border-radius:20px;">1×</button>
                 <button class="ctrl-mute" id="fs-btn" title="Plein écran">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
@@ -839,465 +852,245 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 </div>
 <script>
 (function() {
-    var player = document.getElementById('player');
-    var hintWrap = document.getElementById('hint');
-    var hintText = hintWrap.querySelector('.player-hint-text');
-    // Compat: hint.textContent et hint.className redirigés vers le vrai élément
+    // ── DOM ──────────────────────────────────────────────────────────────────
+    var player      = document.getElementById('player');
+    var hintWrap    = document.getElementById('hint');
+    var hintText    = hintWrap.querySelector('.player-hint-text');
     var hint = {
         get textContent() { return hintText.textContent; },
         set textContent(v) { hintText.textContent = v; },
-        get className() { return hintWrap.className; },
-        set className(v) { hintWrap.className = v; },
-        get innerHTML() { return hintWrap.innerHTML; },
-        set innerHTML(v) { hintWrap.innerHTML = v; },
-        appendChild: function(el) { hintWrap.appendChild(el); }
+        get className()    { return hintWrap.className; },
+        set className(v)   { hintWrap.className = v; }
     };
-    var trackBar = document.getElementById('track-bar');
-    var ctrlRow = document.getElementById('ctrl-row');
-    var playBtn = document.getElementById('play-btn');
-    var muteBtn = document.getElementById('mute-btn');
-    var seekBar = document.getElementById('seek-bar');
-    var seekFill = document.getElementById('seek-fill');
-    var seekThumb = document.getElementById('seek-thumb');
-    var seekBuffered = document.getElementById('seek-buffered');
-    var seekTimeEl = document.getElementById('seek-time');
+    var ctrlRow     = document.getElementById('ctrl-row');
+    var playBtn     = document.getElementById('play-btn');
+    var muteBtn     = document.getElementById('mute-btn');
+    var volSlider   = document.getElementById('vol-slider');
+    var speedBtn    = document.getElementById('speed-btn');
+    var fsBtn       = document.getElementById('fs-btn');
+    var seekBar     = document.getElementById('seek-bar');
+    var seekFill    = document.getElementById('seek-fill');
+    var seekThumb   = document.getElementById('seek-thumb');
+    var seekBuffered= document.getElementById('seek-buffered');
+    var seekTooltip = document.getElementById('seek-tooltip');
     var timeCurrent = document.getElementById('time-current');
-    var timeTotal = document.getElementById('time-total');
-    var isVideo = {$isVideo};
-    var base = '{$baseUrl}';
+    var timeTotal   = document.getElementById('time-total');
+    var trackBar    = document.getElementById('track-bar');
+    var playerCard  = player.closest('.player-card') || player.parentNode;
+    var playerCtrl  = document.querySelector('.player-controls');
+    var isVideo     = {$isVideo};
+    var base        = '{$baseUrl}';
+    var pp          = '{$pParamJs}';
 
-    // Play/pause + mute controls (vidéo uniquement)
-    var svgPlay = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
-    var svgPause = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
-    var svgVol = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
-    var svgMute = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
-
-    var fsBtn = document.getElementById('fs-btn');
-    var svgFs = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
+    // ── Icônes SVG ───────────────────────────────────────────────────────────
+    var svgPlay   = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+    var svgPause  = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+    var svgVol    = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
+    var svgMute   = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
+    var svgFs     = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
     var svgFsExit = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
 
-    var playerCard = player.closest('.player-card') || player.parentNode;
-    function toggleFs() {
-        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-            (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen || playerCard.mozRequestFullScreen).call(playerCard);
-        } else {
-            (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen).call(document);
-        }
-    }
-    var fsHideTimer = null;
-    var playerCtrl = document.querySelector('.player-controls');
-    function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
-    function showFsControls() {
-        playerCtrl.classList.remove('fs-hidden');
-        clearTimeout(fsHideTimer);
-        if (isFs() && !player.paused) fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); }, 3000);
-    }
-    document.addEventListener('fullscreenchange', function() {
-        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
-        if (isFs()) showFsControls(); else { clearTimeout(fsHideTimer); playerCtrl.classList.remove('fs-hidden'); }
-    });
-    document.addEventListener('webkitfullscreenchange', function() {
-        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
-        if (isFs()) showFsControls(); else { clearTimeout(fsHideTimer); playerCtrl.classList.remove('fs-hidden'); }
-    });
-    playerCard.addEventListener('click', function() { if (isFs()) showFsControls(); });
-    playerCard.addEventListener('touchstart', function() { if (isFs()) showFsControls(); }, {passive:true});
-    playerCard.addEventListener('mousemove', function() { if (isFs()) showFsControls(); });
-    player.addEventListener('pause', function() { clearTimeout(fsHideTimer); playerCtrl.classList.remove('fs-hidden'); });
+    // ── État partagé ──────────────────────────────────────────────────────────
+    var S = {
+        step: 'native', confirmed: '',   // machine d'état stream
+        offset: 0,      duration: 0,     // position et durée totale
+        audioIdx: 0,    quality: 720,    burnSub: -1,
+        speed: 1,
+        dragging: false, seekPending: false, rafPending: false,
+        hasFailed: false, stallCount: 0,
+        videoHeight: 0,
+        // timers
+        fsHideTimer: null, videoWidthTimer: null,
+        seekDebounce: null, stallTimer: null, stallInterval: null
+    };
 
-    if (isVideo) {
-        ctrlRow.style.display = 'flex';
-        playBtn.addEventListener('click', function() {
-            if (player.paused) player.play().catch(function(){});
-            else player.pause();
-        });
-        muteBtn.addEventListener('click', function() {
-            player.muted = !player.muted;
-            muteBtn.innerHTML = player.muted ? svgMute : svgVol;
-        });
-        if (fsBtn) fsBtn.addEventListener('click', toggleFs);
-        player.addEventListener('dblclick', toggleFs);
-        // Tap sur la vidéo : simple tap = play/pause, double tap = fullscreen
-        var tapTimer = null;
-        player.addEventListener('touchend', function(e) {
-            if (e.changedTouches.length !== 1) return;
-            if (tapTimer) {
-                clearTimeout(tapTimer);
-                tapTimer = null;
-                toggleFs();
-            } else {
-                tapTimer = setTimeout(function() {
-                    tapTimer = null;
-                    if (player.paused) player.play().catch(function(){});
-                    else player.pause();
-                }, 250);
-            }
-        });
-        var speedBtn = document.getElementById('speed-btn');
-        var speeds = [1, 1.5, 2];
-        var speedIdx = 0;
-        if (speedBtn) speedBtn.addEventListener('click', function() {
-            speedIdx = (speedIdx + 1) % speeds.length;
-            currentSpeed = speeds[speedIdx];
-            player.playbackRate = currentSpeed;
-            speedBtn.textContent = currentSpeed + '\u00D7';
-        });
-        player.addEventListener('play', function() { playBtn.innerHTML = svgPause; });
-        player.addEventListener('playing', function() { playBtn.innerHTML = svgPause; });
-        player.addEventListener('pause', function() { playBtn.innerHTML = svgPlay; });
-        player.addEventListener('waiting', function() { playBtn.innerHTML = svgPause; });
-        player.addEventListener('ended', function() { playBtn.innerHTML = svgPlay; });
+    // ── Utilitaires ───────────────────────────────────────────────────────────
+    function fmtTime(s) {
+        s = Math.max(0, Math.floor(s));
+        var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        if (h > 0) return h + ':' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
+        return m + ':' + (sec < 10 ? '0' : '') + sec;
     }
-    var pp = '{$pParamJs}';
-    var audioIdx = 0;
-    var subtitleIdx = -1;
-    var subtitleUrls = [];
-    var subtitleTypes = [];
-    var subtitleCues = [];
-    var currentBurnSub = -1;
-    var subDiv = null;
-    var resyncBtn = null;
-    var step = 'native'; // toujours essayer natif d'abord (native → remux → transcode)
-    var confirmedStep = ''; // mode confirmé qui fonctionne (évite de re-tester)
-    var currentSpeed = 1; // vitesse de lecture, persistée entre les restarts de stream
-    var seekOffset = 0;
-    var totalDuration = 0;
-    var dragging = false;
-    var seekDebounce = null;
-    var seekPending = false;
-
-    var currentQuality = 720;
-    var videoHeight = 0;
-    var hasFailed = false;
-    var hintTimer = null;
-    var videoWidthTimer = null;
-
+    function realTime() { return S.offset + (player.currentTime || 0); }
     function buildUrl(mode, audio, startSec) {
         if (mode === 'native') return base + '?' + pp + 'stream=1';
         var url = base + '?' + pp + 'stream=' + mode + '&audio=' + (audio || 0);
         if (mode === 'transcode') {
-            url += '&quality=' + currentQuality;
-            if (currentBurnSub >= 0) url += '&burnSub=' + currentBurnSub;
+            url += '&quality=' + S.quality;
+            if (S.burnSub >= 0) url += '&burnSub=' + S.burnSub;
         }
         if (startSec > 0) url += '&start=' + startSec.toFixed(1);
         return url;
     }
 
-    // Figer la taille du player pendant un reload pour éviter le "saut"
-    function lockSize() {
-        if (isVideo && player.videoWidth > 0) {
-            player.style.minHeight = player.offsetHeight + 'px';
-        }
+    // ── Plein écran ───────────────────────────────────────────────────────────
+    function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+    function toggleFs() {
+        if (!isFs()) (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen || playerCard.mozRequestFullScreen).call(playerCard);
+        else (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen).call(document);
     }
-    function unlockSize() {
-        player.style.minHeight = '';
+    function showFsControls() {
+        playerCtrl.classList.remove('fs-hidden');
+        clearTimeout(S.fsHideTimer);
+        if (isFs() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); }, 3000);
     }
+    document.addEventListener('fullscreenchange', function() {
+        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
+        if (isFs()) showFsControls(); else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); }
+    });
+    document.addEventListener('webkitfullscreenchange', function() {
+        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
+        if (isFs()) showFsControls(); else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); }
+    });
+    playerCard.addEventListener('mousemove',  function() { if (isFs()) showFsControls(); });
+    playerCard.addEventListener('click',      function() { if (isFs()) showFsControls(); });
+    playerCard.addEventListener('touchstart', function() { if (isFs()) showFsControls(); }, {passive:true});
+    player.addEventListener('pause', function() { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); });
+
+    // ── Stream ────────────────────────────────────────────────────────────────
+    function lockSize()   { if (isVideo && player.videoWidth > 0) player.style.minHeight = player.offsetHeight + 'px'; }
+    function unlockSize() { player.style.minHeight = ''; }
 
     function startStream(resumeAt) {
-        seekOffset = resumeAt || 0;
-        hasFailed = false;
-        clearTimeout(videoWidthTimer);
+        S.offset    = resumeAt || 0;
+        S.hasFailed = false;
+        clearTimeout(S.videoWidthTimer);
+        Subs.resetIdx();
         lockSize();
-
-        var url;
-        if (isVideo) {
-            var mode = confirmedStep || step;
-            url = buildUrl(mode, audioIdx, seekOffset);
-        } else {
-            url = base + '?' + pp + 'stream=1';
-        }
-        player.src = url;
+        player.src = isVideo ? buildUrl(S.confirmed || S.step, S.audioIdx, S.offset) : base + '?' + pp + 'stream=1';
         player.load();
-        player.playbackRate = currentSpeed;
-        player.play().catch(function(e) {
-            if (e && e.name === 'NotAllowedError') showTapToPlay();
-        });
+        player.playbackRate = S.speed;
+        player.play().catch(function(e) { if (e && e.name === 'NotAllowedError') hint.textContent = 'Appuyer sur \u25B6 pour lire'; });
     }
 
-    function showTapToPlay() {
-        hint.textContent = 'Appuyer sur ▶ pour lire';
-        hint.className = 'player-hint';
-    }
-
-    function realTime() {
-        return seekOffset + (player.currentTime || 0);
-    }
-
-    function fmtTime(s) {
-        s = Math.max(0, Math.floor(s));
-        var h = Math.floor(s / 3600);
-        var m = Math.floor((s % 3600) / 60);
-        var sec = s % 60;
-        if (h > 0) return h + ':' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
-        return m + ':' + (sec < 10 ? '0' : '') + sec;
-    }
-
-    // Mise à jour de la barre de progression
-    function updateSeekUI() {
-        if (totalDuration <= 0) return;
-        if (seekPending) return;
+    function onFail() {
+        if (S.hasFailed) return;
+        S.hasFailed = true;
         var pos = realTime();
-        var pct = Math.min(100, Math.max(0, (pos / totalDuration) * 100));
-        seekFill.style.width = pct + '%';
-        seekThumb.style.left = pct + '%';
-        timeCurrent.textContent = fmtTime(pos);
-    }
-
-    // Mise à jour du buffer
-    function updateBuffered() {
-        if (totalDuration <= 0 || !player.buffered || !player.buffered.length) return;
-        var buffEnd = player.buffered.end(player.buffered.length - 1);
-        var buffPct = Math.min(100, ((seekOffset + buffEnd) / totalDuration) * 100);
-        seekBuffered.style.width = buffPct + '%';
-    }
-
-    player.addEventListener('timeupdate', function() {
-        if (!dragging) updateSeekUI();
-        updateBuffered();
-        showCue();
-    });
-
-    // Seek par clic/drag sur la barre
-    function seekToFraction(frac) {
-
-        var targetSec = Math.max(0, Math.min(totalDuration, frac * totalDuration));
-        // Mettre à jour visuellement tout de suite et bloquer timeupdate
-        seekPending = true;
-        var pct = (targetSec / totalDuration) * 100;
-        seekFill.style.width = pct + '%';
-        seekThumb.style.left = pct + '%';
-        timeCurrent.textContent = fmtTime(targetSec);
-        // Debounce le seek
-        clearTimeout(seekDebounce);
-        seekDebounce = setTimeout(function() {
-            if (confirmedStep === 'native') {
-                // Seek natif : laisser le navigateur gérer via Range requests
-                seekPending = false;
-                player.currentTime = targetSec;
-                hint.textContent = '';
-            } else {
-                startStream(targetSec); // met seekOffset = targetSec et player.currentTime = 0
-                seekPending = false;    // updateSeekUI verra maintenant seekOffset correct
-                hint.textContent = 'Chargement à ' + fmtTime(targetSec) + '...';
-                hint.className = 'player-hint';
-            }
-        }, 300);
-    }
-
-    function getFraction(e) {
-        var rect = seekBar.getBoundingClientRect();
-        var x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
-        return Math.max(0, Math.min(1, x / rect.width));
-    }
-
-    seekBar.addEventListener('mousedown', function(e) {
-        if (totalDuration <= 0) return;
-        dragging = true;
-        seekBar.classList.add('dragging');
-        seekToFraction(getFraction(e));
-    });
-    seekBar.addEventListener('touchstart', function(e) {
-        if (totalDuration <= 0) return;
-        dragging = true;
-        seekBar.classList.add('dragging');
-        seekToFraction(getFraction(e));
-    }, {passive: true});
-
-    document.addEventListener('mousemove', function(e) {
-        if (dragging) seekToFraction(getFraction(e));
-    });
-    document.addEventListener('touchmove', function(e) {
-        if (dragging) seekToFraction(getFraction(e));
-    }, {passive: true});
-
-    document.addEventListener('mouseup', function() {
-        if (dragging) { dragging = false; seekBar.classList.remove('dragging'); }
-    });
-    document.addEventListener('touchend', function() {
-        if (dragging) { dragging = false; seekBar.classList.remove('dragging'); }
-    });
-
-    // Applique les métadonnées probe (durée, sélecteurs) sans (re)lancer le stream
-    function applyProbe(probeData) {
-        if (!probeData) return;
-        var hasControls = false;
-
-        // Durée totale
-        if (probeData.duration > 0) {
-            totalDuration = probeData.duration;
-            timeTotal.textContent = fmtTime(totalDuration);
-            seekBar.style.display = 'flex';
-        }
-
-        // Sélecteur audio
-        if (probeData.audio && probeData.audio.length > 1) {
-            hasControls = true;
-            var lbl = document.createElement('label');
-            lbl.textContent = 'Audio :';
-            var sel = document.createElement('select');
-            sel.className = 'track-select';
-            probeData.audio.forEach(function(a) {
-                var opt = document.createElement('option');
-                opt.value = a.index;
-                opt.textContent = a.label;
-                sel.appendChild(opt);
-            });
-            sel.addEventListener('change', function() {
-                var pos = realTime();
-                audioIdx = parseInt(sel.value);
-                confirmedStep = 'transcode';
-                step = 'transcode';
-                hint.textContent = 'Changement de piste...';
-                hint.className = 'player-hint transcoding';
-                startStream(pos);
-            });
-            trackBar.append(lbl, sel);
-        }
-
-        // Sélecteur de qualité
-        if (probeData.videoHeight > 0) {
-            videoHeight = probeData.videoHeight;
-            var qualities = [480, 720, 1080].filter(function(q) { return q <= videoHeight; });
-            if (qualities.length > 0) {
-                currentQuality = qualities.indexOf(720) !== -1 ? 720 : qualities[qualities.length - 1];
-                hasControls = true;
-                var lbl3 = document.createElement('label');
-                lbl3.textContent = 'Qualité :';
-                var sel3 = document.createElement('select');
-                sel3.className = 'track-select';
-                qualities.forEach(function(q) {
-                    var opt = document.createElement('option');
-                    opt.value = q;
-                    opt.textContent = q + 'p';
-                    if (q === currentQuality) opt.selected = true;
-                    sel3.appendChild(opt);
-                });
-                sel3.addEventListener('change', function() {
-                    var pos = realTime();
-                    currentQuality = parseInt(sel3.value);
-                    confirmedStep = 'transcode';
-                    hint.textContent = 'Transcodage ' + currentQuality + 'p...';
-                    hint.className = 'player-hint transcoding';
-                    startStream(pos);
-                });
-                trackBar.append(lbl3, sel3);
-            }
-        }
-
-        // Sous-titres
-        if (probeData.subtitles && probeData.subtitles.length > 0) {
-            hasControls = true;
-            probeData.subtitles.forEach(function(s) {
-                subtitleUrls.push(s.type === 'text' ? base + '?' + pp + 'subtitle=' + s.index : null);
-                subtitleTypes.push(s.type || 'text');
-            });
-            var lbl2 = document.createElement('label');
-            lbl2.textContent = 'Sous-titres :';
-            var selSub = document.createElement('select');
-            selSub.className = 'track-select';
-            var offOpt = document.createElement('option');
-            offOpt.value = '-1';
-            offOpt.textContent = 'Désactivés';
-            selSub.appendChild(offOpt);
-            probeData.subtitles.forEach(function(s, i) {
-                var opt = document.createElement('option');
-                opt.value = i;
-                opt.textContent = s.label;
-                selSub.appendChild(opt);
-            });
-            selSub.addEventListener('change', function() {
-                loadSubtitle(parseInt(selSub.value));
-            });
-            trackBar.append(lbl2, selSub);
-        }
-
-        if (hasControls) trackBar.style.display = 'flex';
-    }
-
-    // Pour les vidéos : Resync toujours visible immédiatement, indépendamment du probe
-    if (isVideo) {
-        resyncBtn = document.createElement('button');
-        resyncBtn.className = 'player-btn';
-        resyncBtn.title = 'Resynchroniser son et image';
-        resyncBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Resync';
-        resyncBtn.addEventListener('click', function() {
-            if (confirmedStep === 'native') {
-                var pos = player.currentTime;
-                player.currentTime = Math.max(0, pos - 0.1);
-                return;
-            }
-            hint.textContent = 'Resync...';
-            hint.className = 'player-hint';
-            startStream(realTime());
-        });
-        trackBar.appendChild(resyncBtn);
-        trackBar.style.display = 'flex';
-    }
-
-    // Démarrer le stream immédiatement, puis appliquer le probe en arrière-plan
-    // (évite que les contrôles restent cachés si ffprobe est lent sur cache froid)
-    if (isVideo) {
-        startStream(0);
-        var probeCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-        var probeTimer = setTimeout(function() { if (probeCtrl) probeCtrl.abort(); }, 12000);
-        var fetchOpts = probeCtrl ? { signal: probeCtrl.signal } : {};
-        fetch(base + '?' + pp + 'probe=1', fetchOpts)
-            .then(function(r) { clearTimeout(probeTimer); return r.json(); })
-            .then(function(data) { applyProbe(data); })
-            .catch(function() { clearTimeout(probeTimer); });
-    } else {
-        startStream(0);
-    }
-
-    // Overlay sous-titres custom (indépendant des textTracks navigateur)
-    (function() {
-        subDiv = document.createElement('div');
-        subDiv.className = 'sub-overlay';
-        player.parentNode.appendChild(subDiv);
-
-        function updateSubPos() {
-            var wrapRect = player.parentNode.getBoundingClientRect();
-            var vidRect  = player.getBoundingClientRect();
-            var vw = player.videoWidth, vh = player.videoHeight;
-            // Espace entre bas de <video> et bas du wrapper (bandes noires du wrapper)
-            var spaceBelow = wrapRect.bottom - vidRect.bottom;
-            // Bandes noires internes à l'élément <video> (object-fit:contain)
-            var barH = 0, contentH = vidRect.height;
-            if (vw && vh && vidRect.width && vidRect.height) {
-                var videoAR = vw / vh, elemAR = vidRect.width / vidRect.height;
-                if (videoAR > elemAR) {
-                    contentH = vidRect.width / videoAR;
-                    barH = (vidRect.height - contentH) / 2;
-                }
-            }
-            subDiv.style.bottom = (spaceBelow + barH + contentH * 0.08) + 'px';
-            subDiv.style.fontSize = Math.max(13, Math.round(vidRect.width * 0.025)) + 'px';
-        }
-
-        updateSubPos();
-        player.addEventListener('loadedmetadata', updateSubPos);
-        player.addEventListener('resize', updateSubPos);
-        document.addEventListener('fullscreenchange', function() { setTimeout(updateSubPos, 50); });
-        document.addEventListener('webkitfullscreenchange', function() { setTimeout(updateSubPos, 50); });
-        if (window.ResizeObserver) {
-            new ResizeObserver(function() { updateSubPos(); }).observe(player);
+        if (!S.confirmed && S.step === 'native') {
+            S.step = S.confirmed = 'transcode';
+            hint.textContent = 'Transcodage en cours...'; hint.className = 'player-hint transcoding';
+            startStream(pos);
         } else {
-            window.addEventListener('resize', updateSubPos);
+            hint.textContent = 'Lecture impossible. Utilisez le bouton T\u00E9l\u00E9charger.';
+            hint.className = 'player-hint error';
         }
-    })();
+    }
+    player.addEventListener('error', onFail);
+
+    player.addEventListener('playing', function() {
+        unlockSize();
+        var mode = S.confirmed || S.step;
+        if ((mode === 'native' || mode === 'remux') && isVideo && !S.confirmed) {
+            S.videoWidthTimer = setTimeout(function() {
+                if (player.videoWidth === 0) onFail();
+                else { S.confirmed = mode; hint.textContent = ''; }
+            }, mode === 'native' ? 2000 : 1500);
+            return;
+        }
+        hint.textContent = '';
+    });
+
+    // ── Stall watchdog ────────────────────────────────────────────────────────
+    function startStallWatchdog() {
+        clearStallWatchdog();
+        if (!isVideo || S.confirmed === 'native') return;
+        var elapsed = 0;
+        S.stallInterval = setInterval(function() {
+            if (!player.paused && player.readyState < 3) { hint.textContent = 'Chargement... ' + (++elapsed) + 's'; hint.className = 'player-hint'; }
+        }, 1000);
+        S.stallTimer = setTimeout(function() {
+            clearStallWatchdog();
+            if (player.readyState < 3 && !player.paused) {
+                hint.textContent = 'Retry #' + (++S.stallCount) + '...'; hint.className = 'player-hint';
+                startStream(realTime());
+            }
+        }, 10000);
+    }
+    function clearStallWatchdog() {
+        clearTimeout(S.stallTimer); clearInterval(S.stallInterval);
+        S.stallTimer = S.stallInterval = null;
+    }
+    player.addEventListener('waiting', startStallWatchdog);
+    player.addEventListener('playing', clearStallWatchdog);
+    player.addEventListener('pause',   clearStallWatchdog);
+
+    // ── Module sous-titres ────────────────────────────────────────────────────
+    var Subs = {
+        cues: [], types: [], urls: [],
+        _div: null, _idx: 0,
+        resetIdx: function() { this._idx = this.cues.length ? this._find(S.offset) : 0; },
+        _find: function(t) {
+            var lo = 0, hi = this.cues.length;
+            while (lo < hi) { var mid = (lo + hi) >> 1; if (this.cues[mid].end <= t) lo = mid + 1; else hi = mid; }
+            return lo;
+        },
+        render: function() {
+            if (!this._div) return;
+            var t = realTime(), txt = '';
+            if (this.cues.length) {
+                while (this._idx < this.cues.length && this.cues[this._idx].end <= t) this._idx++;
+                if (this._idx < this.cues.length && this.cues[this._idx].start <= t) txt = this.cues[this._idx].text;
+            }
+            var safe = txt.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                          .replace(/&lt;(\/?(b|i|u|em|strong|s))&gt;/gi,'<$1>');
+            var html = txt ? '<span style="background:rgba(0,0,0,.78);color:#fff;padding:.2em .6em;border-radius:4px;line-height:1.4;display:inline-block;max-width:100%;word-break:break-word;white-space:pre-line">' + safe + '</span>' : '';
+            if (this._div.innerHTML !== html) this._div.innerHTML = html;
+        },
+        load: function(idx) {
+            var wasBurning = S.burnSub >= 0, pos = realTime();
+            this.cues = []; this._idx = 0; S.burnSub = -1;
+            if (this._div) this._div.innerHTML = '';
+            if (idx >= 0 && this.types[idx] === 'image') {
+                S.burnSub = idx; S.confirmed = S.step = 'transcode';
+                hint.textContent = 'Transcodage avec sous-titres...'; hint.className = 'player-hint transcoding';
+                startStream(pos);
+            } else if (idx >= 0) {
+                if (wasBurning) startStream(pos);
+                var self = this;
+                fetch(this.urls[idx], {credentials:'same-origin'})
+                    .then(function(r) { return r.text(); })
+                    .then(function(t) { self.cues = parseVTT(t); self._idx = self._find(realTime()); })
+                    .catch(function() {});
+            } else {
+                if (wasBurning) startStream(pos);
+            }
+        },
+        initOverlay: function() {
+            this._div = document.createElement('div');
+            this._div.className = 'sub-overlay';
+            player.parentNode.appendChild(this._div);
+            var self = this;
+            function pos() {
+                var wr = player.parentNode.getBoundingClientRect(), vr = player.getBoundingClientRect();
+                var vw = player.videoWidth, vh = player.videoHeight;
+                var below = wr.bottom - vr.bottom, barH = 0, ch = vr.height;
+                if (vw && vh && vr.width && vr.height) {
+                    var ar = vw / vh, ear = vr.width / vr.height;
+                    if (ar > ear) { ch = vr.width / ar; barH = (vr.height - ch) / 2; }
+                }
+                self._div.style.bottom    = (below + barH + ch * 0.08) + 'px';
+                self._div.style.fontSize  = Math.max(13, Math.round(vr.width * 0.025)) + 'px';
+            }
+            pos();
+            player.addEventListener('loadedmetadata', pos);
+            player.addEventListener('resize', pos);
+            document.addEventListener('fullscreenchange', function() { setTimeout(pos, 50); });
+            document.addEventListener('webkitfullscreenchange', function() { setTimeout(pos, 50); });
+            if (window.ResizeObserver) new ResizeObserver(pos).observe(player);
+            else window.addEventListener('resize', pos);
+        }
+    };
 
     function vttTime(s) {
         var p = s.trim().split(':');
         return p.length === 3 ? +p[0]*3600 + +p[1]*60 + parseFloat(p[2]) : +p[0]*60 + parseFloat(p[1]);
     }
-
     function parseVTT(text) {
         var cues = [], blocks = text.replace(/\\r\\n/g,'\\n').split(/\\n\\n+/);
         for (var b = 0; b < blocks.length; b++) {
             var lines = blocks[b].trim().split('\\n'), ti = -1;
-            for (var l = 0; l < lines.length; l++) {
-                if (lines[l].indexOf(' --> ') !== -1) { ti = l; break; }
-            }
+            for (var l = 0; l < lines.length; l++) { if (lines[l].indexOf(' --> ') !== -1) { ti = l; break; } }
             if (ti < 0) continue;
             var parts = lines[ti].split(' --> ');
             var txt = lines.slice(ti+1).join('\\n').trim();
@@ -1306,124 +1099,191 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         return cues;
     }
 
-    function showCue() {
-        if (!subDiv) return;
-        var t = realTime(), txt = '';
-        for (var i = 0; i < subtitleCues.length; i++) {
-            if (t >= subtitleCues[i].start && t < subtitleCues[i].end) { txt = subtitleCues[i].text; break; }
-        }
-        var safe = txt.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                      .replace(/&lt;(\/?(b|i|u|em|strong|s))&gt;/gi,'<$1>');
-        var html = txt
-            ? '<span style="background:rgba(0,0,0,.78);color:#fff;padding:.2em .6em;border-radius:4px;line-height:1.4;display:inline-block;max-width:100%;word-break:break-word;white-space:pre-line">'
-              + safe + '</span>'
-            : '';
-        if (subDiv.innerHTML !== html) subDiv.innerHTML = html;
+    // ── Seekbar ───────────────────────────────────────────────────────────────
+    function updateSeekUI() {
+        if (S.duration <= 0 || S.seekPending) return;
+        var pos = realTime(), pct = Math.min(100, Math.max(0, pos / S.duration * 100));
+        seekFill.style.width  = pct + '%';
+        seekThumb.style.left  = pct + '%';
+        timeCurrent.textContent = fmtTime(pos);
     }
-
-    function loadSubtitle(idx) {
-        subtitleIdx = idx;
-        subtitleCues = [];
-        if (subDiv) subDiv.innerHTML = '';
-        var pos = realTime();
-        var wasBurning = currentBurnSub >= 0;
-
-        if (idx >= 0 && subtitleTypes[idx] === 'image') {
-            // Sous-titre image (PGS) : burn-in via transcode
-            currentBurnSub = idx;
-            confirmedStep = 'transcode';
-            step = 'transcode';
-            hint.textContent = 'Transcodage avec sous-titres...';
-            hint.className = 'player-hint transcoding';
-            startStream(pos);
-        } else if (idx >= 0) {
-            // Sous-titre texte : overlay JS, pas de restart sauf si on sortait du burn-in
-            currentBurnSub = -1;
-            if (wasBurning) startStream(pos);
-            fetch(subtitleUrls[idx], { credentials: 'same-origin' })
-                .then(function(r) { return r.text(); })
-                .then(function(t) { subtitleCues = parseVTT(t); })
-                .catch(function() {});
-        } else {
-            // Désactivés
-            currentBurnSub = -1;
-            if (wasBurning) startStream(pos);
-        }
+    function updateBuffered() {
+        if (S.duration <= 0 || !player.buffered || !player.buffered.length) return;
+        seekBuffered.style.width = Math.min(100, (S.offset + player.buffered.end(player.buffered.length - 1)) / S.duration * 100) + '%';
     }
-
-    player.addEventListener('playing', function() {
-        unlockSize();
-        var mode = confirmedStep || step;
-        if ((mode === 'native' || mode === 'remux') && isVideo && !confirmedStep) {
-            // Vérifier que le navigateur décode vraiment (videoWidth > 0)
-            // native : 2s (les décodeurs HEVC/AV1 natifs peuvent être lents)
-            // remux  : 1.5s
-            var delay = mode === 'native' ? 2000 : 1500;
-            videoWidthTimer = setTimeout(function() {
-                if (player.videoWidth === 0) {
-                    onFail();
-                } else {
-                    confirmedStep = mode;
-                    hint.textContent = '';
-                }
-            }, delay);
-            return;
+    function getFraction(e) {
+        var rect = seekBar.getBoundingClientRect();
+        return Math.max(0, Math.min(1, ((e.touches ? e.touches[0].clientX : e.clientX) - rect.left) / rect.width));
+    }
+    function seekToFraction(frac) {
+        var t = Math.max(0, Math.min(S.duration, frac * S.duration));
+        S.seekPending = true;
+        var pct = t / S.duration * 100;
+        seekFill.style.width = pct + '%'; seekThumb.style.left = pct + '%'; timeCurrent.textContent = fmtTime(t);
+        clearTimeout(S.seekDebounce);
+        S.seekDebounce = setTimeout(function() {
+            if (S.confirmed === 'native') {
+                S.seekPending = false; player.currentTime = t; hint.textContent = '';
+            } else {
+                startStream(t); S.seekPending = false;
+                hint.textContent = 'Chargement \u00E0 ' + fmtTime(t) + '...'; hint.className = 'player-hint';
+            }
+        }, 300);
+    }
+    player.addEventListener('timeupdate', function() {
+        if (!S.dragging && !S.rafPending) {
+            S.rafPending = true;
+            requestAnimationFrame(function() { S.rafPending = false; updateSeekUI(); });
         }
-        hint.textContent = '';
+        updateBuffered(); Subs.render();
     });
+    seekBar.addEventListener('mousedown',  function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); });
+    seekBar.addEventListener('touchstart', function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); }, {passive:true});
+    document.addEventListener('mousemove', function(e) { if (S.dragging) seekToFraction(getFraction(e)); });
+    document.addEventListener('touchmove', function(e) { if (S.dragging) seekToFraction(getFraction(e)); }, {passive:true});
+    document.addEventListener('mouseup',   function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } });
+    document.addEventListener('touchend',  function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } });
+    seekBar.addEventListener('mousemove', function(e) {
+        if (!S.duration || !seekTooltip) return;
+        var rect = seekBar.getBoundingClientRect(), frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        seekTooltip.textContent = fmtTime(frac * S.duration);
+        seekTooltip.style.left = (frac * 100) + '%'; seekTooltip.style.display = 'block';
+    });
+    seekBar.addEventListener('mouseleave', function() { if (seekTooltip) seekTooltip.style.display = 'none'; });
 
-    function onFail() {
-        if (hasFailed) return;
-        hasFailed = true;
-        var pos = realTime();
-        if (!confirmedStep && step === 'native') {
-            step = 'transcode';
-            confirmedStep = 'transcode';
-            hint.textContent = 'Transcodage en cours...';
-            hint.className = 'player-hint transcoding';
-            startStream(pos);
-        } else {
-            hint.textContent = 'Lecture impossible. Utilisez le bouton Télécharger.';
-            hint.className = 'player-hint error';
-        }
+    // ── Volume ────────────────────────────────────────────────────────────────
+    function updateVolUI() {
+        var pct = (player.muted ? 0 : player.volume) * 100;
+        if (volSlider) { volSlider.value = player.muted ? 0 : player.volume; volSlider.style.setProperty('--vol-pct', pct + '%'); }
+        muteBtn.innerHTML = (player.muted || player.volume === 0) ? svgMute : svgVol;
     }
 
-    player.addEventListener('error', onFail);
-
-    // Stall watchdog : si aucune donnée après 25s en mode transcode → retry automatique
-    var stallTimer = null;
-    var stallCount = 0;
-    var stallInterval = null;
-    function startStallWatchdog() {
-        clearStallWatchdog();
-        if (!isVideo || confirmedStep === 'native') return;
-        var elapsed = 0;
-        stallInterval = setInterval(function() {
-            elapsed++;
-            if (!player.paused && player.readyState < 3) {
-                hint.textContent = 'Chargement... ' + elapsed + 's';
-                hint.className = 'player-hint';
-            }
-        }, 1000);
-        stallTimer = setTimeout(function() {
-            clearStallWatchdog();
-            if (player.readyState < 3 && !player.paused) {
-                stallCount++;
-                hint.textContent = 'Retry #' + stallCount + '...';
-                hint.className = 'player-hint';
+    // ── Probe → sélecteurs de piste ──────────────────────────────────────────
+    function applyProbe(d) {
+        if (!d) return;
+        var hasControls = false;
+        if (d.duration > 0) { S.duration = d.duration; timeTotal.textContent = fmtTime(S.duration); seekBar.style.display = 'flex'; }
+        if (d.audio && d.audio.length > 1) {
+            hasControls = true;
+            var lbl = document.createElement('label'); lbl.textContent = 'Audio :';
+            var sel = document.createElement('select'); sel.className = 'track-select';
+            d.audio.forEach(function(a) { var o = document.createElement('option'); o.value = a.index; o.textContent = a.label; sel.appendChild(o); });
+            sel.addEventListener('change', function() {
+                S.audioIdx = parseInt(sel.value); S.confirmed = S.step = 'transcode';
+                hint.textContent = 'Changement de piste...'; hint.className = 'player-hint transcoding';
                 startStream(realTime());
+            });
+            trackBar.append(lbl, sel);
+        }
+        if (d.videoHeight > 0) {
+            S.videoHeight = d.videoHeight;
+            var qs = [480, 720, 1080].filter(function(q) { return q <= S.videoHeight; });
+            if (qs.length) {
+                S.quality = qs.indexOf(720) !== -1 ? 720 : qs[qs.length - 1];
+                hasControls = true;
+                var lbl3 = document.createElement('label'); lbl3.textContent = 'Qualit\u00E9 :';
+                var sel3 = document.createElement('select'); sel3.className = 'track-select';
+                qs.forEach(function(q) { var o = document.createElement('option'); o.value = q; o.textContent = q + 'p'; if (q === S.quality) o.selected = true; sel3.appendChild(o); });
+                sel3.addEventListener('change', function() {
+                    S.quality = parseInt(sel3.value); S.confirmed = 'transcode';
+                    hint.textContent = 'Transcodage ' + S.quality + 'p...'; hint.className = 'player-hint transcoding';
+                    startStream(realTime());
+                });
+                trackBar.append(lbl3, sel3);
             }
-        }, 25000);
+        }
+        if (d.subtitles && d.subtitles.length) {
+            hasControls = true;
+            d.subtitles.forEach(function(s) { Subs.urls.push(s.type === 'text' ? base + '?' + pp + 'subtitle=' + s.index : null); Subs.types.push(s.type || 'text'); });
+            var lbl2 = document.createElement('label'); lbl2.textContent = 'Sous-titres :';
+            var selSub = document.createElement('select'); selSub.className = 'track-select';
+            var off = document.createElement('option'); off.value = '-1'; off.textContent = 'D\u00E9sactiv\u00E9s'; selSub.appendChild(off);
+            d.subtitles.forEach(function(s, i) { var o = document.createElement('option'); o.value = i; o.textContent = s.label; selSub.appendChild(o); });
+            selSub.addEventListener('change', function() { Subs.load(parseInt(selSub.value)); });
+            trackBar.append(lbl2, selSub);
+        }
+        if (hasControls) trackBar.style.display = 'flex';
     }
-    function clearStallWatchdog() {
-        clearTimeout(stallTimer);
-        clearInterval(stallInterval);
-        stallTimer = null;
-        stallInterval = null;
+
+    // ── Contrôles vidéo ───────────────────────────────────────────────────────
+    if (isVideo) {
+        ctrlRow.style.display = 'flex';
+        // Play/pause
+        playBtn.addEventListener('click', function() { if (player.paused) player.play().catch(function(){}); else player.pause(); });
+        player.addEventListener('play',    function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('playing', function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('pause',   function() { playBtn.innerHTML = svgPlay; });
+        player.addEventListener('waiting', function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('ended',   function() { playBtn.innerHTML = svgPlay; });
+        // Fullscreen
+        if (fsBtn) fsBtn.addEventListener('click', toggleFs);
+        player.addEventListener('dblclick', toggleFs);
+        var tapTimer = null;
+        player.addEventListener('touchend', function(e) {
+            if (e.changedTouches.length !== 1) return;
+            if (tapTimer) { clearTimeout(tapTimer); tapTimer = null; toggleFs(); }
+            else tapTimer = setTimeout(function() { tapTimer = null; if (player.paused) player.play().catch(function(){}); else player.pause(); }, 250);
+        });
+        // Volume
+        var savedVol = parseFloat(localStorage.getItem('player_volume') || '1');
+        player.volume = isNaN(savedVol) ? 1 : Math.max(0, Math.min(1, savedVol));
+        player.muted  = localStorage.getItem('player_muted') === 'true';
+        updateVolUI();
+        muteBtn.addEventListener('click', function() {
+            player.muted = !player.muted;
+            localStorage.setItem('player_muted', player.muted);
+            updateVolUI();
+        });
+        if (volSlider) volSlider.addEventListener('input', function() {
+            player.volume = parseFloat(volSlider.value);
+            player.muted  = player.volume === 0;
+            localStorage.setItem('player_volume', player.volume);
+            localStorage.setItem('player_muted',  player.muted);
+            updateVolUI();
+        });
+        // Vitesse
+        var speeds = [1, 1.5, 2];
+        var savedSpd = parseFloat(localStorage.getItem('player_speed') || '1');
+        var speedIdx = speeds.indexOf(savedSpd); if (speedIdx < 0) speedIdx = 0;
+        S.speed = speeds[speedIdx];
+        if (speedBtn) { speedBtn.textContent = S.speed + '\u00D7'; speedBtn.addEventListener('click', function() {
+            speedIdx = (speedIdx + 1) % speeds.length; S.speed = speeds[speedIdx];
+            player.playbackRate = S.speed; speedBtn.textContent = S.speed + '\u00D7';
+            localStorage.setItem('player_speed', S.speed);
+        }); }
+        // Bouton Resync
+        var resyncBtn = document.createElement('button');
+        resyncBtn.className = 'player-btn'; resyncBtn.title = 'Resynchroniser son et image';
+        resyncBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Resync';
+        resyncBtn.addEventListener('click', function() {
+            if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 0.1); return; }
+            hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(realTime());
+        });
+        trackBar.appendChild(resyncBtn); trackBar.style.display = 'flex';
+        // Raccourcis clavier
+        document.addEventListener('keydown', function(e) {
+            if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
+            if (e.key === ' ' || e.key === 'k') { e.preventDefault(); if (player.paused) player.play().catch(function(){}); else player.pause(); }
+            else if (e.key === 'ArrowLeft')  { e.preventDefault(); if (S.duration) seekToFraction(Math.max(0, realTime() - 10) / S.duration); }
+            else if (e.key === 'ArrowRight') { e.preventDefault(); if (S.duration) seekToFraction(Math.min(S.duration, realTime() + 10) / S.duration); }
+            else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleFs(); }
+            else if (e.key === 'm' || e.key === 'M') { e.preventDefault(); player.muted = !player.muted; localStorage.setItem('player_muted', player.muted); updateVolUI(); }
+        });
     }
-    player.addEventListener('waiting', startStallWatchdog);
-    player.addEventListener('playing', clearStallWatchdog);
-    player.addEventListener('pause',   clearStallWatchdog);
+
+    // ── Démarrage ─────────────────────────────────────────────────────────────
+    Subs.initOverlay();
+    if (isVideo) {
+        startStream(0);
+        var probeCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        var probeTimer = setTimeout(function() { if (probeCtrl) probeCtrl.abort(); }, 12000);
+        fetch(base + '?' + pp + 'probe=1', probeCtrl ? {signal: probeCtrl.signal} : {})
+            .then(function(r) { clearTimeout(probeTimer); return r.json(); })
+            .then(function(d) { applyProbe(d); })
+            .catch(function()  { clearTimeout(probeTimer); });
+    } else {
+        startStream(0);
+    }
 })();
 </script>
 </body>
