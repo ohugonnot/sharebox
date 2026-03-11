@@ -963,11 +963,21 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         player.play().catch(function(e) { if (e && e.name === 'NotAllowedError') hint.textContent = 'Appuyer sur \u25B6 pour lire'; });
     }
 
+    // Choisit le mode optimal à partir du probe (avant de démarrer le stream)
+    function chooseModeFromProbe(d) {
+        if (!d || !d.videoCodec) return 'native';
+        var c = d.videoCodec.toLowerCase();
+        if (c === 'h264') return 'remux';    // repackage MKV→MP4, zéro CPU vidéo
+        if (c)            return 'transcode'; // HEVC, AV1, VP9, etc.
+        return 'native';
+    }
+
     function onFail() {
         if (S.hasFailed) return;
         S.hasFailed = true;
         var pos = realTime();
-        if (!S.confirmed && S.step === 'native') {
+        // Cascade : native/remux → transcode → erreur définitive
+        if (!S.confirmed && (S.step === 'native' || S.step === 'remux')) {
             S.step = S.confirmed = 'transcode';
             hint.textContent = 'Transcodage en cours...'; hint.className = 'player-hint transcoding';
             startStream(pos);
@@ -1272,15 +1282,37 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     }
 
     // ── Démarrage ─────────────────────────────────────────────────────────────
+    // Stratégie probe-first : on attend le probe pour choisir le bon mode d'emblée.
+    // Si probe > 2s (cache froid, ffprobe lent) → fallback natif immédiat.
+    // Sur cache chaud (SQLite) le probe revient en < 100ms → mode optimal sans faux départ.
     Subs.initOverlay();
     if (isVideo) {
-        startStream(0);
-        var probeCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        hint.textContent = 'Analyse...'; hint.className = 'player-hint';
+        var streamStarted = false;
+        var probeCtrl  = typeof AbortController !== 'undefined' ? new AbortController() : null;
         var probeTimer = setTimeout(function() { if (probeCtrl) probeCtrl.abort(); }, 12000);
+        // Fallback : démarrer en natif si le probe est trop lent
+        var fallbackTimer = setTimeout(function() {
+            if (!streamStarted) { streamStarted = true; hint.textContent = ''; startStream(0); }
+        }, 2000);
         fetch(base + '?' + pp + 'probe=1', probeCtrl ? {signal: probeCtrl.signal} : {})
             .then(function(r) { clearTimeout(probeTimer); return r.json(); })
-            .then(function(d) { applyProbe(d); })
-            .catch(function()  { clearTimeout(probeTimer); });
+            .then(function(d) {
+                clearTimeout(fallbackTimer);
+                applyProbe(d);
+                if (!streamStarted) {
+                    // Probe arrivé à temps → choisir le mode optimal
+                    streamStarted = true;
+                    S.step = chooseModeFromProbe(d);
+                    hint.textContent = '';
+                    startStream(0);
+                }
+                // Si stream déjà démarré (fallback), applyProbe a juste mis à jour l'UI
+            })
+            .catch(function() {
+                clearTimeout(probeTimer); clearTimeout(fallbackTimer);
+                if (!streamStarted) { streamStarted = true; hint.textContent = ''; startStream(0); }
+            });
     } else {
         startStream(0);
     }
