@@ -116,7 +116,7 @@ function afficher_liens(): void {
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <meta name="csrf-token" content="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
     <title>ShareBox</title>
-    <link rel="stylesheet" href="/share/style.css?v=d01fe9ad">
+    <link rel="stylesheet" href="/share/style.css?v=<?= filemtime(__DIR__ . '/style.css') ?>">
 </head>
 <body>
 
@@ -152,6 +152,6 @@ function afficher_liens(): void {
     </section>
 </div>
 
-<script src="/share/app.js?v=e7fd5558"></script>
+<script src="/share/app.js?v=<?= filemtime(__DIR__ . '/app.js') ?>"></script>
 </body>
 </html>
