@@ -23,16 +23,24 @@ Share files and folders instantly with human-readable links. Stream videos direc
 - **Password protection** -- optional, bcrypt-hashed
 - **Expiration** -- set links to auto-expire after a given duration
 - **Video streaming** -- built-in player with ffmpeg transcoding
-  - Smart remux for browser-compatible codecs (near-zero CPU)
-  - Full transcode fallback for HEVC/x265/unsupported codecs
+  - **Probe-first stream selection** -- ffprobe before playback: H.264 → remux (near-zero CPU), HEVC/AV1 → transcode
+  - Smart remux for H.264: repackage to fMP4 without re-encoding video, audio transcoded to AAC
+  - Full transcode for HEVC/x265/AV1 and incompatible codecs (libx264 ultrafast)
+  - **PGS/VOBSUB burn-in** -- image subtitles (BluRay PGS, DVD VOBSUB) burned into the stream via `filter_complex`; `scale2ref` ensures correct positioning regardless of source resolution or anamorphic SAR
   - Adaptive quality: 480p, 720p, 1080p
-  - Seek support in transcoded streams
+  - Seek support in all stream modes (keyframe-accurate)
   - Audio track selection
-  - Subtitle extraction to WebVTT
+  - Subtitle track selection: text tracks extracted to WebVTT (JS overlay), image tracks burned in
   - ffprobe results cached in SQLite (instant reload, no re-probe on unchanged files)
   - vmtouch page-cache warming for files < 2 GB (reduces I/O latency at stream start)
-  - A/V sync hardening: `aresample async=2000`, `-g 50`, `-thread_queue_size 512`, `-max_muxing_queue_size 1024`
+  - A/V sync hardening: `aresample async=3000`, `-g 50`, `-thread_queue_size 512`, `-max_muxing_queue_size 1024`
+  - **Stall watchdog with exponential backoff** -- retry timeout grows as `base × 2^n` (cap 2 min), differentiated by mode: remux 10 s, transcode 20 s, burn-in 30 s
   - **Resync button** -- one-click A/V resync at current position without reloading the page
+  - **Keyboard shortcuts** -- Space/K play-pause, ←/→ seek ±10 s, F fullscreen, M mute
+  - **Volume slider** -- compact range input with orange fill; volume, mute and playback speed persisted in `localStorage`
+  - **Seekbar tooltip** -- hover preview shows timecode at cursor position
+  - Binary search subtitle cue lookup (O(log n) on seek, O(1) amortized forward)
+  - rAF throttle on `timeupdate` -- all seek-bar DOM writes go through `requestAnimationFrame`
 - **Folder sharing** -- browsable directory listing with per-file download
 - **ZIP download** -- download entire folders as a single ZIP archive
 - **QR code generation** -- pure JavaScript, no external library

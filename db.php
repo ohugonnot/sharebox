@@ -48,8 +48,15 @@ function get_db(): PDO {
         )
     ");
 
-    // Purge les entrées probe_cache dont le fichier n'est plus partagé
-    $db->exec("DELETE FROM probe_cache WHERE path NOT IN (SELECT path FROM links)");
+    // Purge les entrées probe_cache dont le fichier n'est plus partagé.
+    // On vérifie à la fois les liens fichier (égalité exacte) et les liens dossier
+    // (le probe_cache.path commence par links.path) pour ne pas purger les fichiers
+    // dans un dossier partagé à chaque requête stream.
+    $db->exec("DELETE FROM probe_cache WHERE NOT EXISTS (
+        SELECT 1 FROM links
+        WHERE probe_cache.path = links.path
+           OR probe_cache.path LIKE rtrim(links.path, '/') || '/%'
+    )");
 
     // Migration : ajouter password_plain si la colonne n'existe pas encore
     $cols = $db->query("PRAGMA table_info(links)")->fetchAll();
