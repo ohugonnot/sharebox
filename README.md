@@ -33,7 +33,7 @@ Share files and folders instantly with human-readable links. Stream videos direc
   - Subtitle track selection: text tracks extracted to WebVTT (JS overlay), image tracks burned in
   - ffprobe results cached in SQLite (instant reload, no re-probe on unchanged files)
   - vmtouch page-cache warming for files < 2 GB (reduces I/O latency at stream start)
-  - A/V sync hardening: `aresample async=3000`, `-g 50`, `-thread_queue_size 512`, `-max_muxing_queue_size 1024`
+  - A/V sync hardening: `aresample async=3000` (no `first_pts=0` in remux — preserves video PTS alignment), `-g 50`, `-thread_queue_size 512`, `-max_muxing_queue_size 1024`
   - **Stall watchdog with exponential backoff** -- retry timeout grows as `base × 2^n` (cap 2 min), differentiated by mode: remux 10 s, transcode 20 s, burn-in 30 s
   - **Resync button** -- one-click A/V resync at current position without reloading the page
   - **Keyboard shortcuts** -- Space/K play-pause, ←/→ seek ±10 s, F fullscreen, M mute
