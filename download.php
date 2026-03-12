@@ -1009,9 +1009,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     // transcode sans burnSub : 20s  (décode depuis keyframe)
     // transcode avec burnSub : 30s  (décode + overlay = très lourd sur 4K HEVC)
     function stallTimeout() {
-        if (S.confirmed === 'remux') return 10000;
-        if (S.burnSub >= 0)         return 30000;
-        return 20000;
+        var base = S.confirmed === 'remux' ? 10000 : (S.burnSub >= 0 ? 30000 : 20000);
+        return Math.min(base * Math.pow(2, S.stallCount), 120000); // exponentiel, cap 2min
     }
     function startStallWatchdog() {
         clearStallWatchdog();
