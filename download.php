@@ -1002,6 +1002,17 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     });
 
     // ── Stall watchdog ────────────────────────────────────────────────────────
+    // Timeout différencié : transcode HEVC/burnSub est lent à démarrer (décodage
+    // depuis le keyframe précédent + filtre overlay). Un timeout trop court crée
+    // une boucle de retries qui spawne plusieurs ffmpeg en parallèle.
+    // remux  : 10s  (quasi zéro délai, copie vidéo)
+    // transcode sans burnSub : 20s  (décode depuis keyframe)
+    // transcode avec burnSub : 30s  (décode + overlay = très lourd sur 4K HEVC)
+    function stallTimeout() {
+        if (S.confirmed === 'remux') return 10000;
+        if (S.burnSub >= 0)         return 30000;
+        return 20000;
+    }
     function startStallWatchdog() {
         clearStallWatchdog();
         if (!isVideo || S.confirmed === 'native') return;
@@ -1015,7 +1026,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                 hint.textContent = 'Retry #' + (++S.stallCount) + '...'; hint.className = 'player-hint';
                 startStream(realTime());
             }
-        }, 10000);
+        }, stallTimeout());
     }
     function clearStallWatchdog() {
         clearTimeout(S.stallTimer); clearInterval(S.stallInterval);
