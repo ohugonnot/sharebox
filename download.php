@@ -249,18 +249,19 @@ if (is_file($resolvedPath)) {
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
             if ($burnSub >= 0) {
                 // Burn-in sous-titre image (PGS/VOBSUB) via filter_complex
-                // Overlay sur la vidéo native puis scale : compatible 1080p et 4K
-                // (le pad=1920:1080 cassait les fichiers 4K → offsets négatifs → crash ffmpeg)
+                // scale2ref : redimensionne le canvas PGS aux dimensions exactes de la vidéo
+                // avant l'overlay. Corrige les décalages quand PGS déclaré ≠ résolution vidéo
+                // (ex : vidéo 1440x1080 SAR 4:3 mais PGS 1920x1080, ou vidéo croppée).
                 stream_log('TRANSCODE+SUB start | quality=' . $quality . 'p audio=' . $audioTrack . ' burnSub=' . $burnSub . ' start=' . $startSec . ' | ' . basename($resolvedPath));
-                $fc = '"[0:v][0:s:' . $burnSub . ']overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v]"';
+                $fc = '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v]"';
                 // Pas de fine seek pour burnSub : le fine seek décode N sec de 4K avant le 1er frame
                 // → trop lent → navigateur time out. On accepte ±5s d'imprécision.
                 $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
                     . ' -filter_complex ' . $fc
                     . ' -map "[v]" -map 0:a:' . $audioTrack
-                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 50'
-                    . ' -c:a aac -ac 2 -b:a 128k'
-                    . ' -af "aresample=async=2000:first_pts=0"'
+                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 50 -threads 4'
+                    . ' -c:a aac -ac 2 -b:a 192k'
+                    . ' -af "aresample=async=3000:first_pts=0"'
                     . ' -avoid_negative_ts make_zero -start_at_zero'
                     . ' -max_muxing_queue_size 1024'
                     . ' -min_frag_duration 300000'
@@ -269,10 +270,10 @@ if (is_file($resolvedPath)) {
             } else {
                 stream_log('TRANSCODE start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
                 $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                    . $audioMap . ' -c:v libx264 -preset ultrafast -crf 23 -g 50'
+                    . $audioMap . ' -c:v libx264 -preset ultrafast -crf 23 -g 50 -threads 4'
                     . ' -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
-                    . ' -c:a aac -ac 2 -b:a 128k'
-                    . ' -af "aresample=async=2000:first_pts=0"'
+                    . ' -c:a aac -ac 2 -b:a 192k'
+                    . ' -af "aresample=async=3000:first_pts=0"'
                     . ' -avoid_negative_ts make_zero -start_at_zero'
                     . ' -max_muxing_queue_size 1024'
                     . ' -min_frag_duration 300000'
@@ -804,6 +805,11 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .vol-slider::-moz-range-progress { height:3px; border-radius:2px; background:#f0a030; }
 .vol-slider::-moz-range-thumb { width:11px; height:11px; border-radius:50%; background:var(--accent); cursor:pointer; border:none; }
 @media(max-width:480px){.vol-slider{width:44px}}
+.mode-badge { font-family:var(--font-mono); font-size:.68rem; font-weight:700; padding:.18rem .45rem; border-radius:3px; border:1px solid; cursor:pointer; white-space:nowrap; transition:all .15s; letter-spacing:.04em; }
+.mode-badge.m-native   { color:#6b7280; border-color:rgba(255,255,255,.1);  background:rgba(255,255,255,.03); }
+.mode-badge.m-remux    { color:#4ade80; border-color:rgba(74,222,128,.25);  background:rgba(74,222,128,.07); }
+.mode-badge.m-transcode{ color:#f0a030; border-color:rgba(240,160,48,.25); background:rgba(240,160,48,.07); }
+.mode-badge:hover { filter:brightness(1.25); }
     </style>
 </head>
 <body>
@@ -868,6 +874,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     var volSlider   = document.getElementById('vol-slider');
     var speedBtn    = document.getElementById('speed-btn');
     var fsBtn       = document.getElementById('fs-btn');
+    var modeBtn     = null;
     var seekBar     = document.getElementById('seek-bar');
     var seekFill    = document.getElementById('seek-fill');
     var seekThumb   = document.getElementById('seek-thumb');
@@ -957,6 +964,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         clearTimeout(S.videoWidthTimer);
         Subs.resetIdx();
         lockSize();
+        updateModeUI();
         player.src = isVideo ? buildUrl(S.confirmed || S.step, S.audioIdx, S.offset) : base + '?' + pp + 'stream=1';
         player.load();
         player.playbackRate = S.speed;
@@ -980,6 +988,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         if (!S.confirmed && (S.step === 'native' || S.step === 'remux')) {
             S.step = S.confirmed = 'transcode';
             hint.textContent = 'Transcodage en cours...'; hint.className = 'player-hint transcoding';
+            updateModeUI();
             startStream(pos);
         } else {
             hint.textContent = 'Lecture impossible. Utilisez le bouton T\u00E9l\u00E9charger.';
@@ -994,7 +1003,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         if ((mode === 'native' || mode === 'remux') && isVideo && !S.confirmed) {
             S.videoWidthTimer = setTimeout(function() {
                 if (player.videoWidth === 0) onFail();
-                else { S.confirmed = mode; hint.textContent = ''; }
+                else { S.confirmed = mode; hint.textContent = ''; updateModeUI(); }
             }, mode === 'native' ? 2000 : 1500);
             return;
         }
@@ -1177,6 +1186,14 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         if (volSlider) { volSlider.value = player.muted ? 0 : player.volume; volSlider.style.setProperty('--vol-pct', pct + '%'); }
         muteBtn.innerHTML = (player.muted || player.volume === 0) ? svgMute : svgVol;
     }
+    function updateModeUI() {
+        if (!modeBtn) return;
+        var m = S.confirmed || S.step;
+        var label = m === 'native' ? 'NATIF' : m === 'remux' ? 'REMUX' : 'x264\u00A0' + S.quality + 'p' + (S.burnSub >= 0 ? '\u00A0\u2605' : '');
+        var cls   = m === 'remux' ? 'm-remux' : m === 'transcode' ? 'm-transcode' : 'm-native';
+        modeBtn.textContent = label;
+        modeBtn.className = 'mode-badge ' + cls;
+    }
 
     // ── Probe → sélecteurs de piste ──────────────────────────────────────────
     function applyProbe(d) {
@@ -1279,7 +1296,22 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 0.1); return; }
             hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(realTime());
         });
-        trackBar.appendChild(resyncBtn); trackBar.style.display = 'flex';
+        trackBar.appendChild(resyncBtn);
+        // Badge mode courant — cliquable pour forcer un mode
+        modeBtn = document.createElement('span');
+        modeBtn.title = 'Cliquer pour changer le mode de lecture';
+        updateModeUI();
+        modeBtn.addEventListener('click', function() {
+            var pos = realTime(), m = S.confirmed || S.step;
+            // Cycle : remux → x264-480p → x264-720p → x264-1080p → remux
+            if (m === 'remux' || m === 'native') { S.step = S.confirmed = 'transcode'; S.quality = 480; }
+            else if (S.quality === 480)           { S.quality = 720; }
+            else if (S.quality === 720)           { S.quality = 1080; }
+            else                                  { S.step = S.confirmed = 'remux'; S.quality = 720; }
+            S.burnSub = -1; Subs.cues = []; if (Subs._div) Subs._div.innerHTML = '';
+            hint.textContent = ''; updateModeUI(); startStream(pos);
+        });
+        trackBar.appendChild(modeBtn); trackBar.style.display = 'flex';
         // Raccourcis clavier
         document.addEventListener('keydown', function(e) {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
