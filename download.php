@@ -106,15 +106,22 @@ if (is_file($resolvedPath)) {
         $cached = $db->prepare("SELECT result FROM probe_cache WHERE path = :p AND mtime = :m");
         $cached->execute([':p' => $resolvedPath, ':m' => $mtime]);
         if ($row = $cached->fetch()) {
-            echo $row['result'];
-            exit;
+            // Invalider les entrées cache sans isMP4/isMKV (champs ajoutés après coup)
+            $decoded = json_decode($row['result'], true);
+            if (isset($decoded['isMP4']) && isset($decoded['isMKV'])) {
+                echo $row['result'];
+                exit;
+            }
         }
 
-        $cmd = 'timeout 10 ffprobe -v error -show_entries format=duration -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
+        $cmd = 'timeout 10 ffprobe -v error -show_entries format=duration,format_name -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
             . escapeshellarg($resolvedPath) . ' 2>/dev/null';
         $output = shell_exec($cmd);
         $data = json_decode($output, true);
         $duration = (float)($data['format']['duration'] ?? 0);
+        $formatName = $data['format']['format_name'] ?? '';
+        $isMP4 = str_contains($formatName, 'mp4') || str_contains($formatName, 'mov');
+        $isMKV = str_contains($formatName, 'matroska') || str_contains($formatName, 'webm');
         $audio = [];
         $subs = [];
         $audioIdx = 0;
@@ -142,7 +149,7 @@ if (is_file($resolvedPath)) {
                 $subIdx++;
             }
         }
-        $result = json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec]);
+        $result = json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec, 'isMP4' => $isMP4, 'isMKV' => $isMKV]);
 
         // Stocker en cache (best-effort : on ignore si la DB est encore verrouillée)
         try {
@@ -218,7 +225,7 @@ if (is_file($resolvedPath)) {
             stream_log('REMUX start | audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
             $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
                 . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
-                . ' -af "aresample=async=2000:first_pts=0"'
+                . ' -af "aresample=async=3000"'
                 . ' -avoid_negative_ts make_zero -start_at_zero'
                 . ' -max_muxing_queue_size 1024'
                 . ' -min_frag_duration 300000'
@@ -766,8 +773,16 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 .player-card:-webkit-full-screen .player-controls .track-bar { border-top:none; }
 .player-card:fullscreen .player-controls.fs-hidden,
 .player-card:-webkit-full-screen .player-controls.fs-hidden { opacity:0; pointer-events:none; }
+.player-card.hide-cursor,.player-card.hide-cursor * { cursor:none !important; }
 video { display:block; width:100%; max-height:78vh; background:#000; object-fit:contain; }
 .sub-overlay { position:absolute; left:0; right:0; text-align:center; pointer-events:none; padding:0 6%; z-index:10; font-size:1.5rem; }
+.play-icon-overlay { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:72px; height:72px; background:rgba(0,0,0,.5); border-radius:50%; display:flex; align-items:center; justify-content:center; pointer-events:none; opacity:0; transition:opacity .2s; z-index:15; }
+.play-icon-overlay svg { width:30px; height:30px; color:#fff; }
+.play-icon-overlay.visible { opacity:1; }
+@keyframes popPause { 0%{transform:translate(-50%,-50%) scale(.6);opacity:.8} 100%{transform:translate(-50%,-50%) scale(1);opacity:1} }
+@keyframes popPlay  { 0%{transform:translate(-50%,-50%) scale(.6);opacity:.9} 50%{transform:translate(-50%,-50%) scale(1);opacity:.9} 100%{transform:translate(-50%,-50%) scale(1.4);opacity:0} }
+.play-icon-overlay.pop-pause { animation:popPause .2s ease forwards; }
+.play-icon-overlay.pop-play  { animation:popPlay .4s ease forwards; }
 audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40,.8); }
 .player-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:10; }
 .player-hint-text { font-family:var(--font-sans); font-size:.78rem; font-weight:600; padding:.4rem 1rem; border-radius:var(--radius-sm); background:rgba(12,14,20,.82); border:1px solid rgba(255,255,255,.08); color:var(--text-muted); backdrop-filter:blur(6px); letter-spacing:.01em; transition:color .2s; white-space:nowrap; }
@@ -784,9 +799,11 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .seek-bar.dragging .seek-fill { transition:none; }
 .seek-time { display:flex; align-items:center; gap:.3rem; font-size:.72rem; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap; }
 .seek-time .current { color:var(--text-primary); font-weight:600; }
-.ctrl-row { display:flex; align-items:center; gap:.45rem; margin-top:.3rem; }
+.ctrl-row { position:relative; display:flex; align-items:center; gap:.45rem; margin-top:.3rem; }
 .ctrl-spacer { flex:1; }
-.ctrl-play,.ctrl-mute { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; background:transparent; color:var(--text-muted); border:1px solid rgba(255,255,255,.08); cursor:pointer; flex-shrink:0; transition:all .15s; }
+.ctrl-row .ctrl-play { position:absolute; left:50%; transform:translateX(-50%); }
+.ctrl-row .ctrl-play:active { transform:translateX(-50%) scale(.92); }
+.ctrl-play,.ctrl-mute { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; background:transparent; color:var(--text-muted); border:1px solid rgba(255,255,255,.08); cursor:pointer; flex-shrink:0; transition:background .15s,color .15s,border-color .15s; outline:none; -webkit-tap-highlight-color:transparent; }
 .ctrl-play:hover,.ctrl-mute:hover { background:rgba(255,255,255,.06); color:var(--text-primary); border-color:rgba(255,255,255,.15); }
 .ctrl-play:active,.ctrl-mute:active { transform:scale(.92); }
 .track-bar { display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; padding:.55rem 0 .3rem; border-top:1px solid rgba(255,255,255,.04); margin-top:.4rem; }
@@ -823,6 +840,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         <div class="player-video-wrap">
             <{$tag} id="player" {$controlsAttr} autoplay playsinline preload="metadata" crossorigin="anonymous"></{$tag}>
             <div class="player-hint" id="hint"><span class="player-hint-text">Chargement...</span></div>
+            <div id="video-click-area" style="position:absolute;inset:0;z-index:6;cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent;user-select:none"></div>
+            <div id="play-icon-overlay" class="play-icon-overlay"></div>
         </div>
         <div class="player-controls">
             <div class="seek-bar" id="seek-bar" style="display:none">
@@ -835,6 +854,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             <div class="ctrl-row" id="ctrl-row" style="display:none">
                 <div class="seek-time" id="seek-time">
                     <span class="current" id="time-current">0:00</span>
+                    <span class="sep">/</span>
                     <span id="time-total">0:00</span>
                 </div>
                 <div class="ctrl-spacer"></div>
@@ -901,7 +921,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     var S = {
         step: 'native', confirmed: '',   // machine d'état stream
         offset: 0,      duration: 0,     // position et durée totale
-        audioIdx: 0,    quality: 720,    burnSub: -1,
+        audioIdx: 0,    quality: 720,    burnSub: -1,  isMP4: false,  isMKV: false,
         speed: 1,
         dragging: false, seekPending: false, rafPending: false,
         hasFailed: false, stallCount: 0,
@@ -938,16 +958,17 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     }
     function showFsControls() {
         playerCtrl.classList.remove('fs-hidden');
+        playerCard.classList.remove('hide-cursor');
         clearTimeout(S.fsHideTimer);
-        if (isFs() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); }, 3000);
+        if (isFs() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); playerCard.classList.add('hide-cursor'); }, 3000);
     }
     document.addEventListener('fullscreenchange', function() {
         if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
-        if (isFs()) showFsControls(); else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); }
+        if (isFs()) showFsControls(); else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
     });
     document.addEventListener('webkitfullscreenchange', function() {
         if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
-        if (isFs()) showFsControls(); else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); }
+        if (isFs()) showFsControls(); else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
     });
     playerCard.addEventListener('mousemove',  function() { if (isFs()) showFsControls(); });
     playerCard.addEventListener('click',      function() { if (isFs()) showFsControls(); });
@@ -972,12 +993,37 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     }
 
     // Choisit le mode optimal à partir du probe (avant de démarrer le stream)
+    function canPlay(mime) { var t = document.createElement('video').canPlayType(mime); return t === 'probably' || t === 'maybe'; }
+
     function chooseModeFromProbe(d) {
         if (!d || !d.videoCodec) return 'native';
-        var c = d.videoCodec.toLowerCase();
-        if (c === 'h264') return 'remux';    // repackage MKV→MP4, zéro CPU vidéo
-        if (c)            return 'transcode'; // HEVC, AV1, VP9, etc.
-        return 'native';
+        var c  = d.videoCodec.toLowerCase();
+        var ac = d.audio && d.audio.length > 0 ? (d.audio[0].codec || '').toLowerCase() : '';
+        if (c === 'h264') {
+            // MP4 : natif si audio compatible, sinon transcode
+            if (d.isMP4) {
+                return (ac === 'aac' || ac === 'mp3') ? 'native' : 'transcode';
+            }
+            // MKV uniquement → remux (seek aligné sur keyframe, testé OK 83ms)
+            // AVI/autres → transcode
+            return d.isMKV ? 'remux' : 'transcode';
+        }
+        // VP9 WebM : natif si le browser supporte (Chrome/Firefox oui, Safari non)
+        if (c === 'vp9' || c === 'vp8') {
+            if (d.isMKV && canPlay('video/webm; codecs="vp9"')) return 'native';
+            return 'transcode';
+        }
+        // AV1 : natif si supporté (Chrome 70+, Firefox 67+, Safari 17+)
+        if (c === 'av1' || c === 'av01') {
+            if (canPlay('video/webm; codecs="av01.0.05M.08"') || canPlay('video/mp4; codecs="av01"')) return 'native';
+            return 'transcode';
+        }
+        // HEVC : natif sur Safari/macOS uniquement
+        if (c === 'hevc') {
+            if (canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"')) return 'native';
+            return 'transcode';
+        }
+        return 'transcode';
     }
 
     function onFail() {
@@ -1198,6 +1244,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     // ── Probe → sélecteurs de piste ──────────────────────────────────────────
     function applyProbe(d) {
         if (!d) return;
+        if (d.isMP4) S.isMP4 = true;
+        if (d.isMKV) S.isMKV = true;
         var hasControls = false;
         if (d.duration > 0) { S.duration = d.duration; timeTotal.textContent = fmtTime(S.duration); seekBar.style.display = 'flex'; }
         if (d.audio && d.audio.length > 1) {
@@ -1246,21 +1294,45 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     if (isVideo) {
         ctrlRow.style.display = 'flex';
         // Play/pause
-        playBtn.addEventListener('click', function() { if (player.paused) player.play().catch(function(){}); else player.pause(); });
-        player.addEventListener('play',    function() { playBtn.innerHTML = svgPause; });
-        player.addEventListener('playing', function() { playBtn.innerHTML = svgPause; });
-        player.addEventListener('pause',   function() { playBtn.innerHTML = svgPlay; });
-        player.addEventListener('waiting', function() { playBtn.innerHTML = svgPause; });
-        player.addEventListener('ended',   function() { playBtn.innerHTML = svgPlay; });
+        var svgPauseIcon = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+        var svgPlayIcon  = '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
+        var playIconEl = document.getElementById('play-icon-overlay');
+        var popTimer = null;
+        function showPlayIcon(pausing) {
+            clearTimeout(popTimer);
+            playIconEl.innerHTML = pausing ? svgPauseIcon : svgPlayIcon;
+            playIconEl.classList.remove('pop-pause', 'pop-play', 'visible');
+            void playIconEl.offsetWidth;
+            playIconEl.classList.add(pausing ? 'pop-pause' : 'pop-play');
+            if (!pausing) popTimer = setTimeout(function() { playIconEl.classList.remove('pop-play'); }, 450);
+        }
+        // Click sur la zone vidéo : simple tap = pause/play, double tap = fullscreen
+        var clickArea = document.getElementById('video-click-area');
+        var tapTimer = null;
+        clickArea.addEventListener('click', function() {
+            if (tapTimer) {
+                clearTimeout(tapTimer);
+                tapTimer = null;
+                toggleFs();
+            } else {
+                tapTimer = setTimeout(function() {
+                    tapTimer = null;
+                    if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+                    else               { player.pause(); showPlayIcon(true); }
+                }, 250);
+            }
+        });
+        playBtn.addEventListener('click', function() {
+            if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+            else               player.pause();
+        });
+        player.addEventListener('play',    function() { playBtn.innerHTML = svgPlay; });
+        player.addEventListener('playing', function() { playBtn.innerHTML = svgPlay; playIconEl.classList.remove('visible', 'pop-pause'); if (isFs()) showFsControls(); });
+        player.addEventListener('pause',   function() { playBtn.innerHTML = svgPause; playIconEl.innerHTML = svgPauseIcon; playIconEl.classList.remove('pop-pause','pop-play'); playIconEl.classList.add('visible'); });
+        player.addEventListener('waiting', function() { playBtn.innerHTML = svgPlay; });
+        player.addEventListener('ended',   function() { playBtn.innerHTML = svgPause; });
         // Fullscreen
         if (fsBtn) fsBtn.addEventListener('click', toggleFs);
-        player.addEventListener('dblclick', toggleFs);
-        var tapTimer = null;
-        player.addEventListener('touchend', function(e) {
-            if (e.changedTouches.length !== 1) return;
-            if (tapTimer) { clearTimeout(tapTimer); tapTimer = null; toggleFs(); }
-            else tapTimer = setTimeout(function() { tapTimer = null; if (player.paused) player.play().catch(function(){}); else player.pause(); }, 250);
-        });
         // Volume
         var savedVol = parseFloat(localStorage.getItem('player_volume') || '1');
         player.volume = isNaN(savedVol) ? 1 : Math.max(0, Math.min(1, savedVol));
@@ -1303,11 +1375,12 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         updateModeUI();
         modeBtn.addEventListener('click', function() {
             var pos = realTime(), m = S.confirmed || S.step;
-            // Cycle : remux → x264-480p → x264-720p → x264-1080p → remux
-            if (m === 'remux' || m === 'native') { S.step = S.confirmed = 'transcode'; S.quality = 480; }
-            else if (S.quality === 480)           { S.quality = 720; }
-            else if (S.quality === 720)           { S.quality = 1080; }
-            else                                  { S.step = S.confirmed = 'remux'; S.quality = 720; }
+            // Cycle : native → [remux si MKV] → x264-480p → x264-720p → x264-1080p → native
+            if (m === 'native')         { S.step = S.confirmed = S.isMKV ? 'remux' : 'transcode'; S.quality = 480; }
+            else if (m === 'remux')     { S.step = S.confirmed = 'transcode'; S.quality = 480; }
+            else if (S.quality === 480) { S.quality = 720; }
+            else if (S.quality === 720) { S.quality = 1080; }
+            else                        { S.step = S.confirmed = 'native'; S.quality = 720; startStream(pos); return; }
             S.burnSub = -1; Subs.cues = []; if (Subs._div) Subs._div.innerHTML = '';
             hint.textContent = ''; updateModeUI(); startStream(pos);
         });
@@ -1315,7 +1388,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         // Raccourcis clavier
         document.addEventListener('keydown', function(e) {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
-            if (e.key === ' ' || e.key === 'k') { e.preventDefault(); if (player.paused) player.play().catch(function(){}); else player.pause(); }
+            if (e.key === ' ' || e.key === 'k') { e.preventDefault(); if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); } else { player.pause(); showPlayIcon(true); } }
             else if (e.key === 'ArrowLeft')  { e.preventDefault(); if (S.duration) seekToFraction(Math.max(0, realTime() - 10) / S.duration); }
             else if (e.key === 'ArrowRight') { e.preventDefault(); if (S.duration) seekToFraction(Math.min(S.duration, realTime() + 10) / S.duration); }
             else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleFs(); }
