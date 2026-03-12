@@ -79,7 +79,7 @@ démarrer le stream, `chooseModeFromProbe()` choisit remux (H.264) ou transcode 
 ffmpeg -ss <seek> -thread_queue_size 512 -fflags +genpts+discardcorrupt -i <file>
   -map 0:v:0 -map 0:a:N
   -c:v copy -c:a aac -ac 2 -b:a 192k
-  -af "aresample=async=3000:first_pts=0"
+  -af "aresample=async=3000"
   -avoid_negative_ts make_zero -start_at_zero
   -max_muxing_queue_size 1024 -min_frag_duration 300000
   -movflags frag_keyframe+empty_moov+default_base_moof
@@ -144,10 +144,14 @@ native → remux → transcode-480p / transcode-720p / transcode-1080p
 ```js
 // JS fetch ?probe=1 avant de démarrer
 chooseModeFromProbe(d):
-  h264 → 'remux'
+  h264 + isMP4 + audio aac/mp3 → 'native'  (navigateur lit directement)
+  h264 + MKV ou audio incompatible (AC3/DTS) → 'remux'  ✓ testé, écart PTS < 100ms constant
   HEVC/AV1/autre → 'transcode'
   fallback 2s si probe lent → startStream() sans attendre
 ```
+
+Probe JSON inclut `isMP4` (format_name contient mp4/mov). Entrées cache sans ce champ sont
+invalidées automatiquement à la prochaine requête probe.
 
 ### Stall watchdog exponentiel
 
