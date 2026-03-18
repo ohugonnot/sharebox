@@ -48,6 +48,15 @@ function get_db(): PDO {
         )
     ");
 
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS net_speed (
+            ts INTEGER NOT NULL,
+            upload REAL NOT NULL,
+            download REAL NOT NULL
+        )
+    ");
+    $db->exec("CREATE INDEX IF NOT EXISTS idx_net_speed_ts ON net_speed(ts)");
+
     // Purge les entrées probe_cache dont le fichier n'est plus partagé.
     // On vérifie à la fois les liens fichier (égalité exacte) et les liens dossier
     // (le probe_cache.path commence par links.path) pour ne pas purger les fichiers

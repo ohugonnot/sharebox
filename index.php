@@ -134,6 +134,8 @@ function afficher_liens(): void {
         </div>
     </header>
 
+    <?php include __DIR__ . '/dashboard.php'; ?>
+
     <section class="section">
         <div class="section-header">Liens actifs</div>
         <div id="links-container">
