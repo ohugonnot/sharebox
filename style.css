@@ -1041,3 +1041,305 @@ body::before {
     color: var(--text-secondary);
     border-color: var(--border-strong);
 }
+
+/* ============================================================================
+ * DASHBOARD SYSTÈME
+ * Section collapsible entre l'en-tête et les liens actifs
+ * ============================================================================ */
+
+:root {
+    --dash-up:   #f78166;
+    --dash-down: #58a6ff;
+    --dash-ok:   #66bb6a;
+    --dash-warn: #f0a030;
+    --dash-crit: #ef5350;
+}
+
+/* === Section collapsible (<details>) === */
+
+.dash-section {
+    margin-bottom: 2rem;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    overflow: hidden;
+}
+
+.dash-summary {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    padding: .75rem 1.1rem;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    font-size: .75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-muted);
+    transition: background .12s;
+}
+
+.dash-summary::-webkit-details-marker { display: none; }
+.dash-summary:hover { background: rgba(255,255,255,.03); }
+
+.dash-chevron {
+    font-style: normal;
+    font-size: .65rem;
+    transition: transform .2s ease;
+    display: inline-block;
+}
+
+.dash-section[open] .dash-chevron {
+    transform: rotate(90deg);
+}
+
+.dash-status-pills {
+    margin-left: auto;
+    display: flex;
+    gap: .4rem;
+    align-items: center;
+}
+
+.dash-pill {
+    font-size: .7rem;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: .1rem .45rem;
+    border-radius: 999px;
+    background: rgba(255,255,255,.05);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+    transition: border-color .4s ease, background .4s ease, color .4s ease;
+}
+
+.dash-pill.is-ok   { border-color: rgba(102,187,106,.5); color: #66bb6a; }
+.dash-pill.is-warn { border-color: rgba(240,160,48,.45); color: #f0a030; }
+.dash-pill.is-crit { border-color: rgba(239,83,80,.5);  color: #ef5350; background: rgba(239,83,80,.08); }
+
+/* === Corps du dashboard === */
+
+.dash-body {
+    padding: .75rem 1rem 1rem;
+    border-top: 1px solid var(--border);
+}
+
+/* === Grille 4 cartes === */
+
+.dash-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: .6rem;
+    margin-bottom: .75rem;
+}
+
+/* === Carte métrique === */
+
+.dash-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: .75rem .9rem;
+    min-width: 0;
+}
+
+.dash-card-title {
+    font-size: .65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-muted);
+    margin-bottom: .4rem;
+}
+
+.dash-metric-main {
+    font-size: 1.15rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+    line-height: 1.1;
+    margin-bottom: .2rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dash-metric-sub {
+    font-size: .72rem;
+    color: var(--text-secondary);
+    margin-bottom: .5rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* === Barre de progression === */
+
+.dash-bar {
+    height: 4px;
+    background: var(--bg-surface);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: .3rem;
+}
+
+.dash-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width .4s ease, background-color .4s ease;
+    background: var(--dash-ok);
+}
+
+/* === Mini barres empilées (RAM) === */
+
+.dash-mini-bars {
+    display: flex;
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+    gap: 1px;
+    margin-bottom: .3rem;
+    background: var(--bg-surface);
+}
+
+.dash-mini-bar {
+    height: 100%;
+    transition: width .4s ease;
+}
+
+/* === Sous-titre card === */
+
+.dash-subtitle {
+    font-size: .7rem;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+}
+
+/* === Ligne température === */
+
+.dash-temp-line {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    margin-top: .35rem;
+    padding-top: .3rem;
+    border-top: 1px solid var(--border);
+}
+
+.dash-temp-label {
+    font-size: .65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.dash-temp-val {
+    font-size: .78rem;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--dash-ok);
+}
+
+/* === Sous-sections collapsibles (<details> imbriqués) === */
+
+.dash-subsection {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    margin-bottom: .5rem;
+}
+
+.dash-subsection summary {
+    padding: .55rem .85rem;
+    cursor: pointer;
+    list-style: none;
+    font-size: .72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--text-muted);
+    user-select: none;
+    transition: background .12s;
+}
+
+.dash-subsection summary::-webkit-details-marker { display: none; }
+.dash-subsection summary:hover { background: rgba(255,255,255,.03); }
+
+.dash-subsection > div,
+.dash-subsection > canvas,
+.dash-subsection > [style] {
+    padding: .5rem .85rem .75rem;
+    border-top: 1px solid var(--border);
+}
+
+/* Graphe réseau 7j */
+#dash-net-graph-section > div {
+    padding: .65rem .85rem .85rem;
+}
+
+/* === Torrents === */
+
+.dash-torrents-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .6rem;
+}
+
+.dash-torrent-item {
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+    padding: .45rem 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.dash-torrent-item:last-child { border-bottom: none; }
+
+.dash-torrent-name {
+    font-size: .78rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dash-torrent-meta {
+    font-size: .7rem;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+}
+
+.dash-empty {
+    font-size: .78rem;
+    color: var(--text-muted);
+    padding: .4rem 0;
+    text-align: center;
+}
+
+/* === Responsive === */
+
+@media (max-width: 900px) {
+    .dash-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 600px) {
+    .dash-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .dash-torrents-row {
+        grid-template-columns: 1fr;
+    }
+}
