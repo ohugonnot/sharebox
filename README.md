@@ -22,6 +22,14 @@ Share files and folders instantly with human-readable links. Stream videos direc
 - **Human-readable links** -- slugs generated from filenames (e.g., `/dl/batman-begins-2005-x7k2`)
 - **Password protection** -- optional, bcrypt-hashed
 - **Expiration** -- set links to auto-expire after a given duration
+- **System dashboard** -- real-time server metrics in the admin panel
+  - 4 metric cards: CPU (%), RAM, Disk (usage + I/O busy%), Network (upload/download MB/s)
+  - Color-coded status pills (green/orange/red) visible even when collapsed
+  - 7-day bandwidth history chart (Chart.js, gradient area fills, dark tooltips)
+  - Active torrent list via rtorrent SCGI XML-RPC (filtered ≥ 50 KB/s, sorted by speed)
+  - Adaptive polling: 10 s when expanded, 60 s pill-only when collapsed
+  - CPU & HDD temperature monitoring (coretemp + drivetemp kernel module)
+  - Accordion and graph state persisted in `localStorage`
 - **Video streaming** -- built-in player with ffmpeg transcoding
   - **Probe-first stream selection** -- ffprobe before playback: H.264 → remux (near-zero CPU), HEVC/AV1 → transcode
   - Smart remux for H.264: repackage to fMP4 without re-encoding video, audio transcoded to AAC
@@ -50,8 +58,8 @@ Share files and folders instantly with human-readable links. Stream videos direc
 - **Admin panel** -- protected by HTTP basic auth, manage all share links
 - **CSRF protection** -- token-based protection on all admin actions
 - **Security hardened** -- session fixation prevention, mail header injection protection, ZIP size limits
-- **PHPUnit test suite** -- 44 tests covering security, slug generation, file format utilities
-- **SQLite probe cache** -- `probe_cache` table stores ffprobe results keyed by path+mtime
+- **PHPUnit test suite** -- 69 tests covering security, slug generation, file format utilities, dashboard APIs
+- **SQLite probe cache** -- `probe_cache` table stores ffprobe results keyed by path+mtime; `net_speed` table stores 1-min bandwidth samples with 7-day rolling purge
 
 ## Requirements
 
@@ -61,6 +69,7 @@ Share files and folders instantly with human-readable links. Stream videos direc
 | SQLite | 3.x (via PHP PDO) |
 | ffmpeg / ffprobe | Required for video streaming |
 | Web server | nginx (recommended) or Apache |
+| Cron (optional) | For bandwidth history graph: `* * * * * www-data php /srv/share/cron/record_netspeed.php` |
 
 PHP extensions needed: `pdo_sqlite`, `session`, `json` (usually enabled by default).
 
@@ -232,6 +241,16 @@ sharebox/
 ├── index.php           # Admin panel UI
 ├── download.php        # Public download handler & video player
 ├── app.js              # Admin panel JavaScript
+├── dashboard.php               # System dashboard HTML (included in index.php)
+├── dashboard.js                # Dashboard JS — polling, Chart.js, localStorage
+├── api/
+│   ├── dashboard_helpers.php   # Testable pure parsers (/proc/*, hwmon)
+│   ├── sysinfo.php             # CPU / RAM / Disk / I/O (500 ms window)
+│   ├── speed.php               # Instantaneous network speed (8 s cache)
+│   ├── netspeed_history.php    # 7-day hourly-aggregated bandwidth history
+│   └── active_torrents.php     # rtorrent SCGI XML-RPC interface
+├── cron/
+│   └── record_netspeed.php     # 1-min cron → net_speed table, 7-day purge
 ├── style.css           # Styles (dark theme)
 ├── favicon.svg         # App icon
 ├── nginx.conf.example  # Nginx configuration template
@@ -243,7 +262,10 @@ sharebox/
 │   ├── SecurityTest.php
 │   ├── SlugTest.php
 │   ├── FormatAndMimeTest.php
-│   └── SemaphoreTest.php
+│   ├── SemaphoreTest.php
+│   ├── DashboardSysinfoTest.php
+│   ├── DashboardSpeedTest.php
+│   └── DashboardTorrentsTest.php
 ├── data/               # SQLite database (auto-created, gitignored)
 │   └── share.db
 └── LICENSE
