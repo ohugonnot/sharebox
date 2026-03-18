@@ -65,7 +65,7 @@ echo json_encode([
     'cpu_active_pct' => $cpu['active_pct'],
     'cpu_iowait_pct' => $cpu['iowait_pct'],
     'cpu_idle_pct'   => $cpu['idle_pct'],
-    'cpu_load'       => array_values($load),
+    'cpu_load'       => $load,
     'cpu_cores'      => $cores,
     'ram_total_mb'   => (int)round($total_kb / 1024),
     'ram_used_mb'    => (int)round(($total_kb - $avail_kb) / 1024),
