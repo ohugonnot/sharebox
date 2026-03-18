@@ -41,12 +41,15 @@ Rationale : avec 3 streams long-running + retries + probes + UI admin, 5 (defaul
 | `ctrl.php` | API JSON admin : browse, create, delete, email |
 | `index.php` | UI panel admin |
 | `app.js` | JS panel admin |
+| `monitoring.php` | API JSON monitoring : CPU, RAM, disque, réseau, températures, torrents actifs |
+| `cron_net_speed.php` | Cron 1 min : échantillonne RX/TX et insère dans `net_speed`, purge >7 jours |
 
 ## Tables SQLite
 
 ```sql
 probe_cache (path TEXT PK, mtime INTEGER, result TEXT)  -- cache ffprobe par path+mtime
 links (id, token, path, type, name, password_hash, password_plain, expires_at, created_at, download_count)
+net_speed (id INTEGER PK, ts INTEGER, rx_bytes INTEGER, tx_bytes INTEGER)  -- samples 1 min, purge 7 jours
 ```
 
 SQLite configuré dans `db.php` à chaque connexion :
@@ -205,6 +208,8 @@ S = {
 | `pm.max_children=25` | Workers FPM monopolisés par streams long-running (films 2h+) |
 | Pas de VAAPI | GPU = Matrox G200EH BMC, pas d'iGPU Intel sur ce Xeon serveur |
 | probe_cache purge LIKE | `NOT IN (links.path)` supprimait les probes de fichiers dans dossier partagé |
+| PHPStan level 5 | Analyse statique en CI — détecte les types incorrects et dead code avant merge |
+| CI matrix PHP 8.1/8.2/8.3 | Garantit la compatibilité sur les 3 versions actives simultanément |
 
 ## Optimisations système appliquées
 
@@ -247,3 +252,4 @@ vendor/bin/phpunit
 ```
 
 CI GitHub Actions sur push/PR → badge dans README.
+Matrix PHP 8.1/8.2/8.3 en parallèle + PHPStan level 5.

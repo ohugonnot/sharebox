@@ -4,3 +4,9 @@ vendor/
 .phpunit.cache/
 composer.lock
 /composer
+
+# Test media files
+*.mp4
+*.mov
+*.avi
+*.mkv
