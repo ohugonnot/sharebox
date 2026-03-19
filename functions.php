@@ -36,6 +36,25 @@ function releaseStreamSlot($fp): void {
 }
 
 /**
+ * Acquire a probe slot (non-blocking, max 5 concurrent ffprobe processes).
+ * Returns file pointer or null if all slots busy → caller should return 429.
+ * @return resource|null
+ */
+function acquireProbeSlot(): mixed {
+    for ($i = 1; $i <= 5; $i++) {
+        $fp = fopen("/tmp/sharebox_probe_slot_{$i}.lock", 'w');
+        if ($fp !== false && flock($fp, LOCK_EX | LOCK_NB)) return $fp;
+        if ($fp !== false) fclose($fp);
+    }
+    return null;
+}
+
+function releaseProbeSlot(mixed $fp): void {
+    flock($fp, LOCK_UN);
+    fclose($fp);
+}
+
+/**
  * Formate une taille en octets
  */
 function format_taille(int $bytes): string {
