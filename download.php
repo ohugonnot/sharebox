@@ -129,8 +129,8 @@ if (is_file($resolvedPath)) {
         $videoHeight = 0;
         $videoCodec = '';
         foreach (($data['streams'] ?? []) as $s) {
-            $lang = $s['tags']['language'] ?? '';
-            $title = $s['tags']['title'] ?? '';
+            $lang  = $s['tags']['language'] ?? '';
+            $title = strip_tags($s['tags']['title'] ?? '');
             if ($s['codec_type'] === 'video' && !$videoHeight && isset($s['height'])) {
                 $videoHeight = (int)$s['height'];
                 $videoCodec = $s['codec_name'] ?? '';
@@ -956,8 +956,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     // ── Plein écran ───────────────────────────────────────────────────────────
     function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
     function toggleFs() {
-        if (!isFs()) (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen || playerCard.mozRequestFullScreen).call(playerCard);
-        else (document.exitFullscreen || document.webkitExitFullscreen || document.mozCancelFullScreen).call(document);
+        if (!isFs()) (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen).call(playerCard);
+        else (document.exitFullscreen || document.webkitExitFullscreen).call(document);
     }
     function showFsControls() {
         playerCtrl.classList.remove('fs-hidden');
@@ -977,6 +977,10 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     playerCard.addEventListener('click',      function() { if (isFs()) showFsControls(); });
     playerCard.addEventListener('touchstart', function() { if (isFs()) showFsControls(); }, {passive:true});
     player.addEventListener('pause', function() { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); });
+
+    // ── localStorage (try/catch : private browsing peut throw) ───────────────
+    function lsGet(k, def) { try { var v = localStorage.getItem(k); return v !== null ? v : def; } catch(e) { return def; } }
+    function lsSet(k, v)   { try { localStorage.setItem(k, v); } catch(e) {} }
 
     // ── Stream ────────────────────────────────────────────────────────────────
     function lockSize()   { if (isVideo && player.videoWidth > 0) player.style.minHeight = player.offsetHeight + 'px'; }
@@ -1124,7 +1128,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                 S.burnSub = idx; S.confirmed = S.step = 'transcode';
                 hint.textContent = 'Transcodage avec sous-titres...'; hint.className = 'player-hint transcoding';
                 startStream(pos);
-            } else if (idx >= 0) {
+            } else if (idx >= 0 && this.urls[idx]) {
                 if (wasBurning) startStream(pos);
                 var self = this;
                 fetch(this.urls[idx], {credentials:'same-origin'})
@@ -1136,6 +1140,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             }
         },
         initOverlay: function() {
+            if (this._div) return;
             this._div = document.createElement('div');
             this._div.className = 'sub-overlay';
             player.parentNode.appendChild(this._div);
@@ -1156,8 +1161,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             player.addEventListener('resize', pos);
             document.addEventListener('fullscreenchange', function() { setTimeout(pos, 50); });
             document.addEventListener('webkitfullscreenchange', function() { setTimeout(pos, 50); });
-            if (window.ResizeObserver) new ResizeObserver(pos).observe(player);
-            else window.addEventListener('resize', pos);
+            if (window.ResizeObserver) { this._ro = new ResizeObserver(pos); this._ro.observe(player); }
+            else { this._resizeHandler = pos; window.addEventListener('resize', pos); }
         }
     };
 
@@ -1361,23 +1366,27 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         // Fullscreen
         if (fsBtn) fsBtn.addEventListener('click', toggleFs);
         // Volume
-        var savedVol = parseFloat(localStorage.getItem('player_volume') || '1');
+        var savedVol = parseFloat(lsGet('player_volume', '1'));
         player.volume = isNaN(savedVol) ? 1 : Math.max(0, Math.min(1, savedVol));
-        player.muted  = localStorage.getItem('player_muted') === 'true';
+        player.muted  = lsGet('player_muted', 'false') === 'true';
         updateVolUI();
         muteBtn.addEventListener('click', function() {
             player.muted = !player.muted;
-            localStorage.setItem('player_muted', player.muted);
+            lsSet('player_muted', player.muted);
             updateVolUI();
             showVolOsd();
         });
+        var volSaveTimer = null;
         if (volSlider) volSlider.addEventListener('input', function() {
             player.volume = parseFloat(volSlider.value);
             player.muted  = player.volume === 0;
-            localStorage.setItem('player_volume', player.volume);
-            localStorage.setItem('player_muted',  player.muted);
             updateVolUI();
             showVolOsd();
+            clearTimeout(volSaveTimer);
+            volSaveTimer = setTimeout(function() {
+                lsSet('player_volume', player.volume);
+                lsSet('player_muted',  player.muted);
+            }, 500);
         });
         // Molette : volume
         playerCard.addEventListener('wheel', function(e) {
@@ -1385,20 +1394,20 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             var delta = e.deltaY < 0 ? 0.05 : -0.05;
             player.volume = Math.min(1, Math.max(0, player.volume + delta));
             player.muted = player.volume === 0;
-            localStorage.setItem('player_volume', player.volume);
-            localStorage.setItem('player_muted', player.muted);
+            lsSet('player_volume', player.volume);
+            lsSet('player_muted', player.muted);
             updateVolUI();
             showVolOsd();
         }, { passive: false });
         // Vitesse
         var speeds = [1, 1.5, 2];
-        var savedSpd = parseFloat(localStorage.getItem('player_speed') || '1');
+        var savedSpd = parseFloat(lsGet('player_speed', '1'));
         var speedIdx = speeds.indexOf(savedSpd); if (speedIdx < 0) speedIdx = 0;
         S.speed = speeds[speedIdx];
         if (speedBtn) { speedBtn.textContent = S.speed + '\u00D7'; speedBtn.addEventListener('click', function() {
             speedIdx = (speedIdx + 1) % speeds.length; S.speed = speeds[speedIdx];
             player.playbackRate = S.speed; speedBtn.textContent = S.speed + '\u00D7';
-            localStorage.setItem('player_speed', S.speed);
+            lsSet('player_speed', S.speed);
         }); }
         // Bouton Resync
         var resyncBtn = document.createElement('button');
@@ -1445,23 +1454,23 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                 e.preventDefault();
                 player.volume = Math.min(1, player.volume + 0.05);
                 player.muted = false;
-                localStorage.setItem('player_volume', player.volume);
-                localStorage.setItem('player_muted', false);
+                lsSet('player_volume', player.volume);
+                lsSet('player_muted', false);
                 updateVolUI(); showVolOsd();
             }
             else if (e.key === 'ArrowDown') {
                 e.preventDefault();
                 player.volume = Math.max(0, player.volume - 0.05);
                 player.muted = player.volume === 0;
-                localStorage.setItem('player_volume', player.volume);
-                localStorage.setItem('player_muted', player.muted);
+                lsSet('player_volume', player.volume);
+                lsSet('player_muted', player.muted);
                 updateVolUI(); showVolOsd();
             }
             else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleFs(); }
             else if (e.key === 'm' || e.key === 'M') {
                 e.preventDefault();
                 player.muted = !player.muted;
-                localStorage.setItem('player_muted', player.muted);
+                lsSet('player_muted', player.muted);
                 updateVolUI(); showVolOsd();
             }
             else if (e.key >= '0' && e.key <= '9' && S.duration) {
