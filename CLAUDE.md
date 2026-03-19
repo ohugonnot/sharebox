@@ -163,6 +163,8 @@ stallTimeout() = Math.min(base * Math.pow(2, S.stallCount), 120000)
 // base : remux=10s | transcode=20s | burnSub=30s  — cap 2 min
 ```
 
+`S.stallCount` est reset à 0 après 30 s de lecture stable ininterrompue (`stableTimer` lancé sur `playing`, annulé sur `waiting`/`pause`). Sans ce reset, après plusieurs stalls le watchdog attend 2 min avant chaque retry même quand le réseau est revenu.
+
 ### Module Subs (objet JS)
 
 - `types[]` / `urls[]` / `cues[]` indexés par piste sous-titre
@@ -188,12 +190,13 @@ S = {
 ### Features player
 
 - **rAF throttle** : `timeupdate` → flag `S.rafPending` → `requestAnimationFrame` pour tous les DOM writes
-- **Raccourcis clavier** : Space/K play-pause, ←/→ ±10 s seek + OSD ⏪/⏩, ↑/↓ volume ±5%, F fullscreen, M mute, 0–9 jump à N×10%
-- **Volume slider** : CSS custom property `--vol-pct` sur `-webkit-slider-runnable-track`, `style.setProperty('--vol-pct', pct+'%')` dans `updateVolUI()`
-- **localStorage** : `sb_volume`, `sb_muted`, `sb_speed` — restaurés à l'init
+- **Raccourcis clavier** : Space/K play-pause, ←/→ ±10 s seek + OSD ⏪/⏩, ↑/↓ volume ±5%, F fullscreen, M mute, 0–9 jump à N×10% — guard `e.ctrlKey || e.metaKey || e.altKey` pour ne pas intercepter les raccourcis browser (Ctrl+F, Cmd+F, etc.)
+- **Volume slider** : CSS custom property `--vol-pct` sur `-webkit-slider-runnable-track`, `style.setProperty('--vol-pct', pct+'%')` dans `updateVolUI()` — écriture localStorage debouncée 500 ms (slider et molette partagent le même `volSaveTimer`)
+- **localStorage** : `player_volume`, `player_muted`, `player_speed`, `player_sub_<base><pp>` (piste sous-titre mémorisée par fichier) — restaurés à l'init
 - **Seekbar tooltip** : div `.seek-tooltip`, timecode au survol
 - **Resync button** : `startStream(realTime())` — recharge à la position courante
 - **Badge mode courant** : affiche `NATIF` / `REMUX` / `TRANSCODE 720p` dans la barre de contrôle, cliquable pour forcer le mode manuellement
+- **iOS fullscreen** : `isIOS` (UA detection), `player.webkitEnterFullscreen()` / `player.webkitExitFullscreen()` — `requestFullscreen` sur `<div>` non supporté sur Safari iOS ; listeners `webkitbeginfullscreen` / `webkitendfullscreen` sur `<video>` pour sync du bouton
 
 ## Décisions techniques clés
 
