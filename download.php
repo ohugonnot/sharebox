@@ -165,11 +165,6 @@ if (is_file($resolvedPath)) {
     if (isset($_GET['subtitle'])) {
         $trackIdx = (int)$_GET['subtitle'];
         header('Content-Type: text/vtt; charset=utf-8');
-        $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-        if ($origin) {
-            header('Access-Control-Allow-Origin: ' . $origin);
-            header('Access-Control-Allow-Credentials: true');
-        }
         $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
         stream_log('SUBTITLE start | track=' . $trackIdx . ' | ' . basename($resolvedPath));
         $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
@@ -954,10 +949,16 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     }
 
     // ── Plein écran ───────────────────────────────────────────────────────────
-    function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement || (isIOS && player.webkitDisplayingFullscreen)); }
     function toggleFs() {
-        if (!isFs()) (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen).call(playerCard);
-        else (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+        if (isIOS && player.webkitEnterFullscreen) {
+            if (player.webkitDisplayingFullscreen) player.webkitExitFullscreen();
+            else player.webkitEnterFullscreen();
+            return;
+        }
+        if (!isFs()) (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen || function(){}).call(playerCard);
+        else (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
     }
     function showFsControls() {
         playerCtrl.classList.remove('fs-hidden');
@@ -965,14 +966,14 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         clearTimeout(S.fsHideTimer);
         if (isFs() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); playerCard.classList.add('hide-cursor'); }, 3000);
     }
-    document.addEventListener('fullscreenchange', function() {
+    function onFsChange() {
         if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
         if (isFs()) showFsControls(); else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
-    });
-    document.addEventListener('webkitfullscreenchange', function() {
-        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
-        if (isFs()) showFsControls(); else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
-    });
+    }
+    document.addEventListener('fullscreenchange',        onFsChange);
+    document.addEventListener('webkitfullscreenchange',  onFsChange);
+    player.addEventListener('webkitbeginfullscreen',     onFsChange);
+    player.addEventListener('webkitendfullscreen',       onFsChange);
     playerCard.addEventListener('mousemove',  function() { if (isFs()) showFsControls(); });
     playerCard.addEventListener('click',      function() { if (isFs()) showFsControls(); });
     playerCard.addEventListener('touchstart', function() { if (isFs()) showFsControls(); }, {passive:true});
@@ -1094,9 +1095,15 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         clearTimeout(S.stallTimer); clearInterval(S.stallInterval);
         S.stallTimer = S.stallInterval = null;
     }
-    player.addEventListener('waiting', startStallWatchdog);
-    player.addEventListener('playing', clearStallWatchdog);
-    player.addEventListener('pause',   clearStallWatchdog);
+    // Reset stallCount après 30s de lecture stable (évite les délais de 2min après une reprise réseau)
+    var stableTimer = null;
+    player.addEventListener('waiting', function() { clearTimeout(stableTimer); stableTimer = null; startStallWatchdog(); });
+    player.addEventListener('playing', function() {
+        clearStallWatchdog();
+        clearTimeout(stableTimer);
+        stableTimer = setTimeout(function() { S.stallCount = 0; }, 30000);
+    });
+    player.addEventListener('pause', function() { clearStallWatchdog(); clearTimeout(stableTimer); stableTimer = null; });
 
     // ── Module sous-titres ────────────────────────────────────────────────────
     var Subs = {
@@ -1293,7 +1300,18 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             var selSub = document.createElement('select'); selSub.className = 'track-select';
             var off = document.createElement('option'); off.value = '-1'; off.textContent = 'D\u00E9sactiv\u00E9s'; selSub.appendChild(off);
             d.subtitles.forEach(function(s, i) { var o = document.createElement('option'); o.value = i; o.textContent = s.label; selSub.appendChild(o); });
-            selSub.addEventListener('change', function() { Subs.load(parseInt(selSub.value)); });
+            // Restaurer le dernier sous-titre choisi pour ce fichier
+            var subKey = 'player_sub_' + base + (pp ? pp : '');
+            var savedSub = lsGet(subKey, '-1');
+            if (savedSub !== '-1' && parseInt(savedSub) < d.subtitles.length) {
+                selSub.value = savedSub;
+                Subs.load(parseInt(savedSub));
+            }
+            selSub.addEventListener('change', function() {
+                var idx = parseInt(selSub.value);
+                lsSet(subKey, idx);
+                Subs.load(idx);
+            });
             trackBar.append(lbl2, selSub);
         }
         if (hasControls) trackBar.style.display = 'flex';
@@ -1394,10 +1412,13 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             var delta = e.deltaY < 0 ? 0.05 : -0.05;
             player.volume = Math.min(1, Math.max(0, player.volume + delta));
             player.muted = player.volume === 0;
-            lsSet('player_volume', player.volume);
-            lsSet('player_muted', player.muted);
             updateVolUI();
             showVolOsd();
+            clearTimeout(volSaveTimer);
+            volSaveTimer = setTimeout(function() {
+                lsSet('player_volume', player.volume);
+                lsSet('player_muted', player.muted);
+            }, 500);
         }, { passive: false });
         // Vitesse
         var speeds = [1, 1.5, 2];
@@ -1437,6 +1458,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         // Raccourcis clavier
         document.addEventListener('keydown', function(e) {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
             if (e.key === ' ' || e.key === 'k') {
                 e.preventDefault();
                 if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
