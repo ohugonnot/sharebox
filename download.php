@@ -53,10 +53,20 @@ if ($link['password_hash'] !== null) {
     if (isset($_SESSION[$sessionKey]) && $_SESSION[$sessionKey] === true) {
         // Déjà authentifié
     } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
+        $attemptsKey = 'share_attempts_' . $token;
+        $attempts = (int)($_SESSION[$attemptsKey] ?? 0);
+        if ($attempts >= 10) {
+            sleep(3);
+            afficher_formulaire_mdp($link['name'], 'Trop de tentatives. Réessayez plus tard.');
+            exit;
+        }
         if (!password_verify($_POST['password'], $link['password_hash'])) {
+            $_SESSION[$attemptsKey] = $attempts + 1;
+            sleep(1);
             afficher_formulaire_mdp($link['name'], 'Mot de passe incorrect.');
             exit;
         }
+        unset($_SESSION[$attemptsKey]);
         $_SESSION[$sessionKey] = true;
         session_regenerate_id(true);
     } else {
@@ -114,6 +124,13 @@ if (is_file($resolvedPath)) {
             }
         }
 
+        $probeFp = acquireProbeSlot();
+        if (!$probeFp) {
+            http_response_code(429);
+            echo json_encode(['error' => 'too_many_probes']);
+            exit;
+        }
+
         $cmd = 'timeout 10 ffprobe -v error -show_entries format=duration,format_name -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
             . escapeshellarg($resolvedPath) . ' 2>/dev/null';
         $output = shell_exec($cmd);
@@ -157,6 +174,7 @@ if (is_file($resolvedPath)) {
                ->execute([':p' => $resolvedPath, ':m' => $mtime, ':r' => $result]);
         } catch (PDOException $e) { /* lock résiduel — le probe sera recalculé au prochain appel */ }
 
+        releaseProbeSlot($probeFp);
         echo $result;
         exit;
     }
@@ -948,6 +966,10 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         return url;
     }
 
+    // ── Position mémorisée ────────────────────────────────────────────────────
+    var posKey   = 'player_seek_' + base + pp;
+    var savedPos = isVideo ? Math.max(0, parseFloat(lsGet(posKey, '0')) || 0) : 0;
+
     // ── Plein écran ───────────────────────────────────────────────────────────
     var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement || (isIOS && player.webkitDisplayingFullscreen)); }
@@ -1097,6 +1119,15 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     }
     // Reset stallCount après 30s de lecture stable (évite les délais de 2min après une reprise réseau)
     var stableTimer = null;
+    // Fallback durée si probe échoue et stream natif d'un vrai MP4
+    player.addEventListener('loadedmetadata', function() {
+        if (S.duration <= 0 && player.duration && isFinite(player.duration)) {
+            S.duration = player.duration;
+            timeTotal.textContent = fmtTime(S.duration);
+            seekBar.style.display = 'flex';
+        }
+    });
+
     player.addEventListener('waiting', function() { clearTimeout(stableTimer); stableTimer = null; startStallWatchdog(); });
     player.addEventListener('playing', function() {
         clearStallWatchdog();
@@ -1350,26 +1381,22 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             playIconEl.classList.add(pausing ? 'pop-pause' : 'pop-play');
             if (!pausing) popTimer = setTimeout(function() { playIconEl.classList.remove('pop-play'); }, 450);
         }
-        // Click sur la zone vidéo : simple tap = pause/play, double tap = fullscreen
+        // Click sur la zone vidéo : simple tap = pause/play immédiat, double tap = fullscreen
+        // Pas de timer : play/pause est immédiat ; le 2e tap annule le 1er et toggle fullscreen
         var clickArea = document.getElementById('video-click-area');
-        var tapTimer = null;
+        var lastTapTime = 0;
         clickArea.addEventListener('click', function() {
-            if (tapTimer) {
-                clearTimeout(tapTimer);
-                tapTimer = null;
-                var enteringFs = !isFs();
+            var now = Date.now();
+            var isDouble = now - lastTapTime < 300;
+            lastTapTime = isDouble ? 0 : now;
+            // Play/pause immédiat dans tous les cas
+            if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+            else               { player.pause(); showPlayIcon(true); }
+            // Double tap : undo play/pause + toggle fullscreen (état net inchangé)
+            if (isDouble) {
+                if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+                else               { player.pause(); showPlayIcon(true); }
                 toggleFs();
-                if (enteringFs) {
-                    if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
-                } else {
-                    if (!player.paused) { player.pause(); showPlayIcon(true); }
-                }
-            } else {
-                tapTimer = setTimeout(function() {
-                    tapTimer = null;
-                    if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
-                    else               { player.pause(); showPlayIcon(true); }
-                }, 250);
             }
         });
         playBtn.addEventListener('click', function() {
@@ -1421,7 +1448,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             }, 500);
         }, { passive: false });
         // Vitesse
-        var speeds = [1, 1.5, 2];
+        var speeds = [0.5, 0.75, 1, 1.5, 2];
         var savedSpd = parseFloat(lsGet('player_speed', '1'));
         var speedIdx = speeds.indexOf(savedSpd); if (speedIdx < 0) speedIdx = 0;
         S.speed = speeds[speedIdx];
@@ -1430,6 +1457,15 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             player.playbackRate = S.speed; speedBtn.textContent = S.speed + '\u00D7';
             lsSet('player_speed', S.speed);
         }); }
+        // Sauvegarde de position toutes les 5 s (30s min, 60s avant fin)
+        setInterval(function() {
+            if (player.paused || S.duration <= 0) return;
+            var t = realTime();
+            if (t > 30 && t < S.duration - 60) lsSet(posKey, t.toFixed(0));
+            else if (t >= S.duration - 60)      lsSet(posKey, '0');
+        }, 5000);
+        player.addEventListener('ended', function() { lsSet(posKey, '0'); });
+
         // Bouton Resync
         var resyncBtn = document.createElement('button');
         resyncBtn.className = 'player-btn'; resyncBtn.title = 'Resynchroniser son et image';
@@ -1455,6 +1491,30 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             hint.textContent = ''; updateModeUI(); startStream(pos);
         });
         trackBar.appendChild(modeBtn); trackBar.style.display = 'flex';
+        // Overlay raccourcis clavier (touche ?)
+        var kbStyle = document.createElement('style');
+        kbStyle.textContent = '#kb-overlay{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}#kb-overlay.hidden{display:none}#kb-card{background:#1a1d28;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:1.5rem 2rem;min-width:270px}#kb-card h3{font-size:.8rem;font-weight:700;color:#8b90a0;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.85rem}.kb-row{display:flex;align-items:center;justify-content:space-between;padding:.27rem 0;border-bottom:1px solid rgba(255,255,255,.055);font-size:.81rem;gap:1.2rem}.kb-row:last-child{border-bottom:none}.kb-key{font-family:monospace;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:4px;padding:.13rem .48rem;font-size:.72rem;color:#e8eaf0;white-space:nowrap;flex-shrink:0}.kb-desc{color:#8b90a0}';
+        document.head.appendChild(kbStyle);
+        var kbOverlay = document.createElement('div');
+        kbOverlay.id = 'kb-overlay';
+        kbOverlay.classList.add('hidden');
+        var kbCard = document.createElement('div');
+        kbCard.id = 'kb-card';
+        var kbTitle = document.createElement('h3');
+        kbTitle.textContent = 'Raccourcis clavier';
+        kbCard.appendChild(kbTitle);
+        [['Espace / K','Lecture / Pause'],['← →','\u221210s / +10s'],
+         ['\u2191 \u2193','Volume \u00B15\u00A0%'],['0\u20139','Aller \u00e0 N\u00d710\u00a0%'],
+         ['F','Plein \u00e9cran'],['M','Muet'],['?','Cette aide']]
+        .forEach(function(r) {
+            var row = document.createElement('div'); row.className = 'kb-row';
+            var key = document.createElement('span'); key.className = 'kb-key'; key.textContent = r[0];
+            var desc = document.createElement('span'); desc.className = 'kb-desc'; desc.textContent = r[1];
+            row.appendChild(key); row.appendChild(desc); kbCard.appendChild(row);
+        });
+        kbOverlay.appendChild(kbCard);
+        document.body.appendChild(kbOverlay);
+        kbOverlay.addEventListener('click', function() { kbOverlay.classList.add('hidden'); });
         // Raccourcis clavier
         document.addEventListener('keydown', function(e) {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
@@ -1499,6 +1559,13 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                 e.preventDefault();
                 seekToFraction(parseInt(e.key) / 10);
             }
+            else if (e.key === '?') {
+                e.preventDefault();
+                kbOverlay.classList.toggle('hidden');
+            }
+            else if (e.key === 'Escape') {
+                if (!kbOverlay.classList.contains('hidden')) { e.preventDefault(); kbOverlay.classList.add('hidden'); }
+            }
         });
     }
 
@@ -1510,11 +1577,12 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     if (isVideo) {
         hint.textContent = 'Analyse...'; hint.className = 'player-hint';
         var streamStarted = false;
+        var fallbackAt = 0;
         var probeCtrl  = typeof AbortController !== 'undefined' ? new AbortController() : null;
         var probeTimer = setTimeout(function() { if (probeCtrl) probeCtrl.abort(); }, 12000);
         // Fallback : démarrer en natif si le probe est trop lent
         var fallbackTimer = setTimeout(function() {
-            if (!streamStarted) { streamStarted = true; hint.textContent = ''; startStream(0); }
+            if (!streamStarted) { streamStarted = true; fallbackAt = Date.now(); hint.textContent = ''; startStream(savedPos); }
         }, 2000);
         fetch(base + '?' + pp + 'probe=1', probeCtrl ? {signal: probeCtrl.signal} : {})
             .then(function(r) { clearTimeout(probeTimer); return r.json(); })
@@ -1526,13 +1594,22 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                     streamStarted = true;
                     S.step = chooseModeFromProbe(d);
                     hint.textContent = '';
-                    startStream(0);
+                    startStream(savedPos);
+                } else if (fallbackAt && Date.now() - fallbackAt < 5000) {
+                    // Probe arrivé peu après le fallback natif — si le mode optimal est différent, restart proactif
+                    var optimalMode = chooseModeFromProbe(d);
+                    if (optimalMode !== 'native') {
+                        S.step = S.confirmed = optimalMode;
+                        hint.textContent = optimalMode === 'transcode' ? 'Transcodage en cours...' : 'Remux en cours...';
+                        hint.className = 'player-hint transcoding';
+                        startStream(savedPos);
+                    }
                 }
                 // Si stream déjà démarré (fallback), applyProbe a juste mis à jour l'UI
             })
             .catch(function() {
                 clearTimeout(probeTimer); clearTimeout(fallbackTimer);
-                if (!streamStarted) { streamStarted = true; hint.textContent = ''; startStream(0); }
+                if (!streamStarted) { streamStarted = true; hint.textContent = ''; startStream(savedPos); }
             });
     } else {
         startStream(0);

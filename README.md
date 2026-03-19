@@ -42,9 +42,13 @@ Share files and folders instantly with human-readable links. Stream videos direc
   - ffprobe results cached in SQLite (instant reload, no re-probe on unchanged files)
   - vmtouch page-cache warming for files < 2 GB (reduces I/O latency at stream start)
   - A/V sync hardening: `aresample async=3000` (no `first_pts=0` in remux — preserves video PTS alignment), `-g 50`, `-thread_queue_size 512`, `-max_muxing_queue_size 1024`
+  - **Probe fallback proactive restart** -- if ffprobe resolves within 5 s of a native fallback start and the optimal mode differs (e.g. HEVC detected), stream restarts immediately in the correct mode instead of waiting for a browser error cascade
   - **Stall watchdog with exponential backoff** -- retry timeout grows as `base × 2^n` (cap 2 min), differentiated by mode: remux 10 s, transcode 20 s, burn-in 30 s; stall counter resets after 30 s of uninterrupted playback
   - **Resync button** -- one-click A/V resync at current position without reloading the page
-  - **Keyboard shortcuts** -- Space/K play-pause, ←/→ seek ±10 s (OSD feedback ⏪/⏩), ↑/↓ volume ±5%, F fullscreen, M mute, 0–9 jump to N×10% of video; Ctrl/Meta/Alt modifier bypasses all shortcuts so browser shortcuts (Ctrl+F, etc.) remain unaffected
+  - **Keyboard shortcuts** -- Space/K play-pause, ←/→ seek ±10 s (OSD feedback ⏪/⏩), ↑/↓ volume ±5%, F fullscreen, M mute, 0–9 jump to N×10%, `?` keyboard help overlay; Ctrl/Meta/Alt modifier bypasses all shortcuts so browser shortcuts (Ctrl+F, etc.) remain unaffected
+  - **Keyboard help overlay** -- press `?` (or Escape to close) to display all shortcuts; built with DOM APIs, no innerHTML
+  - **Instant tap response** -- single tap triggers play/pause immediately (no 250 ms delay); double-tap (< 300 ms) undoes the tap and toggles fullscreen
+  - **Playback speed** -- 0.5×, 0.75×, 1×, 1.5×, 2× cycle via speed button; persisted in localStorage
   - **Volume slider** -- compact range input with orange fill; localStorage writes debounced 500 ms (slider and scroll wheel share the same timer); volume, mute, playback speed and per-file subtitle track selection persisted in `localStorage`
   - **iOS fullscreen** -- `player.webkitEnterFullscreen()` on iOS Safari (requestFullscreen on `<div>` is unsupported on WebKit); fullscreen button icon synced via `webkitbeginfullscreen` / `webkitendfullscreen` events
   - **Seekbar tooltip** -- hover preview shows timecode at cursor position
@@ -217,6 +221,7 @@ define('DL_BASE_URL', '/dl/');
 - The `data/` directory contains the SQLite database and must **not** be publicly accessible. Both the nginx config and `.htaccess` block access to it.
 - Path traversal is prevented: all file paths are resolved with `realpath()` and validated against `BASE_PATH`.
 - Share passwords are hashed with **bcrypt** (`password_hash` / `password_verify`).
+- **Password brute-force protection** -- failed attempts increment a per-token session counter; `sleep(1)` on each failure, requests blocked after 10 attempts until the session is reset.
 - Public download URLs (`/dl/...`) are the only unauthenticated endpoints.
 - PHP execution is disabled in download-related locations to prevent code injection.
 - CSRF tokens verified with `hash_equals` on all POST actions.
