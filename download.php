@@ -750,6 +750,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     $backHtml = $backUrl
         ? '<a class="player-btn" href="' . $backUrl . '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Retour</a>'
         : '';
+    $remuxEnabled = STREAM_REMUX_ENABLED ? 'true' : 'false';
 
     echo <<<HTML
 <!DOCTYPE html>
@@ -893,7 +894,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     </div>
 </div>
 <script>
-var REMUX_ENABLED = <?= STREAM_REMUX_ENABLED ? 'true' : 'false' ?>;
+var REMUX_ENABLED = {$remuxEnabled};
 (function() {
     // ── DOM ──────────────────────────────────────────────────────────────────
     var player      = document.getElementById('player');
