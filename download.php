@@ -893,6 +893,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     </div>
 </div>
 <script>
+var REMUX_ENABLED = <?= STREAM_REMUX_ENABLED ? 'true' : 'false' ?>;
 (function() {
     // ── DOM ──────────────────────────────────────────────────────────────────
     var player      = document.getElementById('player');
@@ -1034,9 +1035,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             if (d.isMP4) {
                 return (ac === 'aac' || ac === 'mp3') ? 'native' : 'transcode';
             }
-            // MKV uniquement → remux (seek aligné sur keyframe, testé OK 83ms)
-            // AVI/autres → transcode
-            return d.isMKV ? 'remux' : 'transcode';
+            // MKV → remux si activé, sinon transcode
+            return (REMUX_ENABLED && d.isMKV) ? 'remux' : 'transcode';
         }
         // VP9 WebM : natif si le browser supporte (Chrome/Firefox oui, Safari non)
         if (c === 'vp9' || c === 'vp8') {
@@ -1481,8 +1481,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         updateModeUI();
         modeBtn.addEventListener('click', function() {
             var pos = realTime(), m = S.confirmed || S.step;
-            // Cycle : native → [remux si MKV] → x264-480p → x264-720p → x264-1080p → native
-            if (m === 'native')         { S.step = S.confirmed = S.isMKV ? 'remux' : 'transcode'; S.quality = 480; }
+            // Cycle : native → [remux si MKV+activé] → x264-480p → x264-720p → x264-1080p → native
+            if (m === 'native')         { S.step = S.confirmed = (REMUX_ENABLED && S.isMKV) ? 'remux' : 'transcode'; S.quality = 480; }
             else if (m === 'remux')     { S.step = S.confirmed = 'transcode'; S.quality = 480; }
             else if (S.quality === 480) { S.quality = 720; }
             else if (S.quality === 720) { S.quality = 1080; }
