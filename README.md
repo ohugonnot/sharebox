@@ -44,7 +44,7 @@ Share files and folders instantly with human-readable links. Stream videos direc
   - A/V sync hardening: `aresample async=3000` (no `first_pts=0` in remux — preserves video PTS alignment), `-g 50`, `-thread_queue_size 512`, `-max_muxing_queue_size 1024`
   - **Stall watchdog with exponential backoff** -- retry timeout grows as `base × 2^n` (cap 2 min), differentiated by mode: remux 10 s, transcode 20 s, burn-in 30 s
   - **Resync button** -- one-click A/V resync at current position without reloading the page
-  - **Keyboard shortcuts** -- Space/K play-pause, ←/→ seek ±10 s, F fullscreen, M mute
+  - **Keyboard shortcuts** -- Space/K play-pause, ←/→ seek ±10 s (OSD feedback ⏪/⏩), ↑/↓ volume ±5%, F fullscreen, M mute, 0–9 jump to N×10% of video
   - **Volume slider** -- compact range input with orange fill; volume, mute and playback speed persisted in `localStorage`
   - **Seekbar tooltip** -- hover preview shows timecode at cursor position
   - Binary search subtitle cue lookup (O(log n) on seek, O(1) amortized forward)

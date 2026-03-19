@@ -144,7 +144,7 @@ function updateDisk(d) {
     const unit = fmtGbUnit(total);
     setText('dash-disk-val', fmtGbVal(used) + '\u00a0/\u00a0' + fmtGbVal(total) + '\u00a0' + unit);
     setText('dash-disk-sub', fmtGb(free) + '\u00a0libre');
-    setText('dash-disk-io',  'busy\u00a0' + fmtPct(d.disk_busy_pct  || 0));
+    setText('dash-disk-io',  'IO\u00a0' + fmtPct(d.disk_io_pct || 0));
     setText('dash-disk-rw',  'R\u00a0' + fmtMbs(d.disk_read_mbs  || 0) + '\u00a0W\u00a0' + fmtMbs(d.disk_write_mbs || 0));
     updateBar(id('dash-disk-bar'), pct, color);
     // Températures HDD
@@ -397,7 +397,7 @@ function updatePillsFromSysinfo(d) {
     const cpuTemp = d.cpu_temp_c;
     const ramPct  = (d.ram_used_mb  || 0) / (d.ram_total_mb  || 1) * 100;
     const diskPct = (d.disk_used_gb || 0) / (d.disk_total_gb || 1) * 100;
-    const busyPct = d.disk_busy_pct || 0;
+    const busyPct = d.disk_io_pct || 0;
 
     // CPU : % + température
     id('dash-pill-cpu').textContent = 'CPU\u00a0' + fmtPct(cpuPct)
@@ -411,9 +411,9 @@ function updatePillsFromSysinfo(d) {
     id('dash-pill-ram').textContent = 'RAM\u00a0' + fmtPct(ramPct);
     setPillSeverity('dash-pill-ram', pillSeverity(ramPct, 80, 90));
 
-    // HDD : usage % + busy %
+    // HDD : usage % + IO capacity %
     id('dash-pill-disk').textContent = 'HDD\u00a0' + fmtPct(diskPct)
-        + '\u00a0b:' + fmtPct(busyPct);
+        + '\u00a0io:' + fmtPct(busyPct);
     setPillSeverity('dash-pill-disk', worstSeverity(
         pillSeverity(diskPct, 80, 93),
         pillSeverity(busyPct, 75, 97)

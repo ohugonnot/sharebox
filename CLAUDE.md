@@ -188,7 +188,7 @@ S = {
 ### Features player
 
 - **rAF throttle** : `timeupdate` → flag `S.rafPending` → `requestAnimationFrame` pour tous les DOM writes
-- **Raccourcis clavier** : Space/K play-pause, ←/→ ±10 s seek, F fullscreen, M mute
+- **Raccourcis clavier** : Space/K play-pause, ←/→ ±10 s seek + OSD ⏪/⏩, ↑/↓ volume ±5%, F fullscreen, M mute, 0–9 jump à N×10%
 - **Volume slider** : CSS custom property `--vol-pct` sur `-webkit-slider-runnable-track`, `style.setProperty('--vol-pct', pct+'%')` dans `updateVolUI()`
 - **localStorage** : `sb_volume`, `sb_muted`, `sb_speed` — restaurés à l'init
 - **Seekbar tooltip** : div `.seek-tooltip`, timecode au survol
@@ -214,8 +214,21 @@ S = {
 ## Optimisations système appliquées
 
 - `/etc/sysctl.d/99-disk-perf.conf` : swappiness=10, dirty_ratio=15, vfs_cache_pressure=50
-- `/etc/udev/rules.d/60-disk-perf.rules` : read_ahead md5=16384, HDD=4096
-- `/etc/systemd/system/rtorrent-ionice.service` : ionice -c 3 sur rtorrent (idle I/O)
+- `/etc/sysctl.d/99-seedbox.conf` : tcp_wmem/rmem max=128 MB, wmem_max=128 MB
+- `/etc/udev/rules.d/60-rtorrent-readahead.rules` : read_ahead md5=128 KB, HDD=1024 KB (aligné chunk RAID0 512 KB×2)
+- `/etc/udev/rules.d/61-hdd-queue-depth.rules` : nr_requests HDD=512 (meilleur tri mq-deadline)
+- `/etc/systemd/system/rtorrent-ionice.service` : ionice **-c 2 -n 4** sur rtorrent (best-effort priority 4, pas idle)
+
+## rtorrent tuning (`/home/ropixv2/.rtorrent.rc`)
+
+| Paramètre | Valeur | Raison |
+|---|---|---|
+| `pieces.memory.max` | 1.5 GB | Évite double-cache avec page cache OS (≈13 GB) — ancienne valeur 12 GB provoquait pression RAM |
+| `pieces.preload.type` | 2 (madvise) | Laisse le kernel optimiser l'accès aléatoire multi-torrents (vs linear=1) |
+| `network.send_buffer.size` | 16 MB | Meilleur débit/peer sur 1 Gbps (vs 8 MB) |
+| `network.max_open_files` | 4096 | 17K torrents actifs — plus de FD disponibles (vs 2048) |
+
+Note : `pieces.memory.max` n'est **pas** rechargeable à chaud via SCGI — nécessite restart rtorrent.
 
 ## rtorrent hot reload via SCGI
 

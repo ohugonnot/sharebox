@@ -783,6 +783,8 @@ video { display:block; width:100%; max-height:78vh; background:#000; object-fit:
 @keyframes popPlay  { 0%{transform:translate(-50%,-50%) scale(.6);opacity:.9} 50%{transform:translate(-50%,-50%) scale(1);opacity:.9} 100%{transform:translate(-50%,-50%) scale(1.4);opacity:0} }
 .play-icon-overlay.pop-pause { animation:popPause .2s ease forwards; }
 .play-icon-overlay.pop-play  { animation:popPlay .4s ease forwards; }
+#vol-osd { position:absolute; top:1rem; right:1rem; z-index:20; background:rgba(0,0,0,.65); color:#fff; padding:.35rem .75rem; border-radius:.4rem; font-size:1rem; font-weight:600; letter-spacing:.03em; pointer-events:none; opacity:0; transition:opacity .15s; }
+#vol-osd.visible { opacity:1; }
 audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40,.8); }
 .player-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:10; }
 .player-hint-text { font-family:var(--font-sans); font-size:.78rem; font-weight:600; padding:.4rem 1rem; border-radius:var(--radius-sm); background:rgba(12,14,20,.82); border:1px solid rgba(255,255,255,.08); color:var(--text-muted); backdrop-filter:blur(6px); letter-spacing:.01em; transition:color .2s; white-space:nowrap; }
@@ -822,7 +824,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .vol-slider::-moz-range-progress { height:3px; border-radius:2px; background:#f0a030; }
 .vol-slider::-moz-range-thumb { width:11px; height:11px; border-radius:50%; background:var(--accent); cursor:pointer; border:none; }
 @media(max-width:480px){.vol-slider{width:44px}}
-.mode-badge { font-family:var(--font-mono); font-size:.68rem; font-weight:700; padding:.18rem .45rem; border-radius:3px; border:1px solid; cursor:pointer; white-space:nowrap; transition:all .15s; letter-spacing:.04em; }
+.mode-badge { display:inline-flex; align-items:center; font-family:var(--font-mono); font-size:.68rem; font-weight:700; padding:.4rem .55rem; border-radius:3px; border:1px solid; cursor:pointer; white-space:nowrap; transition:all .15s; letter-spacing:.04em; }
 .mode-badge.m-native   { color:#6b7280; border-color:rgba(255,255,255,.1);  background:rgba(255,255,255,.03); }
 .mode-badge.m-remux    { color:#4ade80; border-color:rgba(74,222,128,.25);  background:rgba(74,222,128,.07); }
 .mode-badge.m-transcode{ color:#f0a030; border-color:rgba(240,160,48,.25); background:rgba(240,160,48,.07); }
@@ -842,6 +844,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             <div class="player-hint" id="hint"><span class="player-hint-text">Chargement...</span></div>
             <div id="video-click-area" style="position:absolute;inset:0;z-index:6;cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent;user-select:none"></div>
             <div id="play-icon-overlay" class="play-icon-overlay"></div>
+            <div id="vol-osd"></div>
         </div>
         <div class="player-controls">
             <div class="seek-bar" id="seek-bar" style="display:none">
@@ -1298,6 +1301,23 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         var svgPauseIcon = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
         var svgPlayIcon  = '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
         var playIconEl = document.getElementById('play-icon-overlay');
+        var volOsd = document.getElementById('vol-osd');
+        var volOsdTimer = null;
+        function showVolOsd() {
+            var pct = player.muted ? 0 : Math.round(player.volume * 100);
+            var icon = player.muted || pct === 0 ? '\uD83D\uDD07' : pct < 50 ? '\uD83D\uDD09' : '\uD83D\uDD0A';
+            volOsd.textContent = icon + ' ' + pct + '%';
+            volOsd.classList.add('visible');
+            clearTimeout(volOsdTimer);
+            volOsdTimer = setTimeout(function() { volOsd.classList.remove('visible'); }, 1500);
+        }
+        function showSeekOsd(delta) {
+            var icon = delta > 0 ? '\u23E9' : '\u23EA';
+            volOsd.textContent = icon + ' ' + (delta > 0 ? '+' : '') + delta + 's';
+            volOsd.classList.add('visible');
+            clearTimeout(volOsdTimer);
+            volOsdTimer = setTimeout(function() { volOsd.classList.remove('visible'); }, 800);
+        }
         var popTimer = null;
         function showPlayIcon(pausing) {
             clearTimeout(popTimer);
@@ -1314,7 +1334,13 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             if (tapTimer) {
                 clearTimeout(tapTimer);
                 tapTimer = null;
+                var enteringFs = !isFs();
                 toggleFs();
+                if (enteringFs) {
+                    if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+                } else {
+                    if (!player.paused) { player.pause(); showPlayIcon(true); }
+                }
             } else {
                 tapTimer = setTimeout(function() {
                     tapTimer = null;
@@ -1343,6 +1369,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             player.muted = !player.muted;
             localStorage.setItem('player_muted', player.muted);
             updateVolUI();
+            showVolOsd();
         });
         if (volSlider) volSlider.addEventListener('input', function() {
             player.volume = parseFloat(volSlider.value);
@@ -1350,7 +1377,19 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             localStorage.setItem('player_volume', player.volume);
             localStorage.setItem('player_muted',  player.muted);
             updateVolUI();
+            showVolOsd();
         });
+        // Molette : volume
+        playerCard.addEventListener('wheel', function(e) {
+            e.preventDefault();
+            var delta = e.deltaY < 0 ? 0.05 : -0.05;
+            player.volume = Math.min(1, Math.max(0, player.volume + delta));
+            player.muted = player.volume === 0;
+            localStorage.setItem('player_volume', player.volume);
+            localStorage.setItem('player_muted', player.muted);
+            updateVolUI();
+            showVolOsd();
+        }, { passive: false });
         // Vitesse
         var speeds = [1, 1.5, 2];
         var savedSpd = parseFloat(localStorage.getItem('player_speed') || '1');
@@ -1389,11 +1428,46 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
         // Raccourcis clavier
         document.addEventListener('keydown', function(e) {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA')) return;
-            if (e.key === ' ' || e.key === 'k') { e.preventDefault(); if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); } else { player.pause(); showPlayIcon(true); } }
-            else if (e.key === 'ArrowLeft')  { e.preventDefault(); if (S.duration) seekToFraction(Math.max(0, realTime() - 10) / S.duration); }
-            else if (e.key === 'ArrowRight') { e.preventDefault(); if (S.duration) seekToFraction(Math.min(S.duration, realTime() + 10) / S.duration); }
+            if (e.key === ' ' || e.key === 'k') {
+                e.preventDefault();
+                if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+                else { player.pause(); showPlayIcon(true); }
+            }
+            else if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                if (S.duration) { seekToFraction(Math.max(0, realTime() - 10) / S.duration); showSeekOsd(-10); }
+            }
+            else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                if (S.duration) { seekToFraction(Math.min(S.duration, realTime() + 10) / S.duration); showSeekOsd(10); }
+            }
+            else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                player.volume = Math.min(1, player.volume + 0.05);
+                player.muted = false;
+                localStorage.setItem('player_volume', player.volume);
+                localStorage.setItem('player_muted', false);
+                updateVolUI(); showVolOsd();
+            }
+            else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                player.volume = Math.max(0, player.volume - 0.05);
+                player.muted = player.volume === 0;
+                localStorage.setItem('player_volume', player.volume);
+                localStorage.setItem('player_muted', player.muted);
+                updateVolUI(); showVolOsd();
+            }
             else if (e.key === 'f' || e.key === 'F') { e.preventDefault(); toggleFs(); }
-            else if (e.key === 'm' || e.key === 'M') { e.preventDefault(); player.muted = !player.muted; localStorage.setItem('player_muted', player.muted); updateVolUI(); }
+            else if (e.key === 'm' || e.key === 'M') {
+                e.preventDefault();
+                player.muted = !player.muted;
+                localStorage.setItem('player_muted', player.muted);
+                updateVolUI(); showVolOsd();
+            }
+            else if (e.key >= '0' && e.key <= '9' && S.duration) {
+                e.preventDefault();
+                seekToFraction(parseInt(e.key) / 10);
+            }
         });
     }
 
