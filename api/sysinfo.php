@@ -43,16 +43,26 @@ $disk_used  = $disk_total - $disk_free;
 
 // Disk I/O calculé sur la fenêtre 500 ms
 $disk_busy_pct  = 0.0;
+$disk_io_pct    = 0.0;
 $disk_read_mbs  = 0.0;
 $disk_write_mbs = 0.0;
 
 if ($ds_a !== null && $ds_b !== null) {
-    // [5]=rd_sectors [9]=wr_sectors [12]=tot_ticks (ms busy)
+    // [5]=rd_sectors [9]=wr_sectors [12]=tot_ticks (ms busy, cap 100%)
+    // [13]=rq_ticks (temps pondéré, peut dépasser 500ms si I/O parallèles)
     $busy_ms_diff = (int)$ds_b[12] - (int)$ds_a[12];
+    $rq_ms_diff   = (int)$ds_b[13] - (int)$ds_a[13];
     $rd_sec_diff  = (int)$ds_b[5]  - (int)$ds_a[5];
     $wr_sec_diff  = (int)$ds_b[9]  - (int)$ds_a[9];
 
-    $disk_busy_pct  = round(min(100.0, $busy_ms_diff / 500.0 * 100.0), 1);
+    // % classique (plafonné 100%) — garde pour compat
+    $disk_busy_pct = round(min(100.0, $busy_ms_diff / 500.0 * 100.0), 1);
+
+    // % de la capacité I/O parallèle réelle : rq_ticks / (fenêtre × nb_disques)
+    // rq_ticks peut valoir jusqu'à 500ms × N disques si tous les disques sont saturés
+    $raid_disks   = (int)(@file_get_contents('/sys/block/md5/md/raid_disks') ?: '1');
+    $disk_io_pct  = round(min(100.0, $rq_ms_diff / (500.0 * max(1, $raid_disks)) * 100.0), 1);
+
     $disk_read_mbs  = round(max(0.0, $rd_sec_diff * 512 / 1048576 / 0.5), 2);
     $disk_write_mbs = round(max(0.0, $wr_sec_diff * 512 / 1048576 / 0.5), 2);
 }
@@ -76,6 +86,7 @@ echo json_encode([
     'disk_used_gb'   => round($disk_used / 1073741824, 1),
     'disk_free_gb'   => round($disk_free / 1073741824, 1),
     'disk_busy_pct'  => $disk_busy_pct,
+    'disk_io_pct'    => $disk_io_pct,
     'disk_read_mbs'  => $disk_read_mbs,
     'disk_write_mbs' => $disk_write_mbs,
     'cpu_temp_c'     => $cpu_temp,
