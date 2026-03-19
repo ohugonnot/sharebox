@@ -1018,9 +1018,10 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
             if (canPlay('video/webm; codecs="av01.0.05M.08"') || canPlay('video/mp4; codecs="av01"')) return 'native';
             return 'transcode';
         }
-        // HEVC : natif sur Safari/macOS uniquement
+        // HEVC : natif uniquement si MP4 + Safari (hvc1/hev1)
+        // MKV+HEVC → transcode (le remux HEVC cause des décalages audio)
         if (c === 'hevc') {
-            if (canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"')) return 'native';
+            if (d.isMP4 && (canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"'))) return 'native';
             return 'transcode';
         }
         return 'transcode';
