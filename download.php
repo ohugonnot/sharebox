@@ -751,6 +751,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         ? '<a class="player-btn" href="' . $backUrl . '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Retour</a>'
         : '';
     $remuxEnabled = STREAM_REMUX_ENABLED ? 'true' : 'false';
+    header('Cache-Control: no-store');
 
     echo <<<HTML
 <!DOCTYPE html>
@@ -1389,16 +1390,20 @@ var REMUX_ENABLED = {$remuxEnabled};
         var tapPaused = null; // état paused sauvegardé avant le 1er clic du double-tap
         clickArea.addEventListener('click', function() {
             var now = Date.now();
-            var isDouble = now - lastTapTime < 300;
+            var delta = now - lastTapTime;
+            var isDouble = delta < 300;
             lastTapTime = isDouble ? 0 : now;
+            console.log('[click] delta=' + delta + ' isDouble=' + isDouble + ' paused=' + player.paused + ' tapPaused=' + tapPaused);
             if (isDouble) {
                 // Restaure l'état d'avant le 1er clic (évite le toggle async non fiable)
+                console.log('[dblclick] restore tapPaused=' + tapPaused);
                 if (tapPaused === true)  { player.pause(); showPlayIcon(true); }
                 else if (tapPaused === false) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
                 tapPaused = null;
                 toggleFs();
             } else {
                 tapPaused = player.paused; // snapshot avant toggle
+                console.log('[single] tapPaused saved=' + tapPaused);
                 if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
                 else               { player.pause(); showPlayIcon(true); }
             }
