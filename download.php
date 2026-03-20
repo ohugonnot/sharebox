@@ -1383,21 +1383,24 @@ var REMUX_ENABLED = {$remuxEnabled};
             if (!pausing) popTimer = setTimeout(function() { playIconEl.classList.remove('pop-play'); }, 450);
         }
         // Click sur la zone vidéo : simple tap = pause/play immédiat, double tap = fullscreen
-        // Pas de timer : play/pause est immédiat ; le 2e tap annule le 1er et toggle fullscreen
+        // Le 1er clic sauvegarde l'état avant toggle ; le 2e clic restaure cet état + toggleFs
         var clickArea = document.getElementById('video-click-area');
         var lastTapTime = 0;
+        var tapPaused = null; // état paused sauvegardé avant le 1er clic du double-tap
         clickArea.addEventListener('click', function() {
             var now = Date.now();
             var isDouble = now - lastTapTime < 300;
             lastTapTime = isDouble ? 0 : now;
-            // Play/pause immédiat dans tous les cas
-            if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
-            else               { player.pause(); showPlayIcon(true); }
-            // Double tap : undo play/pause + toggle fullscreen (état net inchangé)
             if (isDouble) {
+                // Restaure l'état d'avant le 1er clic (évite le toggle async non fiable)
+                if (tapPaused === true)  { player.pause(); showPlayIcon(true); }
+                else if (tapPaused === false) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+                tapPaused = null;
+                toggleFs();
+            } else {
+                tapPaused = player.paused; // snapshot avant toggle
                 if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
                 else               { player.pause(); showPlayIcon(true); }
-                toggleFs();
             }
         });
         playBtn.addEventListener('click', function() {
