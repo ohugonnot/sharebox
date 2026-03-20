@@ -1383,30 +1383,20 @@ var REMUX_ENABLED = {$remuxEnabled};
             playIconEl.classList.add(pausing ? 'pop-pause' : 'pop-play');
             if (!pausing) popTimer = setTimeout(function() { playIconEl.classList.remove('pop-play'); }, 450);
         }
-        // Click sur la zone vidéo : simple tap = pause/play immédiat, double tap = fullscreen
-        // Le 1er clic sauvegarde l'état avant toggle ; le 2e clic restaure cet état + toggleFs
+        // Click sur la zone vidéo : simple clic = pause/play, double clic = fullscreen
+        // dblclick natif : timer 200ms sur le clic simple pour laisser le dblclick annuler
         var clickArea = document.getElementById('video-click-area');
-        var lastTapTime = 0;
-        var tapPaused = null; // état paused sauvegardé avant le 1er clic du double-tap
+        var singleClickTimer = null;
         clickArea.addEventListener('click', function() {
-            var now = Date.now();
-            var delta = now - lastTapTime;
-            var isDouble = delta < 300;
-            lastTapTime = isDouble ? 0 : now;
-            console.log('[click] delta=' + delta + ' isDouble=' + isDouble + ' paused=' + player.paused + ' tapPaused=' + tapPaused);
-            if (isDouble) {
-                // Restaure l'état d'avant le 1er clic (évite le toggle async non fiable)
-                console.log('[dblclick] restore tapPaused=' + tapPaused);
-                if (tapPaused === true)  { player.pause(); showPlayIcon(true); }
-                else if (tapPaused === false) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
-                tapPaused = null;
-                toggleFs();
-            } else {
-                tapPaused = player.paused; // snapshot avant toggle
-                console.log('[single] tapPaused saved=' + tapPaused);
+            clearTimeout(singleClickTimer);
+            singleClickTimer = setTimeout(function() {
                 if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
                 else               { player.pause(); showPlayIcon(true); }
-            }
+            }, 200);
+        });
+        clickArea.addEventListener('dblclick', function() {
+            clearTimeout(singleClickTimer);
+            toggleFs();
         });
         playBtn.addEventListener('click', function() {
             if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
