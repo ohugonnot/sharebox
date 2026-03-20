@@ -1383,29 +1383,31 @@ var REMUX_ENABLED = {$remuxEnabled};
             playIconEl.classList.add(pausing ? 'pop-pause' : 'pop-play');
             if (!pausing) popTimer = setTimeout(function() { playIconEl.classList.remove('pop-play'); }, 450);
         }
-        // Click sur la zone vidéo : simple clic = pause/play, double clic = fullscreen
-        // dblclick natif : timer 200ms sur le clic simple pour laisser le dblclick annuler
+        // Click/tap sur la zone vidéo : simple = pause/play, double = fullscreen+play/pause
+        // Timestamp-based : fonctionne mouse ET touch (dblclick n'existe pas sur tablette)
         var clickArea = document.getElementById('video-click-area');
+        var lastClickTime = 0;
         var singleClickTimer = null;
         clickArea.addEventListener('click', function() {
             clearTimeout(singleClickTimer);
-            singleClickTimer = setTimeout(function() {
-                if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
-                else               { player.pause(); showPlayIcon(true); }
-            }, 200);
-        });
-        clickArea.addEventListener('dblclick', function() {
-            clearTimeout(singleClickTimer);
-            if (!isFs()) {
-                // Entrée fullscreen → play
-                toggleFs();
-                playIconEl.classList.remove('visible','pop-pause','pop-play');
-                player.play().catch(function(){});
+            var now = Date.now();
+            var isDouble = now - lastClickTime < 300;
+            lastClickTime = isDouble ? 0 : now;
+            if (isDouble) {
+                if (!isFs()) {
+                    toggleFs();
+                    playIconEl.classList.remove('visible','pop-pause','pop-play');
+                    player.play().catch(function(){});
+                } else {
+                    toggleFs();
+                    player.pause();
+                    showPlayIcon(true);
+                }
             } else {
-                // Sortie fullscreen → pause
-                toggleFs();
-                player.pause();
-                showPlayIcon(true);
+                singleClickTimer = setTimeout(function() {
+                    if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+                    else               { player.pause(); showPlayIcon(true); }
+                }, 250);
             }
         });
         playBtn.addEventListener('click', function() {
