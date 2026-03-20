@@ -1396,7 +1396,17 @@ var REMUX_ENABLED = {$remuxEnabled};
         });
         clickArea.addEventListener('dblclick', function() {
             clearTimeout(singleClickTimer);
-            toggleFs();
+            if (!isFs()) {
+                // Entrée fullscreen → play
+                toggleFs();
+                playIconEl.classList.remove('visible','pop-pause','pop-play');
+                player.play().catch(function(){});
+            } else {
+                // Sortie fullscreen → pause
+                toggleFs();
+                player.pause();
+                showPlayIcon(true);
+            }
         });
         playBtn.addEventListener('click', function() {
             if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
