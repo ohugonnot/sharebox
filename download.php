@@ -256,7 +256,7 @@ if (is_file($resolvedPath)) {
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
             stream_log('REMUX start | audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
             $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 192k'
+                . $audioMap . ' -dn -c:v copy -c:a aac -ac 2 -b:a 192k'
                 . ' -af "aresample=async=3000:first_pts=0"'
                 . ' -avoid_negative_ts make_zero -start_at_zero'
                 . ' -max_muxing_queue_size 1024'
@@ -284,7 +284,24 @@ if (is_file($resolvedPath)) {
             header('Content-Disposition: inline');
             header('X-Accel-Buffering: no');
             header('Cache-Control: no-cache');
-            header('Accept-Ranges: none');
+            // Content-Length estimé : Safari coupe la connexion sans ça (pas de progressive download)
+            // Estimation conservatrice basée sur le bitrate moyen par qualité + audio 192kbps
+            $estimatedBitrates = [480 => 1800000, 576 => 2500000, 720 => 4000000, 1080 => 8000000];
+            $estimatedBps = ($estimatedBitrates[$quality] ?? 4000000) + 192000;
+            $probeDuration = 0;
+            try {
+                $cachedProbe = $db->prepare("SELECT result FROM probe_cache WHERE path = :p");
+                $cachedProbe->execute([':p' => $resolvedPath]);
+                if ($probeRow = $cachedProbe->fetch()) {
+                    $probeData = json_decode($probeRow['result'], true);
+                    $probeDuration = (float)($probeData['duration'] ?? 0);
+                }
+            } catch (PDOException $e) { /* ignore */ }
+            $remainingDuration = max(0, $probeDuration - $startSec);
+            if ($remainingDuration > 0) {
+                // Estimation large (+20%) pour éviter que Safari coupe avant la fin
+                header('Content-Length: ' . (int)($estimatedBps * $remainingDuration / 8 * 1.2));
+            }
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
             if ($burnSub >= 0) {
                 // Burn-in sous-titre image (PGS/VOBSUB) via filter_complex
@@ -296,7 +313,7 @@ if (is_file($resolvedPath)) {
                 $fc = '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
                 $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
                     . ' -filter_complex ' . $fc
-                    . ' -map "[v]" -map "[a]"'
+                    . ' -map "[v]" -map "[a]" -dn'
                     . ' -c:v libx264 -preset ultrafast -crf 23 -g 25 -threads 4'
                     . ' -c:a aac -ac 2 -b:a 192k'
                     . ' -shortest'
@@ -312,7 +329,7 @@ if (is_file($resolvedPath)) {
                 $fc = '"[0:v:0]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
                 $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
                     . ' -filter_complex ' . $fc
-                    . ' -map "[v]" -map "[a]"'
+                    . ' -map "[v]" -map "[a]" -dn'
                     . ' -c:v libx264 -preset ultrafast -crf 23 -g 25 -threads 4'
                     . ' -c:a aac -ac 2 -b:a 192k'
                     . ' -shortest'
