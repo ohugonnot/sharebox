@@ -857,7 +857,19 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .resume-banner .resume-yes:hover { background:#ffc060; }
 .resume-banner .resume-no { background:rgba(255,255,255,.08); color:var(--text-secondary); border:1px solid rgba(255,255,255,.1); }
 .resume-banner .resume-no:hover { background:rgba(255,255,255,.12); color:var(--text-primary); }
-@media(max-width:480px){.page{padding:.9rem .75rem 3rem}.player-name{display:none}}
+@media(max-width:480px){.page{padding:.9rem .75rem 3rem}.player-name{display:none}.player-btn.accent span{display:none}.track-bar label{display:none}.track-bar{gap:.3rem}}
+@media(orientation:landscape) and (max-height:500px){
+.page{padding:0;overflow:hidden;height:100vh}
+.player-toolbar{position:fixed;top:0;left:0;right:0;z-index:30;background:linear-gradient(rgba(8,10,18,.85),transparent);padding:.5rem .8rem;margin-bottom:0;transition:opacity .25s}
+.player-card{border-radius:0;border:none;position:fixed;inset:0;z-index:10}
+.player-video-wrap{height:100vh}
+video{max-height:100vh !important;height:100vh !important}
+.player-controls{position:fixed;bottom:0;left:0;right:0;z-index:20;background:linear-gradient(transparent,rgba(8,10,18,.9)) !important;padding-top:1.5rem;border-top:none !important;transition:opacity .25s}
+.player-controls.fs-hidden{opacity:0;pointer-events:none}
+.player-card.hide-cursor .player-toolbar{opacity:0;pointer-events:none}
+.track-bar{display:none !important}
+.player-name{display:none}
+}
 .seek-tooltip { position:absolute; bottom:calc(100% + 6px); background:rgba(12,14,20,.9); border:1px solid rgba(255,255,255,.1); color:var(--text-primary); font-family:var(--font-mono); font-size:.68rem; padding:.18rem .45rem; border-radius:4px; pointer-events:none; white-space:nowrap; transform:translateX(-50%); display:none; z-index:5; }
 .vol-wrap { display:flex; align-items:center; gap:.3rem; }
 .vol-slider { -webkit-appearance:none; appearance:none; width:60px; height:16px; background:transparent; outline:none; cursor:pointer; vertical-align:middle; }
@@ -879,11 +891,11 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
     <div class="player-toolbar">
         {$backHtml}
         <span class="player-name" title="{$fileNameHtml}">{$fileNameHtml}</span>
-        <a class="player-btn accent" href="{$dlUrl}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Télécharger</a>
+        <a class="player-btn accent" href="{$dlUrl}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span> Télécharger</span></a>
     </div>
     <div class="player-card">
         <div class="player-video-wrap">
-            <{$tag} id="player" {$controlsAttr} autoplay playsinline preload="metadata" crossorigin="anonymous"></{$tag}>
+            <{$tag} id="player" {$controlsAttr} autoplay playsinline webkit-playsinline preload="metadata"></{$tag}>
             <div class="player-hint" id="hint"><span class="player-hint-text">Chargement...</span></div>
             <div id="video-click-area" style="position:absolute;inset:0;z-index:6;cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent;user-select:none"></div>
             <div id="play-icon-overlay" class="play-icon-overlay"></div>
@@ -1015,6 +1027,8 @@ var REMUX_ENABLED = {$remuxEnabled};
     // ── Plein écran ───────────────────────────────────────────────────────────
     var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement || (isIOS && player.webkitDisplayingFullscreen)); }
+    function isLandscapeMobile() { return window.innerHeight <= 500 && window.innerWidth > window.innerHeight; }
+    function isImmersive() { return isFs() || isLandscapeMobile(); }
     function toggleFs() {
         if (isIOS && player.webkitEnterFullscreen) {
             if (player.webkitDisplayingFullscreen) player.webkitExitFullscreen();
@@ -1028,7 +1042,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         playerCtrl.classList.remove('fs-hidden');
         playerCard.classList.remove('hide-cursor');
         clearTimeout(S.fsHideTimer);
-        if (isFs() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); playerCard.classList.add('hide-cursor'); }, 3000);
+        if (isImmersive() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); playerCard.classList.add('hide-cursor'); }, 3000);
     }
     function onFsChange() {
         if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
@@ -1038,10 +1052,16 @@ var REMUX_ENABLED = {$remuxEnabled};
     document.addEventListener('webkitfullscreenchange',  onFsChange);
     player.addEventListener('webkitbeginfullscreen',     onFsChange);
     player.addEventListener('webkitendfullscreen',       onFsChange);
-    playerCard.addEventListener('mousemove',  function() { if (isFs()) showFsControls(); });
-    playerCard.addEventListener('click',      function() { if (isFs()) showFsControls(); });
-    playerCard.addEventListener('touchstart', function() { if (isFs()) showFsControls(); }, {passive:true});
-    player.addEventListener('pause', function() { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); });
+    playerCard.addEventListener('mousemove',  function() { if (isImmersive()) showFsControls(); });
+    playerCard.addEventListener('click',      function() { if (isImmersive()) showFsControls(); });
+    playerCard.addEventListener('touchstart', function() { if (isImmersive()) showFsControls(); }, {passive:true});
+    player.addEventListener('pause', function() { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); });
+
+    // Paysage mobile : auto-hide controles comme en fullscreen
+    window.addEventListener('resize', function() {
+        if (isLandscapeMobile() && !player.paused) showFsControls();
+        if (!isLandscapeMobile() && !isFs()) { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
+    });
 
     // ── localStorage (try/catch : private browsing peut throw) ───────────────
     function lsGet(k, def) { try { var v = localStorage.getItem(k); return v !== null ? v : def; } catch(e) { return def; } }
@@ -1435,30 +1455,25 @@ var REMUX_ENABLED = {$remuxEnabled};
             if (!pausing) popTimer = setTimeout(function() { playIconEl.classList.remove('pop-play'); }, 450);
         }
         // Click/tap sur la zone vidéo : simple = pause/play, double = fullscreen+play/pause
-        // Timestamp-based : fonctionne mouse ET touch (dblclick n'existe pas sur tablette)
+        // Play/pause immédiat au premier tap (pas de setTimeout — requis pour iOS user gesture)
+        // Double-tap détecté par timestamp : annule l'action du premier + toggle fullscreen
         var clickArea = document.getElementById('video-click-area');
         var lastClickTime = 0;
-        var singleClickTimer = null;
+        var wasPausedBeforeTap = false;
         clickArea.addEventListener('click', function() {
-            clearTimeout(singleClickTimer);
             var now = Date.now();
             var isDouble = now - lastClickTime < 300;
             lastClickTime = isDouble ? 0 : now;
             if (isDouble) {
-                if (!isFs()) {
-                    toggleFs();
-                    playIconEl.classList.remove('visible','pop-pause','pop-play');
-                    player.play().catch(function(){});
-                } else {
-                    toggleFs();
-                    player.pause();
-                    showPlayIcon(true);
-                }
+                // Double-tap : annuler le play/pause du premier tap, toggle fullscreen
+                if (wasPausedBeforeTap) { player.pause(); showPlayIcon(true); }
+                else { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+                toggleFs();
             } else {
-                singleClickTimer = setTimeout(function() {
-                    if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
-                    else               { player.pause(); showPlayIcon(true); }
-                }, 250);
+                // Single tap : play/pause immédiat (iOS exige play() dans le user gesture synchrone)
+                wasPausedBeforeTap = player.paused;
+                if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+                else               { player.pause(); showPlayIcon(true); }
             }
         });
         playBtn.addEventListener('click', function() {
