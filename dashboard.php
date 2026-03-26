@@ -7,6 +7,7 @@
             <span class="dash-pill" id="dash-pill-ram">RAM &mdash;</span>
             <span class="dash-pill" id="dash-pill-disk">HDD &mdash;</span>
             <span class="dash-pill" id="dash-pill-net">&uarr;&mdash; &darr;&mdash;</span>
+            <span class="dash-pill" id="dash-pill-quota">Quota &mdash;</span>
         </span>
     </summary>
 
@@ -80,6 +81,35 @@
             </div>
 
         </div><!-- /.dash-grid -->
+
+        <!-- Quota bande passante mensuel -->
+        <div class="dash-quota-card" id="dash-quota">
+            <div class="dash-quota-ring-wrap">
+                <svg class="dash-quota-ring" viewBox="0 0 120 120">
+                    <circle class="dash-quota-track" cx="60" cy="60" r="52" />
+                    <circle class="dash-quota-fill" id="dash-quota-arc" cx="60" cy="60" r="52" />
+                    <circle class="dash-quota-proj" id="dash-quota-proj-arc" cx="60" cy="60" r="46" />
+                </svg>
+                <div class="dash-quota-center">
+                    <div class="dash-quota-pct" id="dash-quota-pct">&mdash;</div>
+                    <div class="dash-quota-label">utilis&eacute;</div>
+                </div>
+            </div>
+            <div class="dash-quota-details">
+                <div class="dash-card-title">Quota mensuel</div>
+                <div class="dash-quota-used" id="dash-quota-used">&mdash;</div>
+                <div class="dash-quota-breakdown">
+                    <span class="dash-quota-tx">&uarr; <span id="dash-quota-tx">&mdash;</span></span>
+                    <span class="dash-quota-rx">&darr; <span id="dash-quota-rx">&mdash;</span></span>
+                </div>
+                <div class="dash-quota-meta">
+                    <div><span class="dash-quota-meta-label">Moy/jour</span> <span id="dash-quota-daily">&mdash;</span></div>
+                    <div><span class="dash-quota-meta-label">Projection</span> <span id="dash-quota-proj">&mdash;</span></div>
+                    <div><span class="dash-quota-meta-label">Reste</span> <span id="dash-quota-left">&mdash;</span></div>
+                    <div><span class="dash-quota-meta-label">J restants</span> <span id="dash-quota-days">&mdash;</span></div>
+                </div>
+            </div>
+        </div>
 
         <!-- Graphe réseau 7 jours -->
         <details class="dash-subsection" id="dash-net-graph-section" open>
