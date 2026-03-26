@@ -21,3 +21,6 @@ define('DL_BASE_URL', '/dl/');
 
 // Maximum total size allowed for ZIP downloads (in bytes). Default: 10 Go.
 define('MAX_ZIP_SIZE', 10 * 1024 * 1024 * 1024);
+
+// Monthly bandwidth quota in TB (used by dashboard widget). Default: 100 TB.
+// define('BANDWIDTH_QUOTA_TB', 100);

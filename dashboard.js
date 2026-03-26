@@ -8,12 +8,14 @@ const D = {
     sysTimer:              null,
     speedTimer:            null,
     torrentTimer:          null,
+    quotaTimer:            null,
     pillTimer:             null,  // Toujours actif même accordéon fermé
     netChartLoaded:        false,
     netChart:              null,
     torrentIntervalOpen:   10000,
     torrentIntervalClosed: 30000,
     pillInterval:          60000, // Refresh pills quand accordéon fermé
+    quotaInterval:         300000, // Refresh quota toutes les 5 min
 };
 
 /* ============================================================
@@ -303,6 +305,67 @@ function initNetChart(d) {
 }
 
 /* ============================================================
+ * Quota bande passante mensuel
+ * ============================================================ */
+
+function fetchQuota() { fetchJSON('/share/api/quota.php', updateQuota); }
+
+function fmtBytes(b) {
+    if (b >= 1024 ** 4) return (b / 1024 ** 4).toFixed(1) + '\u00a0TB';
+    if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(1) + '\u00a0GB';
+    return (b / 1024 ** 2).toFixed(0) + '\u00a0MB';
+}
+
+function updateQuota(d) {
+    if (d.error) return;
+
+    const pct  = d.pct || 0;
+    const arc  = id('dash-quota-arc');
+    const proj = id('dash-quota-proj-arc');
+
+    // Ring gauge — circumference = 2 * PI * 52 ≈ 326.73
+    const circ = 326.73;
+    if (arc) arc.style.strokeDashoffset = circ - (circ * Math.min(pct, 100) / 100);
+
+    // Projection ring — circumference = 2 * PI * 46 ≈ 289.03
+    const projCirc = 289.03;
+    const projPct  = d.quota_bytes > 0 ? d.projection / d.quota_bytes * 100 : 0;
+    if (proj) {
+        proj.style.strokeDashoffset = projCirc - (projCirc * Math.min(projPct, 100) / 100);
+        proj.style.stroke = projPct > 100 ? 'rgba(239,83,80,.25)' :
+                            projPct > 85  ? 'rgba(240,160,48,.2)' :
+                                            'rgba(255,255,255,.06)';
+    }
+
+    // Color the main ring
+    const ringColor = pct >= 90 ? '#ef5350' :
+                      pct >= 75 ? '#f0a030' :
+                                  '#66bb6a';
+    if (arc) arc.style.stroke = ringColor;
+
+    setText('dash-quota-pct', Math.round(pct) + '%');
+    setText('dash-quota-used', fmtBytes(d.total_bytes) + '\u00a0/\u00a0' + fmtBytes(d.quota_bytes));
+    setText('dash-quota-tx', fmtBytes(d.tx_bytes));
+    setText('dash-quota-rx', fmtBytes(d.rx_bytes));
+    setText('dash-quota-daily', fmtBytes(d.daily_avg) + '/j');
+    setText('dash-quota-proj', fmtBytes(d.projection));
+    setText('dash-quota-left', fmtBytes(Math.max(0, d.quota_bytes - d.total_bytes)));
+    setText('dash-quota-days', d.days_left + 'j');
+
+    // Pill
+    updatePillQuota(pct);
+}
+
+function updatePillQuota(pct) {
+    const el = id('dash-pill-quota');
+    if (!el) return;
+    el.textContent = 'Quota\u00a0' + Math.round(pct) + '%';
+    const sev = pct >= 90 ? 'crit' : pct >= 75 ? 'warn' : 'ok';
+    el.classList.remove('is-ok', 'is-warn', 'is-crit');
+    el.classList.add('is-' + sev);
+}
+
+/* ============================================================
  * Torrents
  * ============================================================ */
 
@@ -433,6 +496,7 @@ function updatePillNet(d) {
 function fetchForPills() {
     fetchJSON('/share/api/sysinfo.php', updatePillsFromSysinfo);
     fetchJSON('/share/api/speed.php',   updatePillNet);
+    fetchJSON('/share/api/quota.php',   function(d) { if (!d.error) updatePillQuota(d.pct || 0); });
 }
 
 /* ============================================================
@@ -445,15 +509,18 @@ function startDashTimers() {
     fetchSysinfo();
     fetchSpeed();
     fetchTorrents();
+    fetchQuota();
     D.sysTimer     = setInterval(fetchSysinfo,   10000);
     D.speedTimer   = setInterval(fetchSpeed,     10000);
     D.torrentTimer = setInterval(fetchTorrents,  D.torrentIntervalClosed);
+    D.quotaTimer   = setInterval(fetchQuota,     D.quotaInterval);
 }
 
 function stopDashTimers() {
     clearInterval(D.sysTimer);
     clearInterval(D.speedTimer);
     clearInterval(D.torrentTimer);
+    clearInterval(D.quotaTimer);
     // Relancer le timer pill léger
     fetchForPills();
     D.pillTimer = setInterval(fetchForPills, D.pillInterval);
