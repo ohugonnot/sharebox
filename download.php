@@ -148,7 +148,8 @@ if (is_file($resolvedPath)) {
         foreach (($data['streams'] ?? []) as $s) {
             $lang  = $s['tags']['language'] ?? '';
             $title = strip_tags($s['tags']['title'] ?? '');
-            if ($s['codec_type'] === 'video' && !$videoHeight && isset($s['height'])) {
+            if ($s['codec_type'] === 'video' && !$videoHeight && isset($s['height'])
+                && !in_array($s['codec_name'] ?? '', ['mjpeg', 'png', 'bmp'])) {
                 $videoHeight = (int)$s['height'];
                 $videoCodec = $s['codec_name'] ?? '';
             } elseif ($s['codec_type'] === 'audio') {
@@ -157,7 +158,7 @@ if (is_file($resolvedPath)) {
                 $audio[] = ['index' => $audioIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label];
                 $audioIdx++;
             } elseif ($s['codec_type'] === 'subtitle') {
-                $imageCodecs = ['hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'dvb_teletext', 'xsub'];
+                $imageCodecs = ['hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'dvb_teletext', 'xsub', 'eia_608', 'eia_708'];
                 $subType = in_array($s['codec_name'] ?? '', $imageCodecs) ? 'image' : 'text';
                 $label = $lang ? strtoupper($lang) : 'Sous-titre ' . ($subIdx + 1);
                 if ($title) $label .= ' — ' . $title;
@@ -181,15 +182,33 @@ if (is_file($resolvedPath)) {
 
     // Extraction sous-titre en WebVTT
     if (isset($_GET['subtitle'])) {
-        $trackIdx = (int)$_GET['subtitle'];
+        $trackIdx = max(0, (int)$_GET['subtitle']);
         header('Content-Type: text/vtt; charset=utf-8');
         $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
         stream_log('SUBTITLE start | track=' . $trackIdx . ' | ' . basename($resolvedPath));
-        $cmd = 'ffmpeg -i ' . escapeshellarg($resolvedPath)
+        $cmd = 'timeout 60 ffmpeg -i ' . escapeshellarg($resolvedPath)
             . ' -map 0:s:' . $trackIdx . ' -f webvtt pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
-        [$slotFp] = acquireStreamSlot();
         passthru($cmd);
-        releaseStreamSlot($slotFp);
+        exit;
+    }
+
+    // Keyframe lookup : retourne le PTS réel du keyframe coarse-seeké par ffmpeg
+    // Le JS corrige S.offset rétroactivement pour éliminer le drift des sous-titres
+    if (isset($_GET['keyframe'])) {
+        header('Content-Type: application/json; charset=utf-8');
+        $seekSec = max(0.0, (float)($_GET['keyframe'] ?? 0));
+        if ($seekSec <= 0.0) { echo json_encode(['pts' => 0.0]); exit; }
+        $probeFp = acquireProbeSlot();
+        if (!$probeFp) { echo json_encode(['pts' => $seekSec]); exit; }
+        $cmd = 'timeout 5 ffprobe -v error -ss ' . escapeshellarg(sprintf('%.3f', $seekSec))
+            . ' -select_streams v:0 -skip_frame nokey -show_entries frame=pts_time'
+            . ' -frames:v 1 -of csv=p=0 '
+            . escapeshellarg($resolvedPath) . ' 2>/dev/null';
+        $kfLines = [];
+        exec($cmd, $kfLines);
+        releaseProbeSlot($probeFp);
+        $pts = isset($kfLines[0]) && is_numeric($kfLines[0]) ? (float)$kfLines[0] : $seekSec;
+        echo json_encode(['pts' => $pts]);
         exit;
     }
 
@@ -237,8 +256,8 @@ if (is_file($resolvedPath)) {
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
             stream_log('REMUX start | audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
             $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 128k'
-                . ' -af "aresample=async=3000"'
+                . $audioMap . ' -c:v copy -c:a aac -ac 2 -b:a 192k'
+                . ' -af "aresample=async=3000:first_pts=0"'
                 . ' -avoid_negative_ts make_zero -start_at_zero'
                 . ' -max_muxing_queue_size 1024'
                 . ' -min_frag_duration 300000'
@@ -258,7 +277,7 @@ if (is_file($resolvedPath)) {
         $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
         if ($mime && str_starts_with($mime, 'video/')) {
             $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
-            $allowedQualities = [480, 720, 1080];
+            $allowedQualities = [480, 576, 720, 1080];
             if (!in_array($quality, $allowedQualities)) $quality = 720;
             $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
             header('Content-Type: video/mp4');
@@ -273,15 +292,14 @@ if (is_file($resolvedPath)) {
                 // avant l'overlay. Corrige les décalages quand PGS déclaré ≠ résolution vidéo
                 // (ex : vidéo 1440x1080 SAR 4:3 mais PGS 1920x1080, ou vidéo croppée).
                 stream_log('TRANSCODE+SUB start | quality=' . $quality . 'p audio=' . $audioTrack . ' burnSub=' . $burnSub . ' start=' . $startSec . ' | ' . basename($resolvedPath));
-                $fc = '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v]"';
-                // Pas de fine seek pour burnSub : le fine seek décode N sec de 4K avant le 1er frame
-                // → trop lent → navigateur time out. On accepte ±5s d'imprécision.
+                // filter_complex unifié : vidéo+subs+audio dans le même graphe → sync garantie
+                $fc = '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
                 $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
                     . ' -filter_complex ' . $fc
-                    . ' -map "[v]" -map 0:a:' . $audioTrack
-                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 50 -threads 4'
+                    . ' -map "[v]" -map "[a]"'
+                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 25 -threads 4'
                     . ' -c:a aac -ac 2 -b:a 192k'
-                    . ' -af "aresample=async=3000:first_pts=0"'
+                    . ' -shortest'
                     . ' -avoid_negative_ts make_zero -start_at_zero'
                     . ' -max_muxing_queue_size 1024'
                     . ' -min_frag_duration 300000'
@@ -289,11 +307,15 @@ if (is_file($resolvedPath)) {
                     . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
             } else {
                 stream_log('TRANSCODE start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
+                // filter_complex unifié : audio et vidéo partagent le même graphe de filtres
+                // → timeline synchronisée, pas de drift entre les deux flux
+                $fc = '"[0:v:0]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
                 $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                    . $audioMap . ' -c:v libx264 -preset ultrafast -crf 23 -g 50 -threads 4'
-                    . ' -vf "scale=-2:\'min(' . $quality . ',ih)\'" -pix_fmt yuv420p'
+                    . ' -filter_complex ' . $fc
+                    . ' -map "[v]" -map "[a]"'
+                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 25 -threads 4'
                     . ' -c:a aac -ac 2 -b:a 192k'
-                    . ' -af "aresample=async=3000:first_pts=0"'
+                    . ' -shortest'
                     . ' -avoid_negative_ts make_zero -start_at_zero'
                     . ' -max_muxing_queue_size 1024'
                     . ' -min_frag_duration 300000'
@@ -944,7 +966,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         speed: 1,
         dragging: false, seekPending: false, rafPending: false,
         hasFailed: false, stallCount: 0,
-        videoHeight: 0,
+        videoHeight: 0, seekGen: 0,
         // timers
         fsHideTimer: null, videoWidthTimer: null,
         seekDebounce: null, stallTimer: null, stallInterval: null
@@ -1033,12 +1055,10 @@ var REMUX_ENABLED = {$remuxEnabled};
         var c  = d.videoCodec.toLowerCase();
         var ac = d.audio && d.audio.length > 0 ? (d.audio[0].codec || '').toLowerCase() : '';
         if (c === 'h264') {
-            // MP4 : natif si audio compatible, sinon transcode
-            if (d.isMP4) {
-                return (ac === 'aac' || ac === 'mp3') ? 'native' : 'transcode';
-            }
-            // MKV → remux si activé, sinon transcode
-            return (REMUX_ENABLED && d.isMKV) ? 'remux' : 'transcode';
+            // MP4 + audio natif : lecture directe sans transcodage
+            if (d.isMP4 && (ac === 'aac' || ac === 'mp3')) return 'native';
+            // H264 + audio incompatible (AC3/DTS) ou MKV : remux si activé (video copy, audio→AAC)
+            return REMUX_ENABLED ? 'remux' : 'transcode';
         }
         // VP9 WebM : natif si le browser supporte (Chrome/Firefox oui, Safari non)
         if (c === 'vp9' || c === 'vp8') {
@@ -1141,7 +1161,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     // ── Module sous-titres ────────────────────────────────────────────────────
     var Subs = {
         cues: [], types: [], urls: [],
-        _div: null, _idx: 0,
+        _div: null, _idx: 0, _gen: 0,
         resetIdx: function() { this._idx = this.cues.length ? this._find(S.offset) : 0; },
         _find: function(t) {
             var lo = 0, hi = this.cues.length;
@@ -1161,6 +1181,7 @@ var REMUX_ENABLED = {$remuxEnabled};
             if (this._div.innerHTML !== html) this._div.innerHTML = html;
         },
         load: function(idx) {
+            var gen = ++this._gen;
             var wasBurning = S.burnSub >= 0, pos = realTime();
             this.cues = []; this._idx = 0; S.burnSub = -1;
             if (this._div) this._div.innerHTML = '';
@@ -1173,7 +1194,7 @@ var REMUX_ENABLED = {$remuxEnabled};
                 var self = this;
                 fetch(this.urls[idx], {credentials:'same-origin'})
                     .then(function(r) { return r.text(); })
-                    .then(function(t) { self.cues = parseVTT(t); self._idx = self._find(realTime()); })
+                    .then(function(t) { if (gen !== self._gen) return; self.cues = parseVTT(t); self._idx = self._find(realTime()); })
                     .catch(function() {});
             } else {
                 if (wasBurning) startStream(pos);
@@ -1211,7 +1232,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         return p.length === 3 ? +p[0]*3600 + +p[1]*60 + parseFloat(p[2]) : +p[0]*60 + parseFloat(p[1]);
     }
     function parseVTT(text) {
-        var cues = [], blocks = text.replace(/\\r\\n/g,'\\n').split(/\\n\\n+/);
+        var cues = [], blocks = text.replace(/\\r\\n|\\r/g,'\\n').split(/\\n\\n+/);
         for (var b = 0; b < blocks.length; b++) {
             var lines = blocks[b].trim().split('\\n'), ti = -1;
             for (var l = 0; l < lines.length; l++) { if (lines[l].indexOf(' --> ') !== -1) { ti = l; break; } }
@@ -1245,14 +1266,27 @@ var REMUX_ENABLED = {$remuxEnabled};
         var pct = t / S.duration * 100;
         seekFill.style.width = pct + '%'; seekThumb.style.left = pct + '%'; timeCurrent.textContent = fmtTime(t);
         clearTimeout(S.seekDebounce);
-        S.seekDebounce = setTimeout(function() {
-            if (S.confirmed === 'native') {
-                S.seekPending = false; player.currentTime = t; hint.textContent = '';
-            } else {
+        if (S.confirmed === 'native') {
+            S.seekPending = false; player.currentTime = t; hint.textContent = '';
+        } else {
+            S.seekDebounce = setTimeout(function() {
                 startStream(t); S.seekPending = false;
                 hint.textContent = 'Chargement \u00E0 ' + fmtTime(t) + '...'; hint.className = 'player-hint';
-            }
-        }, 300);
+                // Correction rétroactive : le coarse seek atterrit sur keyframe K ≤ t.
+                // On corrige S.offset = K pendant le démarrage du stream (avant le 1er frame).
+                if (t > 0) {
+                    var seekGen = ++S.seekGen;
+                    fetch(base + '?' + pp + 'keyframe=' + t.toFixed(1))
+                        .then(function(r) { return r.json(); })
+                        .then(function(d) {
+                            if (seekGen === S.seekGen && typeof d.pts === 'number' && d.pts >= 0) {
+                                S.offset = d.pts; Subs.resetIdx();
+                            }
+                        })
+                        .catch(function() {});
+                }
+            }, 300);
+        }
     }
     player.addEventListener('timeupdate', function() {
         if (!S.dragging && !S.rafPending) {
@@ -1311,7 +1345,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         }
         if (d.videoHeight > 0) {
             S.videoHeight = d.videoHeight;
-            var qs = [480, 720, 1080].filter(function(q) { return q <= S.videoHeight; });
+            var qs = [480, 576, 720, 1080].filter(function(q) { return q <= S.videoHeight; });
             if (qs.length) {
                 S.quality = qs.indexOf(720) !== -1 ? 720 : qs[qs.length - 1];
                 hasControls = true;
@@ -1414,11 +1448,11 @@ var REMUX_ENABLED = {$remuxEnabled};
             if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
             else               player.pause();
         });
-        player.addEventListener('play',    function() { playBtn.innerHTML = svgPlay; });
-        player.addEventListener('playing', function() { playBtn.innerHTML = svgPlay; playIconEl.classList.remove('visible', 'pop-pause'); if (isFs()) showFsControls(); });
-        player.addEventListener('pause',   function() { playBtn.innerHTML = svgPause; playIconEl.innerHTML = svgPauseIcon; playIconEl.classList.remove('pop-pause','pop-play'); playIconEl.classList.add('visible'); });
-        player.addEventListener('waiting', function() { playBtn.innerHTML = svgPlay; });
-        player.addEventListener('ended',   function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('play',    function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('playing', function() { playBtn.innerHTML = svgPause; playIconEl.classList.remove('visible', 'pop-pause'); if (isFs()) showFsControls(); });
+        player.addEventListener('pause',   function() { playBtn.innerHTML = svgPlay; playIconEl.innerHTML = svgPauseIcon; playIconEl.classList.remove('pop-pause','pop-play'); playIconEl.classList.add('visible'); });
+        player.addEventListener('waiting', function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('ended',   function() { playBtn.innerHTML = svgPlay; });
         // Fullscreen
         if (fsBtn) fsBtn.addEventListener('click', toggleFs);
         // Volume
@@ -1461,7 +1495,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         // Vitesse
         var speeds = [0.5, 0.75, 1, 1.5, 2];
         var savedSpd = parseFloat(lsGet('player_speed', '1'));
-        var speedIdx = speeds.indexOf(savedSpd); if (speedIdx < 0) speedIdx = 0;
+        var speedIdx = speeds.indexOf(savedSpd); if (speedIdx < 0) speedIdx = speeds.indexOf(1);
         S.speed = speeds[speedIdx];
         if (speedBtn) { speedBtn.textContent = S.speed + '\u00D7'; speedBtn.addEventListener('click', function() {
             speedIdx = (speedIdx + 1) % speeds.length; S.speed = speeds[speedIdx];
@@ -1476,6 +1510,11 @@ var REMUX_ENABLED = {$remuxEnabled};
             else if (t >= S.duration - 60)      lsSet(posKey, '0');
         }, 5000);
         player.addEventListener('ended', function() { lsSet(posKey, '0'); });
+        window.addEventListener('pagehide', function() {
+            var t = realTime();
+            if (S.duration > 0 && t > 30 && t < S.duration - 60) lsSet(posKey, t.toFixed(0));
+            clearStallWatchdog(); clearTimeout(stableTimer);
+        });
 
         // Bouton Resync
         var resyncBtn = document.createElement('button');
@@ -1493,11 +1532,14 @@ var REMUX_ENABLED = {$remuxEnabled};
         modeBtn.addEventListener('click', function() {
             var pos = realTime(), m = S.confirmed || S.step;
             // Cycle : native → [remux si MKV+activé] → x264-480p → x264-720p → x264-1080p → native
-            if (m === 'native')         { S.step = S.confirmed = (REMUX_ENABLED && S.isMKV) ? 'remux' : 'transcode'; S.quality = 480; }
-            else if (m === 'remux')     { S.step = S.confirmed = 'transcode'; S.quality = 480; }
-            else if (S.quality === 480) { S.quality = 720; }
-            else if (S.quality === 720) { S.quality = 1080; }
-            else                        { S.step = S.confirmed = 'native'; S.quality = 720; startStream(pos); return; }
+            var allQ = [480, 576, 720, 1080].filter(function(q) { return q <= (S.videoHeight || 1080); });
+            if (m === 'native')         { S.step = S.confirmed = (REMUX_ENABLED && S.isMKV) ? 'remux' : 'transcode'; S.quality = allQ[0] || 480; }
+            else if (m === 'remux')     { S.step = S.confirmed = 'transcode'; S.quality = allQ[0] || 480; }
+            else {
+                var qi = allQ.indexOf(S.quality);
+                if (qi >= 0 && qi < allQ.length - 1) { S.quality = allQ[qi + 1]; }
+                else { S.step = S.confirmed = 'native'; S.quality = 720; startStream(pos); return; }
+            }
             S.burnSub = -1; Subs.cues = []; if (Subs._div) Subs._div.innerHTML = '';
             hint.textContent = ''; updateModeUI(); startStream(pos);
         });
@@ -1516,7 +1558,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         kbCard.appendChild(kbTitle);
         [['Espace / K','Lecture / Pause'],['← →','\u221210s / +10s'],
          ['\u2191 \u2193','Volume \u00B15\u00A0%'],['0\u20139','Aller \u00e0 N\u00d710\u00a0%'],
-         ['F','Plein \u00e9cran'],['M','Muet'],['?','Cette aide']]
+         ['F','Plein \u00e9cran'],['M','Muet'],['R','Resync son/image'],['?','Cette aide']]
         .forEach(function(r) {
             var row = document.createElement('div'); row.className = 'kb-row';
             var key = document.createElement('span'); key.className = 'kb-key'; key.textContent = r[0];
@@ -1569,6 +1611,11 @@ var REMUX_ENABLED = {$remuxEnabled};
             else if (e.key >= '0' && e.key <= '9' && S.duration) {
                 e.preventDefault();
                 seekToFraction(parseInt(e.key) / 10);
+            }
+            else if (e.key === 'r' || e.key === 'R') {
+                e.preventDefault();
+                if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 0.1); }
+                else { hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(realTime()); }
             }
             else if (e.key === '?') {
                 e.preventDefault();
@@ -1623,6 +1670,10 @@ var REMUX_ENABLED = {$remuxEnabled};
                 if (!streamStarted) { streamStarted = true; hint.textContent = ''; startStream(savedPos); }
             });
     } else {
+        player.addEventListener('error', function() {
+            hint.textContent = 'Format audio non support\u00e9 par votre navigateur. Utilisez T\u00e9l\u00e9charger.';
+            hint.className = 'player-hint error';
+        });
         startStream(0);
     }
 })();
