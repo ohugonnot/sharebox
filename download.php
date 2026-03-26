@@ -1013,7 +1013,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .track-select:focus { border-color:var(--accent); }
 .track-select option { background:#1a1d28; color:#e8eaf0; }
 .resume-banner { position:absolute; top:1rem; left:50%; transform:translateX(-50%); z-index:25; display:flex; align-items:center; gap:.75rem; background:rgba(12,14,20,.92); border:1px solid rgba(240,160,48,.25); border-radius:var(--radius-md); padding:.7rem 1.2rem; backdrop-filter:blur(8px); animation:hintFade .3s ease both; font-size:.85rem; font-weight:500; color:var(--text-primary); white-space:nowrap; letter-spacing:.01em; }
-.resume-banner button { padding:.4rem .9rem; border-radius:var(--radius-sm); font-family:var(--font-sans); font-size:.8rem; font-weight:700; cursor:pointer; border:none; transition:all .15s; }
+.resume-banner button { padding:.5rem 1.1rem; border-radius:var(--radius-sm); font-family:var(--font-sans); font-size:.8rem; font-weight:700; cursor:pointer; border:none; transition:all .15s; }
 .resume-banner .resume-yes { background:var(--accent); color:var(--bg-deep); }
 .resume-banner .resume-yes:hover { background:#ffc060; }
 .resume-banner .resume-no { background:rgba(255,255,255,.08); color:var(--text-secondary); border:1px solid rgba(255,255,255,.1); }
