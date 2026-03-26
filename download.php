@@ -298,11 +298,14 @@ if (is_file($resolvedPath)) {
                 }
             } catch (PDOException $e) { /* ignore */ }
             $remainingDuration = max(0, $probeDuration - $startSec);
-            if ($remainingDuration > 0) {
-                // Estimation large (+20%) pour éviter que Safari coupe avant la fin
-                header('Content-Length: ' . (int)($estimatedBps * $remainingDuration / 8 * 1.2));
+            $estimatedCL = $remainingDuration > 0 ? (int)($estimatedBps * $remainingDuration / 8 * 1.2) : 0;
+            if ($estimatedCL > 0) {
+                header('Content-Length: ' . $estimatedCL);
             }
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+            $ua = $_SERVER['HTTP_USER_AGENT'] ?? '-';
+            $isSafari = str_contains($ua, 'Safari') && !str_contains($ua, 'Chrome');
+            stream_log('CL=' . ($estimatedCL ?: 'none') . ' dur=' . round($probeDuration) . 's rem=' . round($remainingDuration) . 's' . ($isSafari ? ' [Safari]' : '') . ' | UA=' . substr($ua, 0, 80));
             if ($burnSub >= 0) {
                 // Burn-in sous-titre image (PGS/VOBSUB) via filter_complex
                 // scale2ref : redimensionne le canvas PGS aux dimensions exactes de la vidéo
