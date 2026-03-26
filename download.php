@@ -997,7 +997,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .seek-thumb { position:absolute; width:15px; height:15px; background:var(--accent); border-radius:50%; top:50%; transform:translate(-50%,-50%); box-shadow:0 0 0 3px rgba(240,160,48,.18), 0 2px 8px rgba(0,0,0,.5); transition:transform .1s, box-shadow .1s; z-index:2; }
 .seek-thumb:hover, .seek-bar.dragging .seek-thumb { transform:translate(-50%,-50%) scale(1.3); box-shadow:0 0 0 5px rgba(240,160,48,.22), 0 2px 8px rgba(0,0,0,.5); }
 .seek-bar.dragging .seek-fill { transition:none; }
-.seek-time { display:flex; align-items:center; gap:.3rem; font-size:.72rem; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap; padding:.3rem 0 0; }
+.seek-time { display:none; align-items:center; gap:.3rem; font-size:.72rem; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap; padding:.4rem .1rem 0; margin-bottom:-4px; }
 .seek-time .current { color:var(--text-primary); font-weight:600; }
 .ctrl-row { position:relative; display:flex; align-items:center; gap:.45rem; margin-top:.3rem; }
 .ctrl-spacer { flex:1; }
