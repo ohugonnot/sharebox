@@ -363,8 +363,9 @@ if (is_file($resolvedPath)) {
             $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
 
-            // Dossier temp unique par session de streaming (token + params)
-            $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $startSec . '|' . $burnSub);
+            // Dossier temp unique par fichier+qualité+audio+burnSub (PAS startSec)
+            // Seek ne crée pas de nouvelle session — le JS gère le seek dans la playlist existante
+            $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $burnSub);
             $hlsDir = sys_get_temp_dir() . '/hls_' . $hlsKey;
             $m3u8   = $hlsDir . '/stream.m3u8';
             $pidFile = $hlsDir . '/ffmpeg.pid';
@@ -374,18 +375,47 @@ if (is_file($resolvedPath)) {
                 $segName = basename($_GET['seg']);
                 if (!preg_match('/^seg\d+\.ts$/', $segName)) { http_response_code(400); exit; }
                 $segPath = $hlsDir . '/' . $segName;
+                // Attendre que le segment soit prêt (max 10s)
                 for ($w = 0; $w < 100 && !file_exists($segPath); $w++) { usleep(100000); }
                 if (!file_exists($segPath)) { http_response_code(404); exit; }
+                // Attendre que ffmpeg ait fini d'écrire le segment (taille stable pendant 100ms)
+                $prevSize = 0;
+                for ($w = 0; $w < 20; $w++) {
+                    clearstatcache(true, $segPath);
+                    $curSize = filesize($segPath);
+                    if ($curSize > 0 && $curSize === $prevSize) break;
+                    $prevSize = $curSize;
+                    usleep(50000);
+                }
                 header('Content-Type: video/mp2t');
                 header('Content-Length: ' . filesize($segPath));
                 header('Cache-Control: no-cache');
+                // Marquer activité pour le cleanup
+                touch($hlsDir . '/.active');
                 readfile($segPath);
                 exit;
             }
 
             // Lancer ffmpeg HLS si pas déjà actif
-            if (!is_dir($hlsDir)) {
-                mkdir($hlsDir, 0755, true);
+            $needStart = !is_dir($hlsDir);
+            // Si le dossier existe mais ffmpeg est mort, relancer
+            if (!$needStart && is_file($pidFile)) {
+                $pid = (int)file_get_contents($pidFile);
+                if ($pid > 0 && !file_exists('/proc/' . $pid)) {
+                    // ffmpeg est mort — si seek demandé, relancer avec le nouveau start
+                    if ($startSec > 0) {
+                        // Nettoyer l'ancien dossier et relancer
+                        array_map('unlink', glob($hlsDir . '/*'));
+                        $needStart = true;
+                    }
+                }
+            }
+
+            if ($needStart) {
+                if (!is_dir($hlsDir)) mkdir($hlsDir, 0755, true);
+                // Supprimer les anciens segments si relance
+                array_map('unlink', glob($hlsDir . '/seg*.ts'));
+                if (file_exists($m3u8)) unlink($m3u8);
 
                 if ($burnSub >= 0) {
                     $fc = '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
@@ -398,9 +428,7 @@ if (is_file($resolvedPath)) {
                 stream_log('HLS start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
 
                 if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) {
-                    $vmCmd = 'vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &';
-                    $vmResult = popen($vmCmd, 'r');
-                    if ($vmResult) pclose($vmResult);
+                    exec('vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &');
                 }
 
                 $ffmpegCmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
@@ -415,23 +443,30 @@ if (is_file($resolvedPath)) {
                     . ' ' . escapeshellarg($m3u8)
                     . ' -loglevel error 2>>' . escapeshellarg($logFile);
 
-                // Lancer ffmpeg en arrière-plan (écrit dans les fichiers HLS, pas sur stdout)
-                exec($ffmpegCmd . ' > /dev/null &');
+                // Lancer ffmpeg en arrière-plan et stocker son PID
+                $pid = trim(shell_exec($ffmpegCmd . ' > /dev/null & echo $!'));
+                file_put_contents($pidFile, $pid);
+                touch($hlsDir . '/.active');
 
-                // Cleanup background : attend fin ffmpeg puis supprime les fichiers
+                // Cleanup background : attend que ffmpeg termine + 2min d'inactivité
                 $slotPath = $slotFp ? stream_get_meta_data($slotFp)['uri'] : '';
-                $cleanupParts = [];
-                if ($slotPath) $cleanupParts[] = 'rm -f ' . escapeshellarg($slotPath);
-                $cleanupParts[] = 'sleep 60';
-                $cleanupParts[] = 'rm -rf ' . escapeshellarg($hlsDir);
-                $cleanupBg = '(sleep 2; while ls ' . escapeshellarg($hlsDir) . '/*.ts >/dev/null 2>&1 && [ $(($(date +%s) - $(stat -c %Y ' . escapeshellarg($m3u8) . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 5; done; ' . implode('; ', $cleanupParts) . ') >/dev/null 2>&1 &';
-                $cleanProc = popen($cleanupBg, 'r');
-                if ($cleanProc) pclose($cleanProc);
+                $activeFile = escapeshellarg($hlsDir . '/.active');
+                $cleanupCmd = '('
+                    . 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do sleep 5; done; '   // attendre fin ffmpeg
+                    . ($slotPath ? 'rm -f ' . escapeshellarg($slotPath) . '; ' : '')       // libérer le slot
+                    . 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '  // attendre 2min sans activité
+                    . 'rm -rf ' . escapeshellarg($hlsDir)
+                    . ') >/dev/null 2>&1 &';
+                exec($cleanupCmd);
                 if ($slotFp) fclose($slotFp);
+            } else {
+                // Session existante — marquer activité
+                touch($hlsDir . '/.active');
             }
 
             // Attendre que le .m3u8 existe et ait au moins un segment (max 15s)
             for ($w = 0; $w < 150; $w++) {
+                clearstatcache(true, $m3u8);
                 if (file_exists($m3u8) && filesize($m3u8) > 20) break;
                 usleep(100000);
             }
@@ -447,8 +482,7 @@ if (is_file($resolvedPath)) {
             $m3u8Content = file_get_contents($m3u8);
             $baseStreamUrl = '/dl/' . $token . '?' . ($subPath ? 'p=' . rawurlencode($subPath) . '&' : '')
                 . 'stream=hls&audio=' . $audioTrack . '&quality=' . $quality
-                . ($burnSub >= 0 ? '&burnSub=' . $burnSub : '')
-                . ($startSec > 0 ? '&start=' . sprintf('%.1f', $startSec) : '');
+                . ($burnSub >= 0 ? '&burnSub=' . $burnSub : '');
             $m3u8Rewritten = preg_replace('/^(seg\d+\.ts)$/m', $baseStreamUrl . '&seg=$1', $m3u8Content);
 
             header('Content-Type: application/vnd.apple.mpegurl');
@@ -1129,7 +1163,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         if (h > 0) return h + ':' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
         return m + ':' + (sec < 10 ? '0' : '') + sec;
     }
-    function realTime() { return S.offset + (player.currentTime || 0); }
+    function realTime() { return useHLS ? (player.currentTime || 0) : S.offset + (player.currentTime || 0); }
     // Safari iOS : utiliser HLS au lieu de fMP4 (Safari coupe les streams fMP4 sans Range support)
     var isSafari = /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent);
     var useHLS = isIOS || (isSafari && 'ontouchend' in document);
@@ -1435,7 +1469,8 @@ var REMUX_ENABLED = {$remuxEnabled};
         var pct = t / S.duration * 100;
         seekFill.style.width = pct + '%'; seekThumb.style.left = pct + '%'; timeCurrent.textContent = fmtTime(t);
         clearTimeout(S.seekDebounce);
-        if (S.confirmed === 'native') {
+        if (S.confirmed === 'native' || useHLS) {
+            // HLS : Safari gère le seek dans la playlist, pas besoin de relancer le stream
             S.seekPending = false; player.currentTime = t; hint.textContent = '';
         } else {
             S.seekDebounce = setTimeout(function() {
