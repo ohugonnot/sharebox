@@ -851,6 +851,12 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .track-select:hover { border-color:rgba(255,255,255,.14); }
 .track-select:focus { border-color:var(--accent); }
 .track-select option { background:#1a1d28; color:#e8eaf0; }
+.resume-banner { position:absolute; top:1rem; left:50%; transform:translateX(-50%); z-index:25; display:flex; align-items:center; gap:.6rem; background:rgba(12,14,20,.92); border:1px solid rgba(240,160,48,.25); border-radius:var(--radius-md); padding:.5rem 1rem; backdrop-filter:blur(8px); animation:hintFade .3s ease both; font-size:.82rem; white-space:nowrap; }
+.resume-banner button { padding:.3rem .7rem; border-radius:var(--radius-sm); font-family:var(--font-sans); font-size:.78rem; font-weight:700; cursor:pointer; border:none; transition:all .15s; }
+.resume-banner .resume-yes { background:var(--accent); color:var(--bg-deep); }
+.resume-banner .resume-yes:hover { background:#ffc060; }
+.resume-banner .resume-no { background:rgba(255,255,255,.08); color:var(--text-secondary); border:1px solid rgba(255,255,255,.1); }
+.resume-banner .resume-no:hover { background:rgba(255,255,255,.12); color:var(--text-primary); }
 @media(max-width:480px){.page{padding:.9rem .75rem 3rem}.player-name{display:none}}
 .seek-tooltip { position:absolute; bottom:calc(100% + 6px); background:rgba(12,14,20,.9); border:1px solid rgba(255,255,255,.1); color:var(--text-primary); font-family:var(--font-mono); font-size:.68rem; padding:.18rem .45rem; border-radius:4px; pointer-events:none; white-space:nowrap; transform:translateX(-50%); display:none; z-index:5; }
 .vol-wrap { display:flex; align-items:center; gap:.3rem; }
@@ -908,6 +914,9 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
                     <input type="range" id="vol-slider" class="vol-slider" min="0" max="1" step="0.05" value="1" title="Volume">
                 </div>
                 <button class="ctrl-mute" id="speed-btn" title="Vitesse de lecture" style="font-size:.7rem;font-weight:700;font-family:var(--font-mono);width:auto;padding:0 .45rem;border-radius:20px;">1×</button>
+                <button class="ctrl-mute" id="pip-btn" title="Picture-in-Picture" style="display:none">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity=".3"/></svg>
+                </button>
                 <button class="ctrl-mute" id="fs-btn" title="Plein écran">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
                 </button>
@@ -935,6 +944,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     var volSlider   = document.getElementById('vol-slider');
     var speedBtn    = document.getElementById('speed-btn');
     var fsBtn       = document.getElementById('fs-btn');
+    var pipBtn      = document.getElementById('pip-btn');
     var modeBtn     = null;
     var seekBar     = document.getElementById('seek-bar');
     var seekFill    = document.getElementById('seek-fill');
@@ -957,6 +967,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     var svgMute   = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>';
     var svgFs     = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
     var svgFsExit = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
+    var svgPip    = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity=".3"/></svg>';
 
     // ── État partagé ──────────────────────────────────────────────────────────
     var S = {
@@ -994,6 +1005,12 @@ var REMUX_ENABLED = {$remuxEnabled};
     // ── Position mémorisée ────────────────────────────────────────────────────
     var posKey   = 'player_seek_' + base + pp;
     var savedPos = isVideo ? Math.max(0, parseFloat(lsGet(posKey, '0')) || 0) : 0;
+    var originalTitle = document.title;
+    function updateTitle() {
+        if (!isVideo || S.duration <= 0) return;
+        var icon = player.paused ? '\u23F8' : '\u25B6';
+        document.title = icon + ' ' + fmtTime(realTime()) + ' / ' + fmtTime(S.duration) + ' \u2014 ' + originalTitle;
+    }
 
     // ── Plein écran ───────────────────────────────────────────────────────────
     var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
@@ -1291,7 +1308,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     player.addEventListener('timeupdate', function() {
         if (!S.dragging && !S.rafPending) {
             S.rafPending = true;
-            requestAnimationFrame(function() { S.rafPending = false; updateSeekUI(); });
+            requestAnimationFrame(function() { S.rafPending = false; updateSeekUI(); updateTitle(); });
         }
         updateBuffered(); Subs.render();
     });
@@ -1448,13 +1465,21 @@ var REMUX_ENABLED = {$remuxEnabled};
             if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
             else               player.pause();
         });
-        player.addEventListener('play',    function() { playBtn.innerHTML = svgPause; });
+        player.addEventListener('play',    function() { playBtn.innerHTML = svgPause; updateTitle(); });
         player.addEventListener('playing', function() { playBtn.innerHTML = svgPause; playIconEl.classList.remove('visible', 'pop-pause'); if (isFs()) showFsControls(); });
-        player.addEventListener('pause',   function() { playBtn.innerHTML = svgPlay; playIconEl.innerHTML = svgPauseIcon; playIconEl.classList.remove('pop-pause','pop-play'); playIconEl.classList.add('visible'); });
+        player.addEventListener('pause',   function() { playBtn.innerHTML = svgPlay; playIconEl.innerHTML = svgPauseIcon; playIconEl.classList.remove('pop-pause','pop-play'); playIconEl.classList.add('visible'); updateTitle(); });
         player.addEventListener('waiting', function() { playBtn.innerHTML = svgPause; });
-        player.addEventListener('ended',   function() { playBtn.innerHTML = svgPlay; });
+        player.addEventListener('ended',   function() { playBtn.innerHTML = svgPlay; document.title = originalTitle; });
         // Fullscreen
         if (fsBtn) fsBtn.addEventListener('click', toggleFs);
+        // Picture-in-Picture
+        if (pipBtn && document.pictureInPictureEnabled) {
+            pipBtn.style.display = '';
+            pipBtn.addEventListener('click', function() {
+                if (document.pictureInPictureElement) document.exitPictureInPicture().catch(function(){});
+                else player.requestPictureInPicture().catch(function(){});
+            });
+        }
         // Volume
         var savedVol = parseFloat(lsGet('player_volume', '1'));
         player.volume = isNaN(savedVol) ? 1 : Math.max(0, Math.min(1, savedVol));
@@ -1556,9 +1581,9 @@ var REMUX_ENABLED = {$remuxEnabled};
         var kbTitle = document.createElement('h3');
         kbTitle.textContent = 'Raccourcis clavier';
         kbCard.appendChild(kbTitle);
-        [['Espace / K','Lecture / Pause'],['← →','\u221210s / +10s'],
+        [['Espace / K','Lecture / Pause'],['← →','\u221210s / +10s'],['J / L','\u221230s / +30s'],
          ['\u2191 \u2193','Volume \u00B15\u00A0%'],['0\u20139','Aller \u00e0 N\u00d710\u00a0%'],
-         ['F','Plein \u00e9cran'],['M','Muet'],['R','Resync son/image'],['?','Cette aide']]
+         ['F','Plein \u00e9cran'],['P','Picture-in-Picture'],['M','Muet'],['R','Resync son/image'],['?','Cette aide']]
         .forEach(function(r) {
             var row = document.createElement('div'); row.className = 'kb-row';
             var key = document.createElement('span'); key.className = 'kb-key'; key.textContent = r[0];
@@ -1584,6 +1609,14 @@ var REMUX_ENABLED = {$remuxEnabled};
             else if (e.key === 'ArrowRight') {
                 e.preventDefault();
                 if (S.duration) { seekToFraction(Math.min(S.duration, realTime() + 10) / S.duration); showSeekOsd(10); }
+            }
+            else if (e.key === 'j' || e.key === 'J') {
+                e.preventDefault();
+                if (S.duration) { seekToFraction(Math.max(0, realTime() - 30) / S.duration); showSeekOsd(-30); }
+            }
+            else if (e.key === 'l' || e.key === 'L') {
+                e.preventDefault();
+                if (S.duration) { seekToFraction(Math.min(S.duration, realTime() + 30) / S.duration); showSeekOsd(30); }
             }
             else if (e.key === 'ArrowUp') {
                 e.preventDefault();
@@ -1617,6 +1650,13 @@ var REMUX_ENABLED = {$remuxEnabled};
                 if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 0.1); }
                 else { hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(realTime()); }
             }
+            else if (e.key === 'p' || e.key === 'P') {
+                e.preventDefault();
+                if (document.pictureInPictureEnabled) {
+                    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(function(){});
+                    else player.requestPictureInPicture().catch(function(){});
+                }
+            }
             else if (e.key === '?') {
                 e.preventDefault();
                 kbOverlay.classList.toggle('hidden');
@@ -1632,6 +1672,24 @@ var REMUX_ENABLED = {$remuxEnabled};
     // Si probe > 2s (cache froid, ffprobe lent) → fallback natif immédiat.
     // Sur cache chaud (SQLite) le probe revient en < 100ms → mode optimal sans faux départ.
     Subs.initOverlay();
+    // Bandeau reprise
+    function showResumeBanner(pos, onResume) {
+        var banner = document.createElement('div');
+        banner.className = 'resume-banner';
+        banner.textContent = 'Reprendre \u00e0 ' + fmtTime(pos) + '\u00a0?';
+        var yesBtn = document.createElement('button');
+        yesBtn.className = 'resume-yes';
+        yesBtn.textContent = 'Reprendre';
+        var noBtn = document.createElement('button');
+        noBtn.className = 'resume-no';
+        noBtn.textContent = 'D\u00e9but';
+        banner.appendChild(yesBtn);
+        banner.appendChild(noBtn);
+        player.parentNode.appendChild(banner);
+        yesBtn.addEventListener('click', function() { banner.remove(); onResume(pos); });
+        noBtn.addEventListener('click', function() { banner.remove(); lsSet(posKey, '0'); onResume(0); });
+        setTimeout(function() { if (banner.parentNode) { banner.remove(); onResume(pos); } }, 8000);
+    }
     if (isVideo) {
         hint.textContent = 'Analyse...'; hint.className = 'player-hint';
         var streamStarted = false;
@@ -1640,7 +1698,11 @@ var REMUX_ENABLED = {$remuxEnabled};
         var probeTimer = setTimeout(function() { if (probeCtrl) probeCtrl.abort(); }, 12000);
         // Fallback : démarrer en natif si le probe est trop lent
         var fallbackTimer = setTimeout(function() {
-            if (!streamStarted) { streamStarted = true; fallbackAt = Date.now(); hint.textContent = ''; startStream(savedPos); }
+            if (!streamStarted) {
+                streamStarted = true; fallbackAt = Date.now(); hint.textContent = '';
+                if (savedPos > 30) { showResumeBanner(savedPos, function(pos) { startStream(pos); }); }
+                else { startStream(savedPos); }
+            }
         }, 2000);
         fetch(base + '?' + pp + 'probe=1', probeCtrl ? {signal: probeCtrl.signal} : {})
             .then(function(r) { clearTimeout(probeTimer); return r.json(); })
@@ -1652,7 +1714,11 @@ var REMUX_ENABLED = {$remuxEnabled};
                     streamStarted = true;
                     S.step = chooseModeFromProbe(d);
                     hint.textContent = '';
-                    startStream(savedPos);
+                    if (savedPos > 30) {
+                        showResumeBanner(savedPos, function(pos) { startStream(pos); });
+                    } else {
+                        startStream(savedPos);
+                    }
                 } else if (fallbackAt && Date.now() - fallbackAt < 5000) {
                     // Probe arrivé peu après le fallback natif — si le mode optimal est différent, restart proactif
                     var optimalMode = chooseModeFromProbe(d);
@@ -1667,7 +1733,11 @@ var REMUX_ENABLED = {$remuxEnabled};
             })
             .catch(function() {
                 clearTimeout(probeTimer); clearTimeout(fallbackTimer);
-                if (!streamStarted) { streamStarted = true; hint.textContent = ''; startStream(savedPos); }
+                if (!streamStarted) {
+                    streamStarted = true; hint.textContent = '';
+                    if (savedPos > 30) { showResumeBanner(savedPos, function(pos) { startStream(pos); }); }
+                    else { startStream(savedPos); }
+                }
             });
     } else {
         player.addEventListener('error', function() {
