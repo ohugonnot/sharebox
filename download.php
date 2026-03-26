@@ -351,6 +351,113 @@ if (is_file($resolvedPath)) {
         }
     }
 
+    // Mode HLS : transcodage en segments TS pour iOS Safari
+    // Safari refuse le streaming fMP4 progressif (broken pipe) — HLS est le seul format
+    // que Safari iOS supporte nativement pour le streaming adaptatif.
+    if (isset($_GET['stream']) && $_GET['stream'] === 'hls') {
+        $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
+        if ($mime && str_starts_with($mime, 'video/')) {
+            $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
+            $allowedQualities = [480, 576, 720, 1080];
+            if (!in_array($quality, $allowedQualities)) $quality = 720;
+            $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
+            $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+
+            // Dossier temp unique par session de streaming (token + params)
+            $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $startSec . '|' . $burnSub);
+            $hlsDir = sys_get_temp_dir() . '/hls_' . $hlsKey;
+            $m3u8   = $hlsDir . '/stream.m3u8';
+            $pidFile = $hlsDir . '/ffmpeg.pid';
+
+            // Servir un segment TS existant
+            if (isset($_GET['seg'])) {
+                $segName = basename($_GET['seg']);
+                if (!preg_match('/^seg\d+\.ts$/', $segName)) { http_response_code(400); exit; }
+                $segPath = $hlsDir . '/' . $segName;
+                for ($w = 0; $w < 100 && !file_exists($segPath); $w++) { usleep(100000); }
+                if (!file_exists($segPath)) { http_response_code(404); exit; }
+                header('Content-Type: video/mp2t');
+                header('Content-Length: ' . filesize($segPath));
+                header('Cache-Control: no-cache');
+                readfile($segPath);
+                exit;
+            }
+
+            // Lancer ffmpeg HLS si pas déjà actif
+            if (!is_dir($hlsDir)) {
+                mkdir($hlsDir, 0755, true);
+
+                if ($burnSub >= 0) {
+                    $fc = '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
+                } else {
+                    $fc = '"[0:v:0]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
+                }
+
+                [$slotFp, $queued] = acquireStreamSlot();
+                if ($queued) stream_log('HLS queued | ' . basename($resolvedPath));
+                stream_log('HLS start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
+
+                if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) {
+                    $vmCmd = 'vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &';
+                    $vmResult = popen($vmCmd, 'r');
+                    if ($vmResult) pclose($vmResult);
+                }
+
+                $ffmpegCmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+                    . ' -filter_complex ' . $fc
+                    . ' -map "[v]" -map "[a]" -dn'
+                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 50 -threads 4'
+                    . ' -c:a aac -ac 2 -b:a 192k'
+                    . ' -shortest'
+                    . ' -avoid_negative_ts make_zero -start_at_zero'
+                    . ' -f hls -hls_time 4 -hls_list_size 0 -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
+                    . ' -hls_flags append_list'
+                    . ' ' . escapeshellarg($m3u8)
+                    . ' -loglevel error 2>>' . escapeshellarg($logFile);
+
+                // Lancer ffmpeg en arrière-plan (écrit dans les fichiers HLS, pas sur stdout)
+                exec($ffmpegCmd . ' > /dev/null &');
+
+                // Cleanup background : attend fin ffmpeg puis supprime les fichiers
+                $slotPath = $slotFp ? stream_get_meta_data($slotFp)['uri'] : '';
+                $cleanupParts = [];
+                if ($slotPath) $cleanupParts[] = 'rm -f ' . escapeshellarg($slotPath);
+                $cleanupParts[] = 'sleep 60';
+                $cleanupParts[] = 'rm -rf ' . escapeshellarg($hlsDir);
+                $cleanupBg = '(sleep 2; while ls ' . escapeshellarg($hlsDir) . '/*.ts >/dev/null 2>&1 && [ $(($(date +%s) - $(stat -c %Y ' . escapeshellarg($m3u8) . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 5; done; ' . implode('; ', $cleanupParts) . ') >/dev/null 2>&1 &';
+                $cleanProc = popen($cleanupBg, 'r');
+                if ($cleanProc) pclose($cleanProc);
+                if ($slotFp) fclose($slotFp);
+            }
+
+            // Attendre que le .m3u8 existe et ait au moins un segment (max 15s)
+            for ($w = 0; $w < 150; $w++) {
+                if (file_exists($m3u8) && filesize($m3u8) > 20) break;
+                usleep(100000);
+            }
+            if (!file_exists($m3u8) || filesize($m3u8) <= 20) {
+                stream_log('HLS timeout waiting for m3u8 | ' . basename($resolvedPath));
+                http_response_code(504);
+                header('Content-Type: application/vnd.apple.mpegurl');
+                echo "#EXTM3U\n#EXT-X-ERROR:Timeout\n";
+                exit;
+            }
+
+            // Réécrire le m3u8 : remplacer les noms de fichier locaux par des URLs absolues
+            $m3u8Content = file_get_contents($m3u8);
+            $baseStreamUrl = '/dl/' . $token . '?' . ($subPath ? 'p=' . rawurlencode($subPath) . '&' : '')
+                . 'stream=hls&audio=' . $audioTrack . '&quality=' . $quality
+                . ($burnSub >= 0 ? '&burnSub=' . $burnSub : '')
+                . ($startSec > 0 ? '&start=' . sprintf('%.1f', $startSec) : '');
+            $m3u8Rewritten = preg_replace('/^(seg\d+\.ts)$/m', $baseStreamUrl . '&seg=$1', $m3u8Content);
+
+            header('Content-Type: application/vnd.apple.mpegurl');
+            header('Cache-Control: no-cache');
+            echo $m3u8Rewritten;
+            exit;
+        }
+    }
+
     // Téléchargement direct via nginx
     if (!$subPath) {
         $stmt = $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id");
@@ -1023,10 +1130,15 @@ var REMUX_ENABLED = {$remuxEnabled};
         return m + ':' + (sec < 10 ? '0' : '') + sec;
     }
     function realTime() { return S.offset + (player.currentTime || 0); }
+    // Safari iOS : utiliser HLS au lieu de fMP4 (Safari coupe les streams fMP4 sans Range support)
+    var isSafari = /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent);
+    var useHLS = isIOS || (isSafari && 'ontouchend' in document);
     function buildUrl(mode, audio, startSec) {
         if (mode === 'native') return base + '?' + pp + 'stream=1';
-        var url = base + '?' + pp + 'stream=' + mode + '&audio=' + (audio || 0);
-        if (mode === 'transcode') {
+        // Sur Safari iOS, remplacer transcode par HLS
+        var streamMode = (mode === 'transcode' && useHLS) ? 'hls' : mode;
+        var url = base + '?' + pp + 'stream=' + streamMode + '&audio=' + (audio || 0);
+        if (mode === 'transcode' || streamMode === 'hls') {
             url += '&quality=' + S.quality;
             if (S.burnSub >= 0) url += '&burnSub=' + S.burnSub;
         }
