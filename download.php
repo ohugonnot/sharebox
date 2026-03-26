@@ -997,7 +997,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .seek-thumb { position:absolute; width:15px; height:15px; background:var(--accent); border-radius:50%; top:50%; transform:translate(-50%,-50%); box-shadow:0 0 0 3px rgba(240,160,48,.18), 0 2px 8px rgba(0,0,0,.5); transition:transform .1s, box-shadow .1s; z-index:2; }
 .seek-thumb:hover, .seek-bar.dragging .seek-thumb { transform:translate(-50%,-50%) scale(1.3); box-shadow:0 0 0 5px rgba(240,160,48,.22), 0 2px 8px rgba(0,0,0,.5); }
 .seek-bar.dragging .seek-fill { transition:none; }
-.seek-time { display:flex; align-items:center; gap:.3rem; font-size:.72rem; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap; }
+.seek-time { display:flex; align-items:center; gap:.3rem; font-size:.72rem; font-family:var(--font-mono); color:var(--text-muted); white-space:nowrap; padding:.3rem 0 0; }
 .seek-time .current { color:var(--text-primary); font-weight:600; }
 .ctrl-row { position:relative; display:flex; align-items:center; gap:.45rem; margin-top:.3rem; }
 .ctrl-spacer { flex:1; }
@@ -1063,6 +1063,11 @@ video{max-height:100vh !important;height:100vh !important}
             <div id="vol-osd"></div>
         </div>
         <div class="player-controls">
+            <div class="seek-time" id="seek-time" style="display:none">
+                <span class="current" id="time-current">0:00</span>
+                <span class="sep">/</span>
+                <span id="time-total">0:00</span>
+            </div>
             <div class="seek-bar" id="seek-bar" style="display:none">
                 <div class="seek-track"></div>
                 <div class="seek-buffered" id="seek-buffered"></div>
@@ -1071,11 +1076,6 @@ video{max-height:100vh !important;height:100vh !important}
                 <div class="seek-tooltip" id="seek-tooltip"></div>
             </div>
             <div class="ctrl-row" id="ctrl-row" style="display:none">
-                <div class="seek-time" id="seek-time">
-                    <span class="current" id="time-current">0:00</span>
-                    <span class="sep">/</span>
-                    <span id="time-total">0:00</span>
-                </div>
                 <div class="ctrl-spacer"></div>
                 <button class="ctrl-play" id="play-btn" title="Lecture / Pause">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
@@ -1591,6 +1591,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     // ── Contrôles vidéo ───────────────────────────────────────────────────────
     if (isVideo) {
         ctrlRow.style.display = 'flex';
+        document.getElementById('seek-time').style.display = 'flex';
         // Play/pause
         var svgPauseIcon = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
         var svgPlayIcon  = '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
