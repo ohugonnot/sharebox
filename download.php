@@ -1394,28 +1394,24 @@ function plog(tag, msg, data) {
         if (!d || !d.videoCodec) return 'native';
         var c  = d.videoCodec.toLowerCase();
         var ac = d.audio && d.audio.length > 0 ? (d.audio[0].codec || '').toLowerCase() : '';
+        var nativeAudio = (ac === 'aac' || ac === 'mp3' || ac === 'opus' || ac === 'vorbis');
         if (c === 'h264') {
-            // MP4 + audio natif : lecture directe sans transcodage
-            if (d.isMP4 && (ac === 'aac' || ac === 'mp3')) return 'native';
-            // H264 + audio incompatible (AC3/DTS) ou MKV : remux si activé (video copy, audio→AAC)
+            if (d.isMP4 && nativeAudio) return 'native';
             return REMUX_ENABLED ? 'remux' : 'transcode';
         }
-        // VP9 WebM : natif si le browser supporte (Chrome/Firefox oui, Safari non)
         if (c === 'vp9' || c === 'vp8') {
-            if (d.isMKV && canPlay('video/webm; codecs="vp9"')) return 'native';
+            if (d.isMKV && nativeAudio && canPlay('video/webm; codecs="vp9"')) return 'native';
             return 'transcode';
         }
-        // AV1 : natif si supporté (Chrome 70+, Firefox 67+, Safari 17+)
         if (c === 'av1' || c === 'av01') {
-            if (canPlay('video/webm; codecs="av01.0.05M.08"') || canPlay('video/mp4; codecs="av01"')) return 'native';
+            if (nativeAudio && (canPlay('video/webm; codecs="av01.0.05M.08"') || canPlay('video/mp4; codecs="av01"'))) return 'native';
             return 'transcode';
         }
-        // HEVC : natif si le navigateur supporte le codec dans le conteneur
-        // Pour MKV : canPlayType n'est pas fiable, on tente natif d'abord si MP4 HEVC est supporté
-        // (les navigateurs avec décodage HEVC hardware lisent aussi les MKV HEVC)
+        // HEVC : natif seulement si le navigateur supporte HEVC ET audio compatible
+        // FLAC/AC3/DTS/TrueHD → transcode (le navigateur ne décode pas ces audios)
         if (c === 'hevc') {
             var hevcSupported = canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"');
-            if (hevcSupported) return 'native';
+            if (hevcSupported && nativeAudio) return 'native';
             return 'transcode';
         }
         return 'transcode';
