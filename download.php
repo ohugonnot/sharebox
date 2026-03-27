@@ -1438,6 +1438,7 @@ function plog(tag, msg, data) {
     player.addEventListener('playing', function() {
         plog('EVENT', 'playing | mode=' + (S.confirmed || S.step) + ' offset=' + S.offset.toFixed(1) + ' ct=' + (player.currentTime || 0).toFixed(1) + ' realTime=' + realTime().toFixed(1));
         unlockSize();
+        Subs.resetIdx();
         var mode = S.confirmed || S.step;
         if ((mode === 'native' || mode === 'remux') && isVideo && !S.confirmed) {
             S.videoWidthTimer = setTimeout(function() {
