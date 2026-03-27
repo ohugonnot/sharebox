@@ -1033,7 +1033,16 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 .player-card:fullscreen video,
 .player-card:-webkit-full-screen video { position:absolute; inset:0; width:100%; height:100%; max-height:none; }
 .player-card:fullscreen .player-controls,
-.player-card:-webkit-full-screen .player-controls { position:absolute; bottom:0; left:0; right:0; z-index:20; background:linear-gradient(transparent, rgba(8,10,18,.9)) !important; padding-top:2rem; transition:opacity .25s; border-top:none !important; }
+.player-card:-webkit-full-screen .player-controls { position:absolute; bottom:0; left:0; right:0; z-index:20; background:linear-gradient(transparent 0%, rgba(8,10,18,.4) 40%, rgba(8,10,18,.92) 100%) !important; padding-top:3rem; transition:opacity .25s; border-top:none !important; }
+.player-card:fullscreen .player-controls .ctrl-row button,
+.player-card:-webkit-full-screen .player-controls .ctrl-row button,
+.player-card:fullscreen .player-controls .ctrl-row svg,
+.player-card:-webkit-full-screen .player-controls .ctrl-row svg { filter:drop-shadow(0 1px 3px rgba(0,0,0,.8)); }
+.fs-title { display:none; }
+.player-card:fullscreen .fs-title,
+.player-card:-webkit-full-screen .fs-title { display:block; position:absolute; top:0; left:0; right:0; z-index:20; padding:1.2rem 1.5rem; background:linear-gradient(rgba(8,10,18,.8) 0%, rgba(8,10,18,.3) 60%, transparent 100%); font-family:var(--font-sans); font-size:clamp(.82rem,1.4vw,1.05rem); font-weight:600; color:rgba(255,255,255,.88); letter-spacing:.01em; text-shadow:0 1px 6px rgba(0,0,0,.7); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; transition:opacity .25s; pointer-events:none; }
+.player-card:fullscreen .fs-title.fs-hidden,
+.player-card:-webkit-full-screen .fs-title.fs-hidden { opacity:0; }
 .player-card:fullscreen .player-controls .track-bar,
 .player-card:-webkit-full-screen .player-controls .track-bar { border-top:none; }
 .player-card:fullscreen .player-controls.fs-hidden,
@@ -1048,7 +1057,7 @@ video { display:block; width:100%; max-height:78vh; background:#000; object-fit:
 @keyframes popPlay  { 0%{transform:translate(-50%,-50%) scale(.6);opacity:.9} 50%{transform:translate(-50%,-50%) scale(1);opacity:.9} 100%{transform:translate(-50%,-50%) scale(1.4);opacity:0} }
 .play-icon-overlay.pop-pause { animation:popPause .2s ease forwards; }
 .play-icon-overlay.pop-play  { animation:popPlay .4s ease forwards; }
-#vol-osd { position:absolute; top:1rem; right:1rem; z-index:20; background:rgba(0,0,0,.65); color:#fff; padding:.5rem 1rem; border-radius:.5rem; font-size:1.35rem; font-weight:600; letter-spacing:.03em; pointer-events:none; opacity:0; transition:opacity .15s; }
+#vol-osd { position:absolute; top:clamp(1rem,3vh,2rem); right:clamp(1rem,3vw,2rem); z-index:20; background:rgba(0,0,0,.72); color:#fff; padding:clamp(.5rem,1.2vh,.9rem) clamp(1rem,2vw,1.6rem); border-radius:clamp(.5rem,1vh,.75rem); font-size:clamp(1.35rem,2.8vh,2.4rem); font-weight:700; letter-spacing:.03em; pointer-events:none; opacity:0; transition:opacity .2s; backdrop-filter:blur(6px); border:1px solid rgba(255,255,255,.08); text-shadow:0 1px 4px rgba(0,0,0,.5); }
 #vol-osd.visible { opacity:1; }
 audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40,.8); }
 .player-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:10; }
@@ -1092,7 +1101,8 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .player-card{border-radius:0;border:none;position:fixed;inset:0;z-index:10}
 .player-video-wrap{height:100vh}
 video{max-height:100vh !important;height:100vh !important}
-.player-controls{position:fixed;bottom:0;left:0;right:0;z-index:20;background:linear-gradient(transparent,rgba(8,10,18,.9)) !important;padding-top:1.5rem;border-top:none !important;transition:opacity .25s}
+.player-controls{position:fixed;bottom:0;left:0;right:0;z-index:20;background:linear-gradient(transparent 0%,rgba(8,10,18,.4) 40%,rgba(8,10,18,.92) 100%) !important;padding-top:2.5rem;border-top:none !important;transition:opacity .25s}
+.fs-title{display:block;position:fixed;top:0;left:0;right:0;z-index:30;padding:.8rem 1rem;background:linear-gradient(rgba(8,10,18,.8) 0%,transparent 100%);transition:opacity .25s}
 .player-controls.fs-hidden{opacity:0;pointer-events:none}
 .player-card.hide-cursor .player-toolbar{opacity:0;pointer-events:none}
 .track-bar{display:none !important}
@@ -1112,8 +1122,9 @@ video{max-height:100vh !important;height:100vh !important}
 .mode-badge.m-remux    { color:#4ade80; border-color:rgba(74,222,128,.25);  background:rgba(74,222,128,.07); }
 .mode-badge.m-transcode{ color:#f0a030; border-color:rgba(240,160,48,.25); background:rgba(240,160,48,.07); }
 .mode-badge:hover { filter:brightness(1.25); }
-.player-nav-btn { opacity:.7; transition:opacity .15s; }
-.player-nav-btn:hover { opacity:1; }
+.player-nav-btn { opacity:.85; transition:all .15s; }
+.player-nav-btn:hover { opacity:1; background:rgba(240,160,48,.12); border-color:rgba(240,160,48,.25); color:var(--accent); }
+.player-nav-btn svg { width:14px; height:14px; }
 .autonext-overlay { position:absolute; inset:0; z-index:50; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(8,10,18,.88); backdrop-filter:blur(6px); animation:hintFade .3s ease both; }
 .autonext-title { font-size:.85rem; color:var(--text-secondary); margin-bottom:.5rem; }
 .autonext-name { font-size:1.1rem; font-weight:700; color:var(--text-primary); margin-bottom:1.2rem; max-width:80%; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -1136,6 +1147,7 @@ video{max-height:100vh !important;height:100vh !important}
         <a class="player-btn accent" href="{$dlUrl}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span> Télécharger</span></a>
     </div>
     <div class="player-card">
+        <div class="fs-title" id="fs-title">{$fileNameHtml}</div>
         <div class="player-video-wrap">
             <{$tag} id="player" {$controlsAttr} autoplay playsinline webkit-playsinline preload="metadata"></{$tag}>
             <div class="player-hint" id="hint"><span class="player-hint-text">Chargement...</span></div>
@@ -1338,11 +1350,13 @@ function plog(tag, msg, data) {
         if (!isFs()) (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen || function(){}).call(playerCard);
         else (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
     }
+    var fsTitle = document.getElementById('fs-title');
     function showFsControls() {
         playerCtrl.classList.remove('fs-hidden');
+        if (fsTitle) fsTitle.classList.remove('fs-hidden');
         playerCard.classList.remove('hide-cursor');
         clearTimeout(S.fsHideTimer);
-        if (isImmersive() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); playerCard.classList.add('hide-cursor'); }, 3000);
+        if (isImmersive() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); if (fsTitle) fsTitle.classList.add('fs-hidden'); playerCard.classList.add('hide-cursor'); }, 3000);
     }
     function onFsChange() {
         if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;  // safe: static SVG constants
@@ -1356,12 +1370,12 @@ function plog(tag, msg, data) {
     playerCard.addEventListener('mousemove',  function() { if (isImmersive()) showFsControls(); });
     playerCard.addEventListener('click',      function() { if (isImmersive()) showFsControls(); });
     playerCard.addEventListener('touchstart', function() { if (isImmersive()) showFsControls(); }, {passive:true});
-    player.addEventListener('pause', function() { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); });
+    player.addEventListener('pause', function() { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); if (fsTitle) fsTitle.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); });
 
     // Paysage mobile : auto-hide controles comme en fullscreen
     window.addEventListener('resize', function() {
         if (isLandscapeMobile() && !player.paused) showFsControls();
-        if (!isLandscapeMobile() && !isFs()) { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
+        if (!isLandscapeMobile() && !isFs()) { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); if (fsTitle) fsTitle.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
     });
 
     // ── localStorage (try/catch : private browsing peut throw) ───────────────
