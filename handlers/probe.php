@@ -1,0 +1,73 @@
+<?php
+header('Content-Type: application/json; charset=utf-8');
+
+// Cache SQLite : évite de relancer ffprobe si le fichier n'a pas changé
+$mtime = filemtime($resolvedPath);
+$cached = $db->prepare("SELECT result FROM probe_cache WHERE path = :p AND mtime = :m");
+$cached->execute([':p' => $resolvedPath, ':m' => $mtime]);
+if ($row = $cached->fetch()) {
+    // Invalider les entrées cache sans isMP4/isMKV (champs ajoutés après coup)
+    $decoded = json_decode($row['result'], true);
+    if (isset($decoded['isMP4']) && isset($decoded['isMKV'])) {
+        stream_log('PROBE cache-hit | ' . basename($resolvedPath) . ' | codec=' . ($decoded['videoCodec'] ?? '?') . ' h=' . ($decoded['videoHeight'] ?? '?') . ' audio=' . count($decoded['audio'] ?? []) . ' subs=' . count($decoded['subtitles'] ?? []));
+        echo $row['result'];
+        exit;
+    }
+}
+
+$probeFp = acquireProbeSlot();
+if (!$probeFp) {
+    stream_log('PROBE 429 | ' . basename($resolvedPath) . ' | all probe slots busy');
+    http_response_code(429);
+    echo json_encode(['error' => 'too_many_probes']);
+    exit;
+}
+
+$cmd = 'timeout 10 ffprobe -v error -show_entries format=duration,format_name -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
+    . escapeshellarg($resolvedPath) . ' 2>/dev/null';
+$output = shell_exec($cmd);
+$data = json_decode($output, true);
+$duration = (float)($data['format']['duration'] ?? 0);
+$formatName = $data['format']['format_name'] ?? '';
+$isMP4 = str_contains($formatName, 'mp4') || str_contains($formatName, 'mov');
+$isMKV = str_contains($formatName, 'matroska') || str_contains($formatName, 'webm');
+$audio = [];
+$subs = [];
+$audioIdx = 0;
+$subIdx = 0;
+$videoHeight = 0;
+$videoCodec = '';
+foreach (($data['streams'] ?? []) as $s) {
+    $lang  = $s['tags']['language'] ?? '';
+    $title = strip_tags($s['tags']['title'] ?? '');
+    if ($s['codec_type'] === 'video' && !$videoHeight && isset($s['height'])
+        && !in_array($s['codec_name'] ?? '', ['mjpeg', 'png', 'bmp'])) {
+        $videoHeight = (int)$s['height'];
+        $videoCodec = $s['codec_name'] ?? '';
+    } elseif ($s['codec_type'] === 'audio') {
+        $label = $lang ? strtoupper($lang) : 'Piste ' . ($audioIdx + 1);
+        if ($title) $label .= ' — ' . $title;
+        $audio[] = ['index' => $audioIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label];
+        $audioIdx++;
+    } elseif ($s['codec_type'] === 'subtitle') {
+        $imageCodecs = ['hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'dvb_teletext', 'xsub', 'eia_608', 'eia_708'];
+        $subType = in_array($s['codec_name'] ?? '', $imageCodecs) ? 'image' : 'text';
+        $label = $lang ? strtoupper($lang) : 'Sous-titre ' . ($subIdx + 1);
+        if ($title) $label .= ' — ' . $title;
+        if ($subType === 'image') $label .= ' ★'; // indique burn-in requis
+        $subs[] = ['index' => $subIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label, 'type' => $subType];
+        $subIdx++;
+    }
+}
+$result = json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec, 'isMP4' => $isMP4, 'isMKV' => $isMKV]);
+stream_log('PROBE ffprobe | ' . basename($resolvedPath) . ' | codec=' . $videoCodec . ' h=' . $videoHeight . ' dur=' . round($duration) . 's fmt=' . $formatName . ' audio=' . count($audio) . ' subs=' . count($subs));
+
+// Stocker en cache (best-effort : on ignore si la DB est encore verrouillée)
+try {
+    $db->prepare("INSERT OR REPLACE INTO probe_cache (path, mtime, result) VALUES (:p, :m, :r)")
+       ->execute([':p' => $resolvedPath, ':m' => $mtime, ':r' => $result]);
+} catch (PDOException $e) { /* lock résiduel — le probe sera recalculé au prochain appel */ }
+
+releaseProbeSlot($probeFp);
+echo $result;
+exit;
