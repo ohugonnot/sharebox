@@ -1507,7 +1507,7 @@ function plog(tag, msg, data) {
     var Subs = {
         cues: [], types: [], urls: [],
         _div: null, _idx: 0, _gen: 0,
-        resetIdx: function() { this._idx = this.cues.length ? this._find(S.offset) : 0; },
+        resetIdx: function() { this._idx = this.cues.length ? this._find(realTime()) : 0; },
         _find: function(t) {
             var lo = 0, hi = this.cues.length;
             while (lo < hi) { var mid = (lo + hi) >> 1; if (this.cues[mid].end <= t) lo = mid + 1; else hi = mid; }
@@ -1619,8 +1619,8 @@ function plog(tag, msg, data) {
         seekFill.style.width = pct + '%'; seekThumb.style.left = pct + '%'; timeCurrent.textContent = fmtTime(t);
         clearTimeout(S.seekDebounce);
         if (S.confirmed === 'native' || useHLS) {
-            // HLS : Safari gère le seek dans la playlist, pas besoin de relancer le stream
             S.seekPending = false; player.currentTime = t; hint.textContent = '';
+            Subs.resetIdx();
         } else {
             S.seekDebounce = setTimeout(function() {
                 startStream(t); S.seekPending = false;
