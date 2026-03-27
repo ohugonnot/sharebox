@@ -1374,13 +1374,33 @@ var REMUX_ENABLED = {$remuxEnabled};
     function unlockSize() { player.style.minHeight = ''; }
 
     function startStream(resumeAt) {
+        var mode = S.confirmed || S.step;
+        // En mode natif, le navigateur gère le seek via player.currentTime (pas de &start= dans l'URL)
+        if (mode === 'native' && resumeAt > 0) {
+            S.offset = 0;
+            S.hasFailed = false;
+            clearTimeout(S.videoWidthTimer);
+            Subs.resetIdx();
+            lockSize();
+            updateModeUI();
+            player.src = isVideo ? buildUrl(mode, S.audioIdx, 0) : base + '?' + pp + 'stream=1';
+            player.load();
+            player.playbackRate = S.speed;
+            var seekTarget = resumeAt;
+            player.addEventListener('loadedmetadata', function onMeta() {
+                player.removeEventListener('loadedmetadata', onMeta);
+                player.currentTime = seekTarget;
+            });
+            player.play().catch(function(e) { if (e && e.name === 'NotAllowedError') hint.textContent = 'Appuyer sur \u25B6 pour lire'; });
+            return;
+        }
         S.offset    = resumeAt || 0;
         S.hasFailed = false;
         clearTimeout(S.videoWidthTimer);
         Subs.resetIdx();
         lockSize();
         updateModeUI();
-        player.src = isVideo ? buildUrl(S.confirmed || S.step, S.audioIdx, S.offset) : base + '?' + pp + 'stream=1';
+        player.src = isVideo ? buildUrl(mode, S.audioIdx, S.offset) : base + '?' + pp + 'stream=1';
         player.load();
         player.playbackRate = S.speed;
         player.play().catch(function(e) { if (e && e.name === 'NotAllowedError') hint.textContent = 'Appuyer sur \u25B6 pour lire'; });
