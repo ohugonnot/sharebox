@@ -455,13 +455,13 @@ function plog(tag, msg, data) {
         return p.length === 3 ? +p[0]*3600 + +p[1]*60 + parseFloat(p[2]) : +p[0]*60 + parseFloat(p[1]);
     }
     function parseVTT(text) {
-        var cues = [], blocks = text.replace(/\\r\\n|\\r/g,'\\n').split(/\\n\\n+/);
+        var cues = [], blocks = text.replace(/\r\n|\r/g,'\n').split(/\n\n+/);
         for (var b = 0; b < blocks.length; b++) {
-            var lines = blocks[b].trim().split('\\n'), ti = -1;
+            var lines = blocks[b].trim().split('\n'), ti = -1;
             for (var l = 0; l < lines.length; l++) { if (lines[l].indexOf(' --> ') !== -1) { ti = l; break; } }
             if (ti < 0) continue;
             var parts = lines[ti].split(' --> ');
-            var txt = lines.slice(ti+1).join('\\n').trim();
+            var txt = lines.slice(ti+1).join('\n').trim();
             if (txt) cues.push({ start: vttTime(parts[0]), end: vttTime(parts[1].split(' ')[0]), text: txt });
         }
         return cues;
