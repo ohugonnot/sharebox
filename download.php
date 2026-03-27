@@ -111,142 +111,23 @@ if (is_file($resolvedPath)) {
 
     // Probe : retourne les pistes audio/sous-titres en JSON (pour le player)
     if (isset($_GET['probe']) && $_GET['probe'] === '1') {
-        header('Content-Type: application/json; charset=utf-8');
-
-        // Cache SQLite : évite de relancer ffprobe si le fichier n'a pas changé
-        $mtime = filemtime($resolvedPath);
-        $cached = $db->prepare("SELECT result FROM probe_cache WHERE path = :p AND mtime = :m");
-        $cached->execute([':p' => $resolvedPath, ':m' => $mtime]);
-        if ($row = $cached->fetch()) {
-            // Invalider les entrées cache sans isMP4/isMKV (champs ajoutés après coup)
-            $decoded = json_decode($row['result'], true);
-            if (isset($decoded['isMP4']) && isset($decoded['isMKV'])) {
-                stream_log('PROBE cache-hit | ' . basename($resolvedPath) . ' | codec=' . ($decoded['videoCodec'] ?? '?') . ' h=' . ($decoded['videoHeight'] ?? '?') . ' audio=' . count($decoded['audio'] ?? []) . ' subs=' . count($decoded['subtitles'] ?? []));
-                echo $row['result'];
-                exit;
-            }
-        }
-
-        $probeFp = acquireProbeSlot();
-        if (!$probeFp) {
-            stream_log('PROBE 429 | ' . basename($resolvedPath) . ' | all probe slots busy');
-            http_response_code(429);
-            echo json_encode(['error' => 'too_many_probes']);
-            exit;
-        }
-
-        $cmd = 'timeout 10 ffprobe -v error -show_entries format=duration,format_name -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
-            . escapeshellarg($resolvedPath) . ' 2>/dev/null';
-        $output = shell_exec($cmd);
-        $data = json_decode($output, true);
-        $duration = (float)($data['format']['duration'] ?? 0);
-        $formatName = $data['format']['format_name'] ?? '';
-        $isMP4 = str_contains($formatName, 'mp4') || str_contains($formatName, 'mov');
-        $isMKV = str_contains($formatName, 'matroska') || str_contains($formatName, 'webm');
-        $audio = [];
-        $subs = [];
-        $audioIdx = 0;
-        $subIdx = 0;
-        $videoHeight = 0;
-        $videoCodec = '';
-        foreach (($data['streams'] ?? []) as $s) {
-            $lang  = $s['tags']['language'] ?? '';
-            $title = strip_tags($s['tags']['title'] ?? '');
-            if ($s['codec_type'] === 'video' && !$videoHeight && isset($s['height'])
-                && !in_array($s['codec_name'] ?? '', ['mjpeg', 'png', 'bmp'])) {
-                $videoHeight = (int)$s['height'];
-                $videoCodec = $s['codec_name'] ?? '';
-            } elseif ($s['codec_type'] === 'audio') {
-                $label = $lang ? strtoupper($lang) : 'Piste ' . ($audioIdx + 1);
-                if ($title) $label .= ' — ' . $title;
-                $audio[] = ['index' => $audioIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label];
-                $audioIdx++;
-            } elseif ($s['codec_type'] === 'subtitle') {
-                $imageCodecs = ['hdmv_pgs_subtitle', 'dvd_subtitle', 'dvb_subtitle', 'dvb_teletext', 'xsub', 'eia_608', 'eia_708'];
-                $subType = in_array($s['codec_name'] ?? '', $imageCodecs) ? 'image' : 'text';
-                $label = $lang ? strtoupper($lang) : 'Sous-titre ' . ($subIdx + 1);
-                if ($title) $label .= ' — ' . $title;
-                if ($subType === 'image') $label .= ' ★'; // indique burn-in requis
-                $subs[] = ['index' => $subIdx, 'stream' => $s['index'], 'codec' => $s['codec_name'], 'lang' => $lang, 'label' => $label, 'type' => $subType];
-                $subIdx++;
-            }
-        }
-        $result = json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec, 'isMP4' => $isMP4, 'isMKV' => $isMKV]);
-        stream_log('PROBE ffprobe | ' . basename($resolvedPath) . ' | codec=' . $videoCodec . ' h=' . $videoHeight . ' dur=' . round($duration) . 's fmt=' . $formatName . ' audio=' . count($audio) . ' subs=' . count($subs));
-
-        // Stocker en cache (best-effort : on ignore si la DB est encore verrouillée)
-        try {
-            $db->prepare("INSERT OR REPLACE INTO probe_cache (path, mtime, result) VALUES (:p, :m, :r)")
-               ->execute([':p' => $resolvedPath, ':m' => $mtime, ':r' => $result]);
-        } catch (PDOException $e) { /* lock résiduel — le probe sera recalculé au prochain appel */ }
-
-        releaseProbeSlot($probeFp);
-        echo $result;
-        exit;
+        require __DIR__ . '/handlers/probe.php';
     }
 
     // Extraction sous-titre en WebVTT (avec cache SQLite)
     if (isset($_GET['subtitle'])) {
-        $trackIdx = max(0, (int)$_GET['subtitle']);
-        header('Content-Type: text/vtt; charset=utf-8');
-        header('Cache-Control: no-store');
-        $mtime = filemtime($resolvedPath);
-        $cached = $db->prepare("SELECT vtt FROM subtitle_cache WHERE path = :p AND track = :t AND mtime = :m");
-        $cached->execute([':p' => $resolvedPath, ':t' => $trackIdx, ':m' => $mtime]);
-        if ($row = $cached->fetch()) {
-            stream_log('SUBTITLE cache-hit | track=' . $trackIdx . ' | ' . basename($resolvedPath));
-            echo $row['vtt'];
-            exit;
-        }
-        stream_log('SUBTITLE extract | track=' . $trackIdx . ' | ' . basename($resolvedPath));
-        $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
-        ob_start();
-        $cmd = 'timeout 60 ffmpeg -i ' . escapeshellarg($resolvedPath)
-            . ' -map 0:s:' . $trackIdx . ' -f webvtt pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
-        passthru($cmd);
-        $vtt = ob_get_clean();
-        echo $vtt;
-        if ($vtt) {
-            try {
-                $db->prepare("INSERT OR REPLACE INTO subtitle_cache (path, track, mtime, vtt) VALUES (:p, :t, :m, :v)")
-                   ->execute([':p' => $resolvedPath, ':t' => $trackIdx, ':m' => $mtime, ':v' => $vtt]);
-            } catch (PDOException $e) { /* lock — recalculé au prochain appel */ }
-        }
-        exit;
+        require __DIR__ . '/handlers/subtitle.php';
     }
 
     // Keyframe lookup : retourne le PTS réel du keyframe coarse-seeké par ffmpeg
     // Le JS corrige S.offset rétroactivement pour éliminer le drift des sous-titres
     if (isset($_GET['keyframe'])) {
-        header('Content-Type: application/json; charset=utf-8');
-        $seekSec = max(0.0, (float)($_GET['keyframe'] ?? 0));
-        if ($seekSec <= 0.0) { echo json_encode(['pts' => 0.0]); exit; }
-        $probeFp = acquireProbeSlot();
-        if (!$probeFp) { echo json_encode(['pts' => $seekSec]); exit; }
-        $cmd = 'timeout 5 ffprobe -v error -ss ' . escapeshellarg(sprintf('%.3f', $seekSec))
-            . ' -select_streams v:0 -skip_frame nokey -show_entries frame=pts_time'
-            . ' -frames:v 1 -of csv=p=0 '
-            . escapeshellarg($resolvedPath) . ' 2>/dev/null';
-        $kfLines = [];
-        exec($cmd, $kfLines);
-        releaseProbeSlot($probeFp);
-        $pts = isset($kfLines[0]) && is_numeric($kfLines[0]) ? (float)$kfLines[0] : $seekSec;
-        stream_log('KEYFRAME lookup | ' . basename($resolvedPath) . ' | seek=' . round($seekSec, 1) . ' → pts=' . round($pts, 1) . ' drift=' . round(abs($seekSec - $pts), 1) . 's');
-        echo json_encode(['pts' => $pts]);
-        exit;
+        require __DIR__ . '/handlers/keyframe.php';
     }
 
     // Mode streaming natif : sert le fichier brut (audio uniquement, ou fallback)
     if (isset($_GET['stream']) && $_GET['stream'] === '1') {
-        $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
-        if ($mime) {
-            stream_log('NATIVE stream | ' . basename($resolvedPath) . ' | mime=' . $mime . ' size=' . format_taille(filesize($resolvedPath)));
-            $encodedPath = XACCEL_PREFIX . str_replace('%2F', '/', rawurlencode($resolvedPath));
-            header('Content-Type: ' . $mime);
-            header('Content-Disposition: inline');
-            header('X-Accel-Redirect: ' . $encodedPath);
-            exit;
-        }
+        require __DIR__ . '/handlers/stream_native.php';
     }
 
     // Sélection de piste audio (paramètre &audio=N, index relatif dans les pistes audio)
@@ -260,206 +141,19 @@ if (is_file($resolvedPath)) {
     // Mode remux : repackage MKV→MP4 sans ré-encoder la vidéo (quasi zéro CPU)
     // Audio transcodé en AAC pour compatibilité (AC3/DTS → AAC, léger)
     if (isset($_GET['stream']) && $_GET['stream'] === 'remux') {
-        $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
-        if ($mime && str_starts_with($mime, 'video/')) {
-            header('Content-Type: video/mp4');
-            header('Content-Disposition: inline');
-            header('X-Accel-Buffering: no');
-            header('Cache-Control: no-cache');
-            header('Accept-Ranges: none');
-            $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
-            stream_log('REMUX start | audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
-            $cmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
-                . $audioMap . ' -dn -c:v copy -c:a aac -ac 2 -b:a 192k'
-                . ' -af "aresample=async=3000:first_pts=0"'
-                . buildFmp4MuxerArgs()
-                . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
-            [$slotFp, $queued] = acquireStreamSlot();
-            if ($queued) { stream_log('REMUX queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }
-            warmFileCache($resolvedPath);
-            passthru($cmd);
-            releaseStreamSlot($slotFp);
-            exit;
-        }
+        require __DIR__ . '/handlers/stream_remux.php';
     }
 
     // Mode transcodage complet : ré-encode vidéo + audio (CPU intensif)
     if (isset($_GET['stream']) && $_GET['stream'] === 'transcode') {
-        $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
-        if ($mime && str_starts_with($mime, 'video/')) {
-            $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
-            $quality = validateQuality($quality);
-            $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
-            header('Content-Type: video/mp4');
-            header('Content-Disposition: inline');
-            header('X-Accel-Buffering: no');
-            header('Cache-Control: no-cache');
-            // Content-Length estimé : Safari coupe la connexion sans ça (pas de progressive download)
-            // Estimation conservatrice basée sur le bitrate moyen par qualité + audio 192kbps
-            $estimatedBitrates = [480 => 1800000, 576 => 2500000, 720 => 4000000, 1080 => 8000000];
-            $estimatedBps = ($estimatedBitrates[$quality] ?? 4000000) + 192000;
-            $probeDuration = 0;
-            try {
-                $cachedProbe = $db->prepare("SELECT result FROM probe_cache WHERE path = :p");
-                $cachedProbe->execute([':p' => $resolvedPath]);
-                if ($probeRow = $cachedProbe->fetch()) {
-                    $probeData = json_decode($probeRow['result'], true);
-                    $probeDuration = (float)($probeData['duration'] ?? 0);
-                }
-            } catch (PDOException $e) { /* ignore */ }
-            $remainingDuration = max(0, $probeDuration - $startSec);
-            $estimatedCL = $remainingDuration > 0 ? (int)($estimatedBps * $remainingDuration / 8 * 1.2) : 0;
-            if ($estimatedCL > 0) {
-                header('Content-Length: ' . $estimatedCL);
-            }
-            $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
-            $ua = $_SERVER['HTTP_USER_AGENT'] ?? '-';
-            $isSafari = str_contains($ua, 'Safari') && !str_contains($ua, 'Chrome');
-            stream_log('CL=' . ($estimatedCL ?: 'none') . ' dur=' . round($probeDuration) . 's rem=' . round($remainingDuration) . 's' . ($isSafari ? ' [Safari]' : '') . ' | UA=' . substr($ua, 0, 80));
-            $logLabel = $burnSub >= 0 ? 'TRANSCODE+SUB' : 'TRANSCODE';
-            stream_log($logLabel . ' start | quality=' . $quality . 'p audio=' . $audioTrack . ($burnSub >= 0 ? ' burnSub=' . $burnSub : '') . ' start=' . $startSec . ' | ' . basename($resolvedPath));
-            $fc = buildFilterGraph($quality, $audioTrack, $burnSub);
-            $cmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
-                . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
-                . buildFfmpegCodecArgs(25) . buildFmp4MuxerArgs()
-                . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
-            [$slotFp, $queued] = acquireStreamSlot();
-            if ($queued) { stream_log('TRANSCODE queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }
-            warmFileCache($resolvedPath);
-            passthru($cmd);
-            releaseStreamSlot($slotFp);
-            exit;
-        }
+        require __DIR__ . '/handlers/stream_transcode.php';
     }
 
     // Mode HLS : transcodage en segments TS pour iOS Safari
     // Safari refuse le streaming fMP4 progressif (broken pipe) — HLS est le seul format
     // que Safari iOS supporte nativement pour le streaming adaptatif.
     if (isset($_GET['stream']) && $_GET['stream'] === 'hls') {
-        $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
-        if ($mime && str_starts_with($mime, 'video/')) {
-            $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
-            $quality = validateQuality($quality);
-            $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
-            $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
-
-            // Dossier temp unique par fichier+qualité+audio+burnSub (PAS startSec)
-            // Seek ne crée pas de nouvelle session — le JS gère le seek dans la playlist existante
-            $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $burnSub);
-            $hlsDir = sys_get_temp_dir() . '/hls_' . $hlsKey;
-            $m3u8   = $hlsDir . '/stream.m3u8';
-            $pidFile = $hlsDir . '/ffmpeg.pid';
-
-            // Servir un segment TS existant
-            if (isset($_GET['seg'])) {
-                $segName = basename($_GET['seg']);
-                if (!preg_match('/^seg\d+\.ts$/', $segName)) { http_response_code(400); exit; }
-                $segPath = $hlsDir . '/' . $segName;
-                // Attendre que le segment soit prêt (max 10s)
-                for ($w = 0; $w < 100 && !file_exists($segPath); $w++) { usleep(100000); }
-                if (!file_exists($segPath)) { http_response_code(404); exit; }
-                // Attendre que ffmpeg ait fini d'écrire le segment (taille stable pendant 100ms)
-                $prevSize = 0;
-                for ($w = 0; $w < 20; $w++) {
-                    clearstatcache(true, $segPath);
-                    $curSize = filesize($segPath);
-                    if ($curSize > 0 && $curSize === $prevSize) break;
-                    $prevSize = $curSize;
-                    usleep(50000);
-                }
-                header('Content-Type: video/mp2t');
-                header('Content-Length: ' . filesize($segPath));
-                header('Cache-Control: no-cache');
-                // Marquer activité pour le cleanup
-                touch($hlsDir . '/.active');
-                readfile($segPath);
-                exit;
-            }
-
-            // Lancer ffmpeg HLS si pas déjà actif
-            $needStart = !is_dir($hlsDir);
-            // Si le dossier existe mais ffmpeg est mort, relancer
-            if (!$needStart && is_file($pidFile)) {
-                $pid = (int)file_get_contents($pidFile);
-                if ($pid > 0 && !file_exists('/proc/' . $pid)) {
-                    // ffmpeg est mort — si seek demandé, relancer avec le nouveau start
-                    if ($startSec > 0) {
-                        // Nettoyer l'ancien dossier et relancer
-                        array_map('unlink', glob($hlsDir . '/*'));
-                        $needStart = true;
-                    }
-                }
-            }
-
-            if ($needStart) {
-                if (!is_dir($hlsDir)) mkdir($hlsDir, 0755, true);
-                // Supprimer les anciens segments si relance
-                array_map('unlink', glob($hlsDir . '/seg*.ts'));
-                if (file_exists($m3u8)) unlink($m3u8);
-
-                $fc = buildFilterGraph($quality, $audioTrack, $burnSub);
-
-                [$slotFp, $queued] = acquireStreamSlot();
-                if ($queued) stream_log('HLS queued | ' . basename($resolvedPath));
-                stream_log('HLS start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
-
-                warmFileCache($resolvedPath);
-
-                $ffmpegCmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
-                    . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
-                    . buildFfmpegCodecArgs(50)
-                    . ' -f hls -hls_time 4 -hls_list_size 0 -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
-                    . ' -hls_flags append_list'
-                    . ' ' . escapeshellarg($m3u8)
-                    . ' -loglevel error 2>>' . escapeshellarg($logFile);
-
-                // Lancer ffmpeg en arrière-plan et stocker son PID
-                $pid = trim(shell_exec($ffmpegCmd . ' > /dev/null & echo $!'));
-                file_put_contents($pidFile, $pid);
-                touch($hlsDir . '/.active');
-
-                // Cleanup background : attend que ffmpeg termine + 2min d'inactivité
-                $slotPath = $slotFp ? stream_get_meta_data($slotFp)['uri'] : '';
-                $activeFile = escapeshellarg($hlsDir . '/.active');
-                $cleanupCmd = '('
-                    . 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do sleep 5; done; '   // attendre fin ffmpeg
-                    . ($slotPath ? 'rm -f ' . escapeshellarg($slotPath) . '; ' : '')       // libérer le slot
-                    . 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '  // attendre 2min sans activité
-                    . 'rm -rf ' . escapeshellarg($hlsDir)
-                    . ') >/dev/null 2>&1 &';
-                exec($cleanupCmd);
-                if ($slotFp) fclose($slotFp);
-            } else {
-                // Session existante — marquer activité
-                touch($hlsDir . '/.active');
-            }
-
-            // Attendre que le .m3u8 existe et ait au moins un segment (max 15s)
-            for ($w = 0; $w < 150; $w++) {
-                clearstatcache(true, $m3u8);
-                if (file_exists($m3u8) && filesize($m3u8) > 20) break;
-                usleep(100000);
-            }
-            if (!file_exists($m3u8) || filesize($m3u8) <= 20) {
-                stream_log('HLS timeout waiting for m3u8 | ' . basename($resolvedPath));
-                http_response_code(504);
-                header('Content-Type: application/vnd.apple.mpegurl');
-                echo "#EXTM3U\n#EXT-X-ERROR:Timeout\n";
-                exit;
-            }
-
-            // Réécrire le m3u8 : remplacer les noms de fichier locaux par des URLs absolues
-            $m3u8Content = file_get_contents($m3u8);
-            $baseStreamUrl = '/dl/' . $token . '?' . ($subPath ? 'p=' . rawurlencode($subPath) . '&' : '')
-                . 'stream=hls&audio=' . $audioTrack . '&quality=' . $quality
-                . ($burnSub >= 0 ? '&burnSub=' . $burnSub : '');
-            $m3u8Rewritten = preg_replace('/^(seg\d+\.ts)$/m', $baseStreamUrl . '&seg=$1', $m3u8Content);
-
-            header('Content-Type: application/vnd.apple.mpegurl');
-            header('Cache-Control: no-cache');
-            echo $m3u8Rewritten;
-            exit;
-        }
+        require __DIR__ . '/handlers/stream_hls.php';
     }
 
     // Téléchargement direct via nginx

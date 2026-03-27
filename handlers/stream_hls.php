@@ -1,0 +1,125 @@
+<?php
+$mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
+if ($mime && str_starts_with($mime, 'video/')) {
+    $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
+    $quality = validateQuality($quality);
+    $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
+    $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+
+    // Dossier temp unique par fichier+qualité+audio+burnSub (PAS startSec)
+    // Seek ne crée pas de nouvelle session — le JS gère le seek dans la playlist existante
+    $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $burnSub);
+    $hlsDir = sys_get_temp_dir() . '/hls_' . $hlsKey;
+    $m3u8   = $hlsDir . '/stream.m3u8';
+    $pidFile = $hlsDir . '/ffmpeg.pid';
+
+    // Servir un segment TS existant
+    if (isset($_GET['seg'])) {
+        $segName = basename($_GET['seg']);
+        if (!preg_match('/^seg\d+\.ts$/', $segName)) { http_response_code(400); exit; }
+        $segPath = $hlsDir . '/' . $segName;
+        // Attendre que le segment soit prêt (max 10s)
+        for ($w = 0; $w < 100 && !file_exists($segPath); $w++) { usleep(100000); }
+        if (!file_exists($segPath)) { http_response_code(404); exit; }
+        // Attendre que ffmpeg ait fini d'écrire le segment (taille stable pendant 100ms)
+        $prevSize = 0;
+        for ($w = 0; $w < 20; $w++) {
+            clearstatcache(true, $segPath);
+            $curSize = filesize($segPath);
+            if ($curSize > 0 && $curSize === $prevSize) break;
+            $prevSize = $curSize;
+            usleep(50000);
+        }
+        header('Content-Type: video/mp2t');
+        header('Content-Length: ' . filesize($segPath));
+        header('Cache-Control: no-cache');
+        // Marquer activité pour le cleanup
+        touch($hlsDir . '/.active');
+        readfile($segPath);
+        exit;
+    }
+
+    // Lancer ffmpeg HLS si pas déjà actif
+    $needStart = !is_dir($hlsDir);
+    // Si le dossier existe mais ffmpeg est mort, relancer
+    if (!$needStart && is_file($pidFile)) {
+        $pid = (int)file_get_contents($pidFile);
+        if ($pid > 0 && !file_exists('/proc/' . $pid)) {
+            // ffmpeg est mort — si seek demandé, relancer avec le nouveau start
+            if ($startSec > 0) {
+                // Nettoyer l'ancien dossier et relancer
+                array_map('unlink', glob($hlsDir . '/*'));
+                $needStart = true;
+            }
+        }
+    }
+
+    if ($needStart) {
+        if (!is_dir($hlsDir)) mkdir($hlsDir, 0755, true);
+        // Supprimer les anciens segments si relance
+        array_map('unlink', glob($hlsDir . '/seg*.ts'));
+        if (file_exists($m3u8)) unlink($m3u8);
+
+        $fc = buildFilterGraph($quality, $audioTrack, $burnSub);
+
+        [$slotFp, $queued] = acquireStreamSlot();
+        if ($queued) stream_log('HLS queued | ' . basename($resolvedPath));
+        stream_log('HLS start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
+
+        warmFileCache($resolvedPath);
+
+        $ffmpegCmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
+            . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
+            . buildFfmpegCodecArgs(50)
+            . ' -f hls -hls_time 4 -hls_list_size 0 -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
+            . ' -hls_flags append_list'
+            . ' ' . escapeshellarg($m3u8)
+            . ' -loglevel error 2>>' . escapeshellarg($logFile);
+
+        // Lancer ffmpeg en arrière-plan et stocker son PID
+        $pid = trim(shell_exec($ffmpegCmd . ' > /dev/null & echo $!'));
+        file_put_contents($pidFile, $pid);
+        touch($hlsDir . '/.active');
+
+        // Cleanup background : attend que ffmpeg termine + 2min d'inactivité
+        $slotPath = $slotFp ? stream_get_meta_data($slotFp)['uri'] : '';
+        $activeFile = escapeshellarg($hlsDir . '/.active');
+        $cleanupCmd = '('
+            . 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do sleep 5; done; '   // attendre fin ffmpeg
+            . ($slotPath ? 'rm -f ' . escapeshellarg($slotPath) . '; ' : '')       // libérer le slot
+            . 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '  // attendre 2min sans activité
+            . 'rm -rf ' . escapeshellarg($hlsDir)
+            . ') >/dev/null 2>&1 &';
+        exec($cleanupCmd);
+        if ($slotFp) fclose($slotFp);
+    } else {
+        // Session existante — marquer activité
+        touch($hlsDir . '/.active');
+    }
+
+    // Attendre que le .m3u8 existe et ait au moins un segment (max 15s)
+    for ($w = 0; $w < 150; $w++) {
+        clearstatcache(true, $m3u8);
+        if (file_exists($m3u8) && filesize($m3u8) > 20) break;
+        usleep(100000);
+    }
+    if (!file_exists($m3u8) || filesize($m3u8) <= 20) {
+        stream_log('HLS timeout waiting for m3u8 | ' . basename($resolvedPath));
+        http_response_code(504);
+        header('Content-Type: application/vnd.apple.mpegurl');
+        echo "#EXTM3U\n#EXT-X-ERROR:Timeout\n";
+        exit;
+    }
+
+    // Réécrire le m3u8 : remplacer les noms de fichier locaux par des URLs absolues
+    $m3u8Content = file_get_contents($m3u8);
+    $baseStreamUrl = '/dl/' . $token . '?' . ($subPath ? 'p=' . rawurlencode($subPath) . '&' : '')
+        . 'stream=hls&audio=' . $audioTrack . '&quality=' . $quality
+        . ($burnSub >= 0 ? '&burnSub=' . $burnSub : '');
+    $m3u8Rewritten = preg_replace('/^(seg\d+\.ts)$/m', $baseStreamUrl . '&seg=$1', $m3u8Content);
+
+    header('Content-Type: application/vnd.apple.mpegurl');
+    header('Cache-Control: no-cache');
+    echo $m3u8Rewritten;
+    exit;
+}
