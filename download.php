@@ -1524,8 +1524,13 @@ function plog(tag, msg, data) {
                 var self = this;
                 fetch(this.urls[idx], {credentials:'same-origin'})
                     .then(function(r) { return r.text(); })
-                    .then(function(t) { if (gen !== self._gen) return; self.cues = parseVTT(t); self._idx = self._find(realTime()); })
-                    .catch(function() {});
+                    .then(function(t) {
+                        if (gen !== self._gen) { plog('SUBS', 'DISCARDED: gen=' + gen + ' current=' + self._gen); return; }
+                        self.cues = parseVTT(t);
+                        self._idx = self._find(realTime());
+                        plog('SUBS', 'loaded ' + self.cues.length + ' cues, idx=' + self._idx + ' time=' + realTime().toFixed(1));
+                    })
+                    .catch(function(e) { plog('SUBS', 'fetch error: ' + e); });
             } else {
                 if (wasBurning) startStream(pos);
             }
