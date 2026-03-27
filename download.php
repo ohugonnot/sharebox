@@ -994,10 +994,10 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 
     // Boutons épisode prev/next
     $prevBtnHtml = $prevFile
-        ? '<a class="player-btn player-nav-btn" id="prev-ep" href="' . htmlspecialchars($prevFile['url']) . '" title="' . htmlspecialchars($prevFile['name']) . '"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></a>'
+        ? '<a class="player-btn player-nav-btn ep-prev" href="' . htmlspecialchars($prevFile['url']) . '" title="' . htmlspecialchars($prevFile['name']) . '"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></a>'
         : '';
     $nextBtnHtml = $nextFile
-        ? '<a class="player-btn player-nav-btn" id="next-ep" href="' . htmlspecialchars($nextFile['url']) . '" title="' . htmlspecialchars($nextFile['name']) . '"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 18h2V6h-2zM6 18l8.5-6L6 6z"/></svg></a>'
+        ? '<a class="player-btn player-nav-btn ep-next" href="' . htmlspecialchars($nextFile['url']) . '" title="' . htmlspecialchars($nextFile['name']) . '"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 18h2V6h-2zM6 18l8.5-6L6 6z"/></svg></a>'
         : '';
 
     $remuxEnabled = STREAM_REMUX_ENABLED ? 'true' : 'false';
@@ -1040,7 +1040,10 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 .player-card:-webkit-full-screen .player-controls .ctrl-row svg { filter:drop-shadow(0 1px 3px rgba(0,0,0,.8)); }
 .fs-title { display:none; }
 .player-card:fullscreen .fs-title,
-.player-card:-webkit-full-screen .fs-title { display:block; position:absolute; top:0; left:0; right:0; z-index:20; padding:1.2rem 1.5rem; background:linear-gradient(rgba(8,10,18,.8) 0%, rgba(8,10,18,.3) 60%, transparent 100%); font-family:var(--font-sans); font-size:clamp(.82rem,1.4vw,1.05rem); font-weight:600; color:rgba(255,255,255,.88); letter-spacing:.01em; text-shadow:0 1px 6px rgba(0,0,0,.7); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; transition:opacity .25s; pointer-events:none; }
+.player-card:-webkit-full-screen .fs-title { display:flex; align-items:center; gap:.6rem; position:absolute; top:0; left:0; right:0; z-index:20; padding:1.2rem 1.5rem; background:linear-gradient(rgba(8,10,18,.8) 0%, rgba(8,10,18,.3) 60%, transparent 100%); font-family:var(--font-sans); font-size:clamp(.82rem,1.4vw,1.05rem); font-weight:600; color:rgba(255,255,255,.88); letter-spacing:.01em; text-shadow:0 1px 6px rgba(0,0,0,.7); transition:opacity .25s; }
+.fs-title-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+.fs-title .player-nav-btn { background:rgba(255,255,255,.1); border-color:rgba(255,255,255,.2); color:#fff; padding:.35rem .6rem; flex-shrink:0; text-shadow:none; filter:drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
+.fs-title .player-nav-btn:hover { background:rgba(240,160,48,.2); border-color:rgba(240,160,48,.4); color:var(--accent); }
 .player-card:fullscreen .fs-title.fs-hidden,
 .player-card:-webkit-full-screen .fs-title.fs-hidden { opacity:0; }
 .player-card:fullscreen .player-controls .track-bar,
@@ -1147,7 +1150,7 @@ video{max-height:100vh !important;height:100vh !important}
         <a class="player-btn accent" href="{$dlUrl}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span> Télécharger</span></a>
     </div>
     <div class="player-card">
-        <div class="fs-title" id="fs-title">{$fileNameHtml}</div>
+        <div class="fs-title" id="fs-title">{$prevBtnHtml}<span class="fs-title-text">{$fileNameHtml}</span>{$nextBtnHtml}</div>
         <div class="player-video-wrap">
             <{$tag} id="player" {$controlsAttr} autoplay playsinline webkit-playsinline preload="metadata"></{$tag}>
             <div class="player-hint" id="hint"><span class="player-hint-text">Chargement...</span></div>
@@ -1246,10 +1249,8 @@ function plog(tag, msg, data) {
     var svgPip    = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity=".3"/></svg>';
 
     // ── Click handlers épisodes ─────────────────────────────────────────────
-    var prevEpBtn = document.getElementById('prev-ep');
-    var nextEpBtn = document.getElementById('next-ep');
-    if (prevEpBtn) prevEpBtn.addEventListener('click', function(e) { e.preventDefault(); navigateEpisode('prev'); });
-    if (nextEpBtn) nextEpBtn.addEventListener('click', function(e) { e.preventDefault(); navigateEpisode('next'); });
+    document.querySelectorAll('.ep-prev').forEach(function(btn) { btn.addEventListener('click', function(e) { e.preventDefault(); navigateEpisode('prev'); }); });
+    document.querySelectorAll('.ep-next').forEach(function(btn) { btn.addEventListener('click', function(e) { e.preventDefault(); navigateEpisode('next'); }); });
 
     // ── Zoom vidéo ──────────────────────────────────────────────────────────
     var zoomModes  = ['contain', 'cover', 'fill'];
