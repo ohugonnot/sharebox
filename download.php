@@ -2197,7 +2197,7 @@ function plog(tag, msg, data) {
                 if (!streamStarted) {
                     // Probe arrivé à temps → choisir le mode optimal
                     streamStarted = true;
-                    if (!savedCfg || !savedPos) S.step = chooseModeFromProbe(d);
+                    if (!savedCfg || !savedPos || !savedCfg.mode) S.step = chooseModeFromProbe(d);
                     if (savedPos > 30) restoreCfgUI();
                     hint.textContent = '';
                     if (savedPos > 30) {
