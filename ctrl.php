@@ -114,8 +114,8 @@ try {
             // Générer un slug lisible à partir du nom + suffixe random
             $token = generate_slug($name, $db);
             $stmt = $db->prepare("
-                INSERT INTO links (token, path, type, name, password_hash, password_plain, expires_at)
-                VALUES (:token, :path, :type, :name, :password_hash, :password_plain, :expires_at)
+                INSERT INTO links (token, path, type, name, password_hash, expires_at)
+                VALUES (:token, :path, :type, :name, :password_hash, :expires_at)
             ");
             $stmt->execute([
                 ':token' => $token,
@@ -123,7 +123,6 @@ try {
                 ':type' => $type,
                 ':name' => $name,
                 ':password_hash' => $passwordHash,
-                ':password_plain' => !empty($password) ? $password : null,
                 ':expires_at' => $expiresAt,
             ]);
 
@@ -211,8 +210,8 @@ try {
             $body .= "Un fichier a été partagé avec vous :\n\n";
             $body .= "Nom : " . $link['name'] . "\n";
             $body .= "Lien : " . $fullUrl . "\n";
-            if ($link['password_plain']) {
-                $body .= "Mot de passe : " . $link['password_plain'] . "\n";
+            if ($link['password_hash']) {
+                $body .= "Ce lien est protégé par un mot de passe.\n";
             }
             if ($link['expires_at']) {
                 $body .= "Expire le : " . date('d/m/Y à H:i', strtotime($link['expires_at'])) . "\n";

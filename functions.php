@@ -30,7 +30,7 @@ function acquireStreamSlot(): array {
     exit;
 }
 
-function releaseStreamSlot($fp): void {
+function releaseStreamSlot(mixed $fp): void {
     flock($fp, LOCK_UN);
     fclose($fp);
 }
@@ -163,4 +163,117 @@ function is_path_within(string|false $resolvedPath, string $basePath): bool {
     if ($resolvedPath === false) return false;
     $base = rtrim($basePath, '/');
     return $resolvedPath === $base || str_starts_with($resolvedPath, $base . '/');
+}
+
+// ── Logging ─────────────────────────────────────────────────────────────────
+
+/**
+ * Log un message dans le fichier STREAM_LOG avec rotation (5 MB max, 3 fichiers).
+ */
+function stream_log(string $msg): void {
+    if (!defined('STREAM_LOG') || !STREAM_LOG) return;
+    $logFile = STREAM_LOG;
+    // Rotate : 5 MB max, 3 fichiers
+    if (@filesize($logFile) > 5 * 1024 * 1024) {
+        @unlink($logFile . '.3');
+        @rename($logFile . '.2', $logFile . '.3');
+        @rename($logFile . '.1', $logFile . '.2');
+        @rename($logFile, $logFile . '.1');
+    }
+    $line = '[' . date('Y-m-d H:i:s') . '] [' . ($_SERVER['REMOTE_ADDR'] ?? '-') . '] ' . $msg . "\n";
+    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
+}
+
+// ── FFmpeg helpers ──────────────────────────────────────────────────────────
+
+const ALLOWED_QUALITIES = [480, 576, 720, 1080];
+
+function validateQuality(int $quality): int {
+    return in_array($quality, ALLOWED_QUALITIES, true) ? $quality : 720;
+}
+
+/**
+ * Construit le filter_complex ffmpeg pour transcode (avec ou sans burn-in sous-titre).
+ */
+function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1): string {
+    if ($burnSub >= 0) {
+        return '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];'
+            . '[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];'
+            . '[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
+    }
+    return '"[0:v:0]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];'
+        . '[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
+}
+
+/**
+ * Construit les arguments d'entrée ffmpeg communs.
+ */
+function buildFfmpegInputArgs(string $filePath, string $seekBefore = ''): string {
+    return 'ffmpeg' . $seekBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
+}
+
+/**
+ * Construit les arguments encodeur x264+AAC communs.
+ */
+function buildFfmpegCodecArgs(int $gopSize = 25): string {
+    return ' -c:v libx264 -preset ultrafast -crf 23 -g ' . $gopSize . ' -threads 4'
+        . ' -c:a aac -ac 2 -b:a 192k -shortest';
+}
+
+/**
+ * Arguments muxer fMP4 (fragmented MP4 pour streaming progressif).
+ */
+function buildFmp4MuxerArgs(): string {
+    return ' -avoid_negative_ts make_zero -start_at_zero'
+        . ' -max_muxing_queue_size 1024 -min_frag_duration 300000'
+        . ' -movflags frag_keyframe+empty_moov+default_base_moof';
+}
+
+/**
+ * Calcule les épisodes précédent/suivant pour la navigation dans le player.
+ *
+ * @param string $subPath   Sous-chemin relatif du fichier courant (ex: "Season1/ep02.mkv")
+ * @param string $basePath  Chemin absolu du dossier partagé
+ * @param string $baseUrl   URL de base du lien (ex: "/dl/mon-token")
+ * @return array{prev: ?array<string, string>, next: ?array<string, string>}
+ */
+function computeEpisodeNav(string $subPath, string $basePath, string $baseUrl): array {
+    $prevFile = null;
+    $nextFile = null;
+
+    $parentSub = dirname($subPath);
+    $parentDir = ($parentSub === '.') ? $basePath : $basePath . '/' . $parentSub;
+    if (is_dir($parentDir)) {
+        $siblings = [];
+        foreach (scandir($parentDir) as $item) {
+            if ($item[0] === '.') continue;
+            if (is_file($parentDir . '/' . $item) && get_media_type($item) === 'video') {
+                $siblings[] = $item;
+            }
+        }
+        usort($siblings, 'strnatcasecmp');
+        $currentName = basename($subPath);
+        $idx = array_search($currentName, $siblings, true);
+        if ($idx !== false) {
+            if ($idx > 0) {
+                $pSub = ($parentSub === '.') ? $siblings[$idx - 1] : $parentSub . '/' . $siblings[$idx - 1];
+                $prevFile = ['name' => $siblings[$idx - 1], 'url' => $baseUrl . '?p=' . rawurlencode($pSub) . '&play=1', 'pp' => 'p=' . rawurlencode($pSub) . '&'];
+            }
+            if ($idx < count($siblings) - 1) {
+                $nSub = ($parentSub === '.') ? $siblings[$idx + 1] : $parentSub . '/' . $siblings[$idx + 1];
+                $nextFile = ['name' => $siblings[$idx + 1], 'url' => $baseUrl . '?p=' . rawurlencode($nSub) . '&play=1', 'pp' => 'p=' . rawurlencode($nSub) . '&'];
+            }
+        }
+    }
+
+    return ['prev' => $prevFile, 'next' => $nextFile];
+}
+
+/**
+ * Warm le fichier dans le page cache si < 2 Go.
+ */
+function warmFileCache(string $filePath): void {
+    if (filesize($filePath) < 2 * 1024 * 1024 * 1024) {
+        shell_exec('vmtouch -qt ' . escapeshellarg($filePath) . ' >/dev/null 2>&1 &');
+    }
 }
