@@ -71,11 +71,14 @@ try {
 releaseProbeSlot($probeFp);
 echo $result;
 
-// Pré-cache des sous-titres texte en background (évite l'attente au premier clic)
-$textSubs = array_filter($subs, fn($s) => $s['type'] === 'text');
-if ($textSubs) {
+// Pré-cache du PREMIER sous-titre texte en background (évite l'attente au premier clic)
+// Un seul pour ne pas lancer N ffmpeg en parallèle sur un gros fichier
+$firstTextSub = null;
+foreach ($subs as $s) { if ($s['type'] === 'text') { $firstTextSub = $s; break; } }
+if ($firstTextSub) {
     $subCached = $db->prepare("SELECT 1 FROM subtitle_cache WHERE path = :p AND track = :t AND mtime = :m");
-    foreach ($textSubs as $s) {
+    $s = $firstTextSub;
+    {
         $subCached->execute([':p' => $resolvedPath, ':t' => $s['index'], ':m' => $mtime]);
         if (!$subCached->fetch()) {
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
@@ -98,5 +101,6 @@ if ($textSubs) {
         }
     }
 }
+// Les autres pistes seront extraites à la demande (cache on first request)
 
 exit;
