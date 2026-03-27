@@ -70,4 +70,33 @@ try {
 
 releaseProbeSlot($probeFp);
 echo $result;
+
+// Pré-cache des sous-titres texte en background (évite l'attente au premier clic)
+$textSubs = array_filter($subs, fn($s) => $s['type'] === 'text');
+if ($textSubs) {
+    $subCached = $db->prepare("SELECT 1 FROM subtitle_cache WHERE path = :p AND track = :t AND mtime = :m");
+    foreach ($textSubs as $s) {
+        $subCached->execute([':p' => $resolvedPath, ':t' => $s['index'], ':m' => $mtime]);
+        if (!$subCached->fetch()) {
+            $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+            $bgCmd = 'timeout 120 ffmpeg -i ' . escapeshellarg($resolvedPath)
+                . ' -map 0:s:' . $s['index'] . ' -f webvtt pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
+            $dbPath = DB_PATH;
+            // Extraction + cache en background via un script inline
+            $shellCmd = '(' . $bgCmd . ') | php -r '
+                . escapeshellarg(
+                    '$vtt=file_get_contents("php://stdin");'
+                    . 'if(!$vtt)exit;'
+                    . '$db=new PDO("sqlite:' . $dbPath . '");'
+                    . '$db->exec("PRAGMA busy_timeout=5000");'
+                    . '$s=$db->prepare("INSERT OR REPLACE INTO subtitle_cache(path,track,mtime,vtt)VALUES(:p,:t,:m,:v)");'
+                    . '$s->execute([":p"=>' . var_export($resolvedPath, true) . ',":t"=>' . $s['index'] . ',":m"=>' . $mtime . ',":v"=>$vtt]);'
+                )
+                . ' >/dev/null 2>&1 &';
+            shell_exec($shellCmd);
+            stream_log('SUBTITLE bg-precache | track=' . $s['index'] . ' | ' . basename($resolvedPath));
+        }
+    }
+}
+
 exit;
