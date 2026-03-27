@@ -4,6 +4,7 @@ vendor/
 .phpunit.cache/
 composer.lock
 /composer
+__pycache__/
 
 # Test media files
 *.mp4
