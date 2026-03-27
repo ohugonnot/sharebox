@@ -1243,8 +1243,7 @@ function plog(tag, msg, data) {
             quality: S.quality,
             burnSub: S.burnSub
         }));
-        // Position à 1s pour que restoreCfg s'active (< 30s = pas de resume banner)
-        lsSet('player_seek_' + base + targetPp, '1');
+        // Ne PAS set player_seek_ — on ne veut pas de faux resume
         // Transférer la piste sous-titre sélectionnée
         var curSub = lsGet('player_sub_' + base + pp, '');
         if (curSub) lsSet('player_sub_' + base + targetPp, curSub);
@@ -1699,7 +1698,7 @@ function plog(tag, msg, data) {
             S.videoHeight = d.videoHeight;
             var qs = [480, 576, 720, 1080].filter(function(q) { return q <= S.videoHeight; });
             if (qs.length) {
-                if (!savedCfg || !savedPos || savedCfg.quality <= 0 || qs.indexOf(savedCfg.quality) === -1)
+                if (!savedCfg || savedCfg.quality <= 0 || qs.indexOf(savedCfg.quality) === -1)
                     S.quality = qs.indexOf(720) !== -1 ? 720 : qs[qs.length - 1];
                 hasControls = true;
                 var lbl3 = document.createElement('label'); lbl3.textContent = 'Qualit\u00E9 :';
@@ -2044,7 +2043,7 @@ function plog(tag, msg, data) {
     // Appelé AVANT applyProbe pour que les sélecteurs soient construits avec les bonnes valeurs.
     // Ne touche pas burnSub : celui-ci est restauré via player_sub_* dans applyProbe → Subs.load.
     function restoreCfg() {
-        if (!savedCfg || !savedPos) return;
+        if (!savedCfg) return;
         plog('CONFIG', 'restoreCfg from localStorage', savedCfg);
         if (savedCfg.audio >= 0)   S.audioIdx = savedCfg.audio;
         if (savedCfg.quality > 0)  S.quality  = savedCfg.quality;
@@ -2052,7 +2051,7 @@ function plog(tag, msg, data) {
     }
     // Synchroniser les sélecteurs UI après applyProbe (qui les construit)
     function restoreCfgUI() {
-        if (!savedCfg || !savedPos) return;
+        if (!savedCfg) return;
         var selects = trackBar.querySelectorAll('select.track-select');
         selects.forEach(function(sel) {
             if (sel.previousElementSibling && sel.previousElementSibling.textContent === 'Audio :') {
@@ -2121,19 +2120,19 @@ function plog(tag, msg, data) {
                 clearTimeout(fallbackTimer);
                 probeData = d;
                 plog('PROBE', 'received', {codec: d.videoCodec, h: d.videoHeight, dur: d.duration, isMP4: d.isMP4, isMKV: d.isMKV, audio: (d.audio||[]).length, subs: (d.subtitles||[]).length});
-                if (savedPos > 30) restoreCfg();
+                if (savedCfg) restoreCfg();
                 applyProbe(d);
                 if (!streamStarted) {
                     // Probe arrivé à temps → choisir le mode optimal
                     streamStarted = true;
-                    if (!savedCfg || !savedPos || !savedCfg.mode) S.step = chooseModeFromProbe(d);
-                    if (savedPos > 30) restoreCfgUI();
+                    if (!savedCfg || !savedCfg.mode) S.step = chooseModeFromProbe(d);
+                    if (savedCfg) restoreCfgUI();
                     hint.textContent = '';
                     if (savedPos > 30) {
                         plog('INIT', 'show resume banner at ' + fmtTime(savedPos));
                         showResumeBanner(savedPos, function(pos) { plog('RESUME', pos > 0 ? 'reprendre à ' + fmtTime(pos) : 'depuis le début'); startStream(pos); });
                     } else {
-                        startStream(savedPos);
+                        startStream(0);
                     }
                 } else if (fallbackAt && Date.now() - fallbackAt < 5000) {
                     // Probe arrivé peu après le fallback natif — si le mode optimal est différent, restart proactif
