@@ -38,6 +38,16 @@ function get_db(): PDO {
     ");
 
     $db->query("
+        CREATE TABLE IF NOT EXISTS subtitle_cache (
+            path TEXT NOT NULL,
+            track INTEGER NOT NULL,
+            mtime INTEGER NOT NULL,
+            vtt TEXT NOT NULL,
+            PRIMARY KEY (path, track)
+        )
+    ");
+
+    $db->query("
         CREATE TABLE IF NOT EXISTS links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             token TEXT NOT NULL UNIQUE,
@@ -83,11 +93,20 @@ function get_db(): PDO {
  * Appelé périodiquement (cron ou admin), pas à chaque requête.
  */
 function purge_probe_cache(PDO $db): int {
-    $stmt = $db->prepare("DELETE FROM probe_cache WHERE NOT EXISTS (
+    $where = "NOT EXISTS (
         SELECT 1 FROM links
         WHERE probe_cache.path = links.path
            OR probe_cache.path LIKE rtrim(links.path, '/') || '/%'
-    )");
+    )";
+    $stmt = $db->prepare("DELETE FROM probe_cache WHERE $where");
     $stmt->execute();
-    return $stmt->rowCount();
+    $count = $stmt->rowCount();
+    // Purge aussi le cache sous-titres orphelin
+    $stmt2 = $db->prepare("DELETE FROM subtitle_cache WHERE NOT EXISTS (
+        SELECT 1 FROM links
+        WHERE subtitle_cache.path = links.path
+           OR subtitle_cache.path LIKE rtrim(links.path, '/') || '/%'
+    )");
+    $stmt2->execute();
+    return $count + $stmt2->rowCount();
 }
