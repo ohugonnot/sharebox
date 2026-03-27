@@ -26,6 +26,7 @@ $stmt->execute([':token' => $token]);
 $link = $stmt->fetch();
 
 if (!$link) {
+    stream_log('ACCESS 404 | token=' . $token . ' | not found');
     http_response_code(404);
     afficher_erreur('Lien introuvable', 'Ce lien n\'existe pas ou a été supprimé.');
     exit;
@@ -33,6 +34,7 @@ if (!$link) {
 
 // Vérifier l'expiration
 if ($link['expires_at'] !== null && strtotime($link['expires_at']) < time()) {
+    stream_log('ACCESS 410 | token=' . $token . ' | expired ' . $link['expires_at']);
     http_response_code(410);
     afficher_erreur('Lien expiré', 'Ce lien de partage a expiré et n\'est plus disponible.');
     exit;
@@ -40,6 +42,7 @@ if ($link['expires_at'] !== null && strtotime($link['expires_at']) < time()) {
 
 // Vérifier que le fichier/dossier existe toujours
 if (!file_exists($link['path'])) {
+    stream_log('ACCESS 404 | token=' . $token . ' | path gone: ' . $link['path']);
     http_response_code(404);
     afficher_erreur('Fichier introuvable', 'Le fichier ou dossier partagé n\'existe plus sur le serveur.');
     exit;
@@ -56,11 +59,13 @@ if ($link['password_hash'] !== null) {
         $attemptsKey = 'share_attempts_' . $token;
         $attempts = (int)($_SESSION[$attemptsKey] ?? 0);
         if ($attempts >= 10) {
+            stream_log('AUTH brute-force | token=' . $token . ' | attempts=' . $attempts);
             sleep(3);
             afficher_formulaire_mdp($link['name'], 'Trop de tentatives. Réessayez plus tard.');
             exit;
         }
         if (!password_verify($_POST['password'], $link['password_hash'])) {
+            stream_log('AUTH fail | token=' . $token . ' | attempt=' . ($attempts + 1));
             $_SESSION[$attemptsKey] = $attempts + 1;
             sleep(1);
             afficher_formulaire_mdp($link['name'], 'Mot de passe incorrect.');
@@ -69,6 +74,7 @@ if ($link['password_hash'] !== null) {
         unset($_SESSION[$attemptsKey]);
         $_SESSION[$sessionKey] = true;
         session_regenerate_id(true);
+        stream_log('AUTH ok | token=' . $token);
     } else {
         afficher_formulaire_mdp($link['name']);
         exit;
@@ -85,6 +91,7 @@ $resolvedPath = realpath($targetPath);
 
 // Sécurité : le chemin résolu doit rester dans le dossier partagé
 if (!is_path_within($resolvedPath, $basePath)) {
+    stream_log('ACCESS 403 | token=' . $token . ' | path traversal: ' . ($subPath ?: '(root)'));
     http_response_code(403);
     afficher_erreur('Accès interdit', 'Ce chemin n\'est pas autorisé.');
     exit;
@@ -92,8 +99,16 @@ if (!is_path_within($resolvedPath, $basePath)) {
 
 function stream_log(string $msg): void {
     if (!defined('STREAM_LOG') || !STREAM_LOG) return;
+    $logFile = STREAM_LOG;
+    // Rotate : 5 MB max, 3 fichiers
+    if (@filesize($logFile) > 5 * 1024 * 1024) {
+        @unlink($logFile . '.3');
+        @rename($logFile . '.2', $logFile . '.3');
+        @rename($logFile . '.1', $logFile . '.2');
+        @rename($logFile, $logFile . '.1');
+    }
     $line = '[' . date('Y-m-d H:i:s') . '] [' . ($_SERVER['REMOTE_ADDR'] ?? '-') . '] ' . $msg . "\n";
-    @file_put_contents(STREAM_LOG, $line, FILE_APPEND | LOCK_EX);
+    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
 }
 
 // Si c'est un fichier
@@ -102,6 +117,7 @@ if (is_file($resolvedPath)) {
     if (isset($_GET['play']) && $_GET['play'] === '1') {
         $mediaType = get_media_type(basename($resolvedPath));
         if ($mediaType) {
+            stream_log('PLAYER open | ' . $mediaType . ' | ' . basename($resolvedPath) . ($subPath ? ' | p=' . $subPath : ''));
             afficher_player($token, $link['name'], $subPath, $mediaType, $basePath);
             exit;
         }
@@ -119,6 +135,7 @@ if (is_file($resolvedPath)) {
             // Invalider les entrées cache sans isMP4/isMKV (champs ajoutés après coup)
             $decoded = json_decode($row['result'], true);
             if (isset($decoded['isMP4']) && isset($decoded['isMKV'])) {
+                stream_log('PROBE cache-hit | ' . basename($resolvedPath) . ' | codec=' . ($decoded['videoCodec'] ?? '?') . ' h=' . ($decoded['videoHeight'] ?? '?') . ' audio=' . count($decoded['audio'] ?? []) . ' subs=' . count($decoded['subtitles'] ?? []));
                 echo $row['result'];
                 exit;
             }
@@ -126,6 +143,7 @@ if (is_file($resolvedPath)) {
 
         $probeFp = acquireProbeSlot();
         if (!$probeFp) {
+            stream_log('PROBE 429 | ' . basename($resolvedPath) . ' | all probe slots busy');
             http_response_code(429);
             echo json_encode(['error' => 'too_many_probes']);
             exit;
@@ -168,6 +186,7 @@ if (is_file($resolvedPath)) {
             }
         }
         $result = json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec, 'isMP4' => $isMP4, 'isMKV' => $isMKV]);
+        stream_log('PROBE ffprobe | ' . basename($resolvedPath) . ' | codec=' . $videoCodec . ' h=' . $videoHeight . ' dur=' . round($duration) . 's fmt=' . $formatName . ' audio=' . count($audio) . ' subs=' . count($subs));
 
         // Stocker en cache (best-effort : on ignore si la DB est encore verrouillée)
         try {
@@ -208,6 +227,7 @@ if (is_file($resolvedPath)) {
         exec($cmd, $kfLines);
         releaseProbeSlot($probeFp);
         $pts = isset($kfLines[0]) && is_numeric($kfLines[0]) ? (float)$kfLines[0] : $seekSec;
+        stream_log('KEYFRAME lookup | ' . basename($resolvedPath) . ' | seek=' . round($seekSec, 1) . ' → pts=' . round($pts, 1) . ' drift=' . round(abs($seekSec - $pts), 1) . 's');
         echo json_encode(['pts' => $pts]);
         exit;
     }
@@ -216,6 +236,7 @@ if (is_file($resolvedPath)) {
     if (isset($_GET['stream']) && $_GET['stream'] === '1') {
         $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
         if ($mime) {
+            stream_log('NATIVE stream | ' . basename($resolvedPath) . ' | mime=' . $mime . ' size=' . format_taille(filesize($resolvedPath)));
             $encodedPath = XACCEL_PREFIX . str_replace('%2F', '/', rawurlencode($resolvedPath));
             header('Content-Type: ' . $mime);
             header('Content-Disposition: inline');
@@ -493,6 +514,7 @@ if (is_file($resolvedPath)) {
     }
 
     // Téléchargement direct via nginx
+    stream_log('DOWNLOAD | ' . basename($resolvedPath) . ' | size=' . format_taille(filesize($resolvedPath)));
     if (!$subPath) {
         $stmt = $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id");
         $stmt->execute([':id' => $link['id']]);
@@ -509,6 +531,7 @@ if (is_file($resolvedPath)) {
 
 // Si c'est un dossier
 if (is_dir($resolvedPath)) {
+    stream_log('BROWSE | token=' . $token . ' | ' . ($subPath ?: '(root)') . ' | ' . basename($resolvedPath));
     if (!$subPath) {
         $stmt = $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id");
         $stmt->execute([':id' => $link['id']]);
@@ -516,6 +539,7 @@ if (is_dir($resolvedPath)) {
 
     // Mode ZIP : télécharger tout le dossier en un seul fichier
     if (isset($_GET['zip']) && $_GET['zip'] === '1') {
+        stream_log('ZIP start | ' . basename($resolvedPath));
         $maxZipSize = defined('MAX_ZIP_SIZE') ? MAX_ZIP_SIZE : 10 * 1024 * 1024 * 1024;
         if (dir_size($resolvedPath) > $maxZipSize) {
             http_response_code(413);
@@ -957,6 +981,9 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         }
     }
     $episodeNavJson = json_encode(['prev' => $prevFile, 'next' => $nextFile], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG);
+    if ($prevFile || $nextFile) {
+        stream_log('EPISODE NAV | ' . basename($subPath) . ' | prev=' . ($prevFile ? $prevFile['name'] : 'none') . ' next=' . ($nextFile ? $nextFile['name'] : 'none'));
+    }
 
     $tag = $mediaType === 'video' ? 'video' : 'audio';
     $controlsAttr = $mediaType === 'audio' ? 'controls' : '';
@@ -1157,6 +1184,11 @@ video{max-height:100vh !important;height:100vh !important}
 </div>
 <script>
 var REMUX_ENABLED = {$remuxEnabled};
+function plog(tag, msg, data) {
+    var ts = new Date().toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:1});
+    if (data !== undefined) console.log('%c[' + ts + '] %c' + tag + '%c ' + msg, 'color:#888', 'color:#f0a030;font-weight:bold', 'color:inherit', data);
+    else console.log('%c[' + ts + '] %c' + tag + '%c ' + msg, 'color:#888', 'color:#f0a030;font-weight:bold', 'color:inherit');
+}
 (function() {
     // ── DOM ──────────────────────────────────────────────────────────────────
     var player      = document.getElementById('player');
@@ -1281,6 +1313,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     function navigateEpisode(direction) {
         var ep = direction === 'next' ? episodeNav.next : episodeNav.prev;
         if (!ep) return;
+        plog('NAV', direction + ' → ' + ep.name + ' | mode=' + (S.confirmed||S.step) + ' audio=' + S.audioIdx + ' quality=' + S.quality);
         transferCfgTo(ep.pp);
         window.location.href = ep.url;
     }
@@ -1375,8 +1408,10 @@ var REMUX_ENABLED = {$remuxEnabled};
 
     function startStream(resumeAt) {
         var mode = S.confirmed || S.step;
+        plog('STREAM', 'startStream mode=' + mode + ' resumeAt=' + (resumeAt || 0).toFixed(1) + ' audio=' + S.audioIdx + ' quality=' + S.quality + ' burnSub=' + S.burnSub);
         // En mode natif, le navigateur gère le seek via player.currentTime (pas de &start= dans l'URL)
         if (mode === 'native' && resumeAt > 0) {
+            plog('STREAM', 'native seek via currentTime → ' + resumeAt.toFixed(1));
             S.offset = 0;
             S.hasFailed = false;
             clearTimeout(S.videoWidthTimer);
@@ -1410,6 +1445,11 @@ var REMUX_ENABLED = {$remuxEnabled};
     function canPlay(mime) { var t = document.createElement('video').canPlayType(mime); return t === 'probably' || t === 'maybe'; }
 
     function chooseModeFromProbe(d) {
+        var _r = _chooseModeFromProbe(d);
+        plog('PROBE', 'chooseModeFromProbe → ' + _r + ' (codec=' + (d && d.videoCodec || '?') + ' isMP4=' + (d && d.isMP4) + ' isMKV=' + (d && d.isMKV) + ')');
+        return _r;
+    }
+    function _chooseModeFromProbe(d) {
         if (!d || !d.videoCodec) return 'native';
         var c  = d.videoCodec.toLowerCase();
         var ac = d.audio && d.audio.length > 0 ? (d.audio[0].codec || '').toLowerCase() : '';
@@ -1442,9 +1482,11 @@ var REMUX_ENABLED = {$remuxEnabled};
         if (S.hasFailed) return;
         S.hasFailed = true;
         var pos = realTime();
+        plog('ERROR', 'onFail step=' + S.step + ' confirmed=' + S.confirmed + ' pos=' + pos.toFixed(1));
         // Cascade : native/remux → transcode → erreur définitive
         if (!S.confirmed && (S.step === 'native' || S.step === 'remux')) {
             S.step = S.confirmed = 'transcode';
+            plog('ERROR', 'cascade → transcode');
             hint.textContent = 'Transcodage en cours...'; hint.className = 'player-hint transcoding';
             updateModeUI();
             startStream(pos);
@@ -1456,6 +1498,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     player.addEventListener('error', onFail);
 
     player.addEventListener('playing', function() {
+        plog('EVENT', 'playing | mode=' + (S.confirmed || S.step) + ' offset=' + S.offset.toFixed(1) + ' ct=' + (player.currentTime || 0).toFixed(1) + ' realTime=' + realTime().toFixed(1));
         unlockSize();
         var mode = S.confirmed || S.step;
         if ((mode === 'native' || mode === 'remux') && isVideo && !S.confirmed) {
@@ -1489,7 +1532,9 @@ var REMUX_ENABLED = {$remuxEnabled};
         S.stallTimer = setTimeout(function() {
             clearStallWatchdog();
             if (player.readyState < 3 && !player.paused) {
-                hint.textContent = 'Retry #' + (++S.stallCount) + '...'; hint.className = 'player-hint';
+                S.stallCount++;
+                plog('STALL', 'watchdog retry #' + S.stallCount + ' timeout=' + stallTimeout() + 'ms readyState=' + player.readyState);
+                hint.textContent = 'Retry #' + S.stallCount + '...'; hint.className = 'player-hint';
                 startStream(realTime());
             }
         }, stallTimeout());
@@ -1509,7 +1554,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         }
     });
 
-    player.addEventListener('waiting', function() { clearTimeout(stableTimer); stableTimer = null; startStallWatchdog(); });
+    player.addEventListener('waiting', function() { plog('EVENT', 'waiting | stallCount=' + S.stallCount + ' ct=' + (player.currentTime||0).toFixed(1)); clearTimeout(stableTimer); stableTimer = null; startStallWatchdog(); });
     player.addEventListener('playing', function() {
         clearStallWatchdog();
         clearTimeout(stableTimer);
@@ -1540,6 +1585,7 @@ var REMUX_ENABLED = {$remuxEnabled};
             if (this._div.innerHTML !== html) this._div.innerHTML = html;
         },
         load: function(idx) {
+            plog('SUBS', 'load idx=' + idx + ' type=' + (this.types[idx]||'off') + ' wasBurning=' + (S.burnSub >= 0));
             var gen = ++this._gen;
             var wasBurning = S.burnSub >= 0, pos = realTime();
             this.cues = []; this._idx = 0; S.burnSub = -1;
@@ -1621,6 +1667,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     }
     function seekToFraction(frac) {
         var t = Math.max(0, Math.min(S.duration, frac * S.duration));
+        plog('SEEK', fmtTime(t) + ' (' + (frac*100).toFixed(0) + '%) mode=' + (S.confirmed||S.step));
         S.seekPending = true;
         var pct = t / S.duration * 100;
         seekFill.style.width = pct + '%'; seekThumb.style.left = pct + '%'; timeCurrent.textContent = fmtTime(t);
@@ -1698,6 +1745,7 @@ var REMUX_ENABLED = {$remuxEnabled};
             d.audio.forEach(function(a) { var o = document.createElement('option'); o.value = a.index; o.textContent = a.label; sel.appendChild(o); });
             sel.addEventListener('change', function() {
                 S.audioIdx = parseInt(sel.value); S.confirmed = S.step = 'transcode';
+                plog('TRACK', 'audio changed → ' + S.audioIdx);
                 hint.textContent = 'Changement de piste...'; hint.className = 'player-hint transcoding';
                 saveCfg(); startStream(realTime());
             });
@@ -1715,6 +1763,7 @@ var REMUX_ENABLED = {$remuxEnabled};
                 qs.forEach(function(q) { var o = document.createElement('option'); o.value = q; o.textContent = q + 'p'; if (q === S.quality) o.selected = true; sel3.appendChild(o); });
                 sel3.addEventListener('change', function() {
                     S.quality = parseInt(sel3.value); S.confirmed = 'transcode';
+                    plog('TRACK', 'quality changed → ' + S.quality + 'p');
                     hint.textContent = 'Transcodage ' + S.quality + 'p...'; hint.className = 'player-hint transcoding';
                     saveCfg(); startStream(realTime());
                 });
@@ -2052,6 +2101,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     // Ne touche pas burnSub : celui-ci est restauré via player_sub_* dans applyProbe → Subs.load.
     function restoreCfg() {
         if (!savedCfg || !savedPos) return;
+        plog('CONFIG', 'restoreCfg from localStorage', savedCfg);
         if (savedCfg.audio >= 0)   S.audioIdx = savedCfg.audio;
         if (savedCfg.quality > 0)  S.quality  = savedCfg.quality;
         if (savedCfg.mode)         { S.step = S.confirmed = savedCfg.mode; }
@@ -2106,6 +2156,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         setTimeout(function() { if (banner.parentNode) { banner.remove(); onResume(pos); } }, 8000);
     }
     if (isVideo) {
+        plog('INIT', 'video startup | savedPos=' + savedPos + ' savedCfg=' + JSON.stringify(savedCfg) + ' episodeNav=' + JSON.stringify(episodeNav));
         hint.textContent = 'Analyse...'; hint.className = 'player-hint';
         var streamStarted = false;
         var fallbackAt = 0;
@@ -2114,6 +2165,7 @@ var REMUX_ENABLED = {$remuxEnabled};
         // Fallback : démarrer en natif si le probe est trop lent
         var fallbackTimer = setTimeout(function() {
             if (!streamStarted) {
+                plog('INIT', 'probe timeout → fallback natif');
                 streamStarted = true; fallbackAt = Date.now(); hint.textContent = '';
                 if (savedPos > 30) { showResumeBanner(savedPos, function(pos) { startStream(pos); }); }
                 else { startStream(savedPos); }
@@ -2124,6 +2176,7 @@ var REMUX_ENABLED = {$remuxEnabled};
             .then(function(d) {
                 clearTimeout(fallbackTimer);
                 probeData = d;
+                plog('PROBE', 'received', {codec: d.videoCodec, h: d.videoHeight, dur: d.duration, isMP4: d.isMP4, isMKV: d.isMKV, audio: (d.audio||[]).length, subs: (d.subtitles||[]).length});
                 if (savedPos > 30) restoreCfg();
                 applyProbe(d);
                 if (!streamStarted) {
@@ -2133,7 +2186,8 @@ var REMUX_ENABLED = {$remuxEnabled};
                     if (savedPos > 30) restoreCfgUI();
                     hint.textContent = '';
                     if (savedPos > 30) {
-                        showResumeBanner(savedPos, function(pos) { startStream(pos); });
+                        plog('INIT', 'show resume banner at ' + fmtTime(savedPos));
+                        showResumeBanner(savedPos, function(pos) { plog('RESUME', pos > 0 ? 'reprendre à ' + fmtTime(pos) : 'depuis le début'); startStream(pos); });
                     } else {
                         startStream(savedPos);
                     }
@@ -2141,6 +2195,7 @@ var REMUX_ENABLED = {$remuxEnabled};
                     // Probe arrivé peu après le fallback natif — si le mode optimal est différent, restart proactif
                     var optimalMode = chooseModeFromProbe(d);
                     if (optimalMode !== 'native') {
+                        plog('INIT', 'late probe restart → ' + optimalMode);
                         S.step = S.confirmed = optimalMode;
                         hint.textContent = optimalMode === 'transcode' ? 'Transcodage en cours...' : 'Remux en cours...';
                         hint.className = 'player-hint transcoding';
