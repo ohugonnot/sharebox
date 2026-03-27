@@ -8,7 +8,7 @@ require_once __DIR__ . '/config.php';
 
 /**
  * Retourne une connexion PDO vers la base SQLite
- * Crée la table "links" si elle n'existe pas encore
+ * Crée les tables si elles n'existent pas encore
  */
 function get_db(): PDO {
     static $db = null;
@@ -19,13 +19,17 @@ function get_db(): PDO {
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
 
-    // WAL : lectures concurrentes sans bloquer les écritures
-    $db->exec('PRAGMA journal_mode=WAL');
-    // Attendre jusqu'à 3s si la DB est verrouillée (évite SQLITE_BUSY sur probe concurrent)
-    $db->exec('PRAGMA busy_timeout=3000');
+    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
-    // Crée la table si elle n'existe pas
-    $db->exec("
+    // WAL : lectures concurrentes sans bloquer les écritures
+    $statements = [
+        'PRAGMA journal_mode=WAL',
+        'PRAGMA busy_timeout=3000',
+    ];
+    foreach ($statements as $s) $db->query($s);
+
+    // Crée les tables si elles n'existent pas
+    $db->query("
         CREATE TABLE IF NOT EXISTS probe_cache (
             path TEXT NOT NULL PRIMARY KEY,
             mtime INTEGER NOT NULL,
@@ -33,7 +37,7 @@ function get_db(): PDO {
         )
     ");
 
-    $db->exec("
+    $db->query("
         CREATE TABLE IF NOT EXISTS links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             token TEXT NOT NULL UNIQUE,
@@ -41,38 +45,49 @@ function get_db(): PDO {
             type TEXT NOT NULL DEFAULT 'file',
             name TEXT NOT NULL,
             password_hash TEXT DEFAULT NULL,
-            password_plain TEXT DEFAULT NULL,
             expires_at TEXT DEFAULT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             download_count INTEGER NOT NULL DEFAULT 0
         )
     ");
 
-    $db->exec("
+    $db->query("
         CREATE TABLE IF NOT EXISTS net_speed (
             ts INTEGER NOT NULL,
             upload REAL NOT NULL,
             download REAL NOT NULL
         )
     ");
-    $db->exec("CREATE INDEX IF NOT EXISTS idx_net_speed_ts ON net_speed(ts)");
+    $db->query("CREATE INDEX IF NOT EXISTS idx_net_speed_ts ON net_speed(ts)");
+    $db->query("CREATE INDEX IF NOT EXISTS idx_links_expires ON links(expires_at)");
+    $db->query("CREATE INDEX IF NOT EXISTS idx_links_created ON links(created_at DESC)");
 
-    // Purge les entrées probe_cache dont le fichier n'est plus partagé.
-    // On vérifie à la fois les liens fichier (égalité exacte) et les liens dossier
-    // (le probe_cache.path commence par links.path) pour ne pas purger les fichiers
-    // dans un dossier partagé à chaque requête stream.
-    $db->exec("DELETE FROM probe_cache WHERE NOT EXISTS (
+    // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
+    $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
+
+    if ($version < 1) {
+        // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
+        $cols = array_column($db->query("PRAGMA table_info(links)")->fetchAll(), 'name');
+        if (in_array('password_plain', $cols, true)) {
+            // SQLite < 3.35 ne supporte pas DROP COLUMN — on vide la colonne
+            $db->prepare("UPDATE links SET password_plain = NULL WHERE password_plain IS NOT NULL")->execute();
+        }
+        $db->query('PRAGMA user_version = 1');
+    }
+
+    return $db;
+}
+
+/**
+ * Purge les entrées probe_cache orphelines (fichiers plus partagés).
+ * Appelé périodiquement (cron ou admin), pas à chaque requête.
+ */
+function purge_probe_cache(PDO $db): int {
+    $stmt = $db->prepare("DELETE FROM probe_cache WHERE NOT EXISTS (
         SELECT 1 FROM links
         WHERE probe_cache.path = links.path
            OR probe_cache.path LIKE rtrim(links.path, '/') || '/%'
     )");
-
-    // Migration : ajouter password_plain si la colonne n'existe pas encore
-    $cols = $db->query("PRAGMA table_info(links)")->fetchAll();
-    $colNames = array_column($cols, 'name');
-    if (!in_array('password_plain', $colNames)) {
-        $db->exec("ALTER TABLE links ADD COLUMN password_plain TEXT DEFAULT NULL");
-    }
-
-    return $db;
+    $stmt->execute();
+    return $stmt->rowCount();
 }

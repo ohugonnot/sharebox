@@ -7,6 +7,7 @@
 /**
  * Parse /proc/stat cpu line into an array of tick values.
  * Returns [user, nice, system, idle, iowait, irq, softirq, steal, ...]
+ * @return array<int, int>
  */
 function parse_cpu_stat(string $statPath = '/proc/stat'): array
 {
@@ -25,6 +26,9 @@ function parse_cpu_stat(string $statPath = '/proc/stat'): array
 /**
  * Calculate CPU percentages from two /proc/stat readings.
  * Returns ['active_pct', 'iowait_pct', 'idle_pct'] as floats.
+ * @param array<int, int> $a
+ * @param array<int, int> $b
+ * @return array<string, float>
  */
 function calc_cpu_pct(array $a, array $b): array
 {
@@ -49,6 +53,7 @@ function calc_cpu_pct(array $a, array $b): array
 
 /**
  * Parse /proc/meminfo into an associative array (values in kB).
+ * @return array<string, int>
  */
 function parse_meminfo(string $meminfoPath = '/proc/meminfo'): array
 {
@@ -85,6 +90,7 @@ function detect_primary_iface(string $routePath = '/proc/net/route'): string
 /**
  * Parse /proc/net/dev for a specific interface.
  * Returns ['rx_bytes' => int, 'tx_bytes' => int] or null if not found.
+ * @return array<string, int>|null
  */
 function parse_net_dev(string $iface, string $netDevPath = '/proc/net/dev'): ?array
 {
@@ -127,6 +133,7 @@ function read_cpu_package_temp(string $hwmonBase = '/sys/class/hwmon'): ?float
 /**
  * Lit les températures HDD via drivetemp (module kernel) ou /sys/block/sdX/device/hwmon.
  * Retourne un tableau ['sda' => 38.0, 'sdb' => 39.0, ...] ou [] si non disponible.
+ * @return array<string, float>
  */
 function read_hdd_temps(string $sysBlock = '/sys/block'): array
 {
@@ -147,6 +154,7 @@ function read_hdd_temps(string $sysBlock = '/sys/block'): array
 /**
  * Parse /proc/diskstats for the first device whose name starts with $prefix.
  * Returns the split fields array or null.
+ * @return array<int, string>|null
  *
  * /proc/diskstats fields (1-indexed, or 0-indexed in returned array):
  *   [0]=major [1]=minor [2]=name

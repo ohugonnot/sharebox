@@ -92,6 +92,7 @@ function xmlrpc_value_to_php(\SimpleXMLElement $v): mixed
 /**
  * Retourne la liste des torrents actifs.
  * En cas d'erreur : ['downloads' => [], 'uploads' => [], 'error' => '...']
+ * @return array<string, mixed>
  */
 function get_torrents_from_rtorrent(string $sockPath = RTORRENT_SOCK): array
 {

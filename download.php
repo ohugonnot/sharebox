@@ -97,20 +97,6 @@ if (!is_path_within($resolvedPath, $basePath)) {
     exit;
 }
 
-function stream_log(string $msg): void {
-    if (!defined('STREAM_LOG') || !STREAM_LOG) return;
-    $logFile = STREAM_LOG;
-    // Rotate : 5 MB max, 3 fichiers
-    if (@filesize($logFile) > 5 * 1024 * 1024) {
-        @unlink($logFile . '.3');
-        @rename($logFile . '.2', $logFile . '.3');
-        @rename($logFile . '.1', $logFile . '.2');
-        @rename($logFile, $logFile . '.1');
-    }
-    $line = '[' . date('Y-m-d H:i:s') . '] [' . ($_SERVER['REMOTE_ADDR'] ?? '-') . '] ' . $msg . "\n";
-    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
-}
-
 // Si c'est un fichier
 if (is_file($resolvedPath)) {
     // Mode lecture : page avec player video/audio
@@ -249,20 +235,9 @@ if (is_file($resolvedPath)) {
     $audioTrack = isset($_GET['audio']) ? max(0, (int)$_GET['audio']) : 0;
     $audioMap = ' -map 0:v:0 -map 0:a:' . $audioTrack;
 
-    // Seek : on utilise uniquement le seek rapide avant -i (keyframe seek)
-    // Le fine seek après -i a été supprimé : sur 4K HEVC il force le décodage de N secondes
-    // avant le premier frame → trop lent → navigateur time out.
-    // Imprécision max : distance au keyframe précédent (typiquement <2s sur x265 UHD).
+    // Seek coarse-only (keyframe seek avant -i). Imprécision max : ~2s sur x265 UHD.
     $startSec = isset($_GET['start']) ? max(0, (float)$_GET['start']) : 0;
-    if ($startSec > 0) {
-        $roughSeek = $startSec;
-        $fineSeek = 0;
-        $seekArgBefore = ' -ss ' . escapeshellarg(sprintf('%.3f', $roughSeek));
-        $seekArgAfter = '';
-    } else {
-        $seekArgBefore = '';
-        $seekArgAfter = '';
-    }
+    $seekArgBefore = $startSec > 0 ? ' -ss ' . escapeshellarg(sprintf('%.3f', $startSec)) : '';
 
     // Mode remux : repackage MKV→MP4 sans ré-encoder la vidéo (quasi zéro CPU)
     // Audio transcodé en AAC pour compatibilité (AC3/DTS → AAC, léger)
@@ -276,17 +251,14 @@ if (is_file($resolvedPath)) {
             header('Accept-Ranges: none');
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
             stream_log('REMUX start | audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
-            $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
+            $cmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
                 . $audioMap . ' -dn -c:v copy -c:a aac -ac 2 -b:a 192k'
                 . ' -af "aresample=async=3000:first_pts=0"'
-                . ' -avoid_negative_ts make_zero -start_at_zero'
-                . ' -max_muxing_queue_size 1024'
-                . ' -min_frag_duration 300000'
-                . ' -movflags frag_keyframe+empty_moov+default_base_moof'
+                . buildFmp4MuxerArgs()
                 . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
             [$slotFp, $queued] = acquireStreamSlot();
             if ($queued) { stream_log('REMUX queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }
-            if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) shell_exec('vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &');
+            warmFileCache($resolvedPath);
             passthru($cmd);
             releaseStreamSlot($slotFp);
             exit;
@@ -298,8 +270,7 @@ if (is_file($resolvedPath)) {
         $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
         if ($mime && str_starts_with($mime, 'video/')) {
             $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
-            $allowedQualities = [480, 576, 720, 1080];
-            if (!in_array($quality, $allowedQualities)) $quality = 720;
+            $quality = validateQuality($quality);
             $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
             header('Content-Type: video/mp4');
             header('Content-Disposition: inline');
@@ -327,45 +298,16 @@ if (is_file($resolvedPath)) {
             $ua = $_SERVER['HTTP_USER_AGENT'] ?? '-';
             $isSafari = str_contains($ua, 'Safari') && !str_contains($ua, 'Chrome');
             stream_log('CL=' . ($estimatedCL ?: 'none') . ' dur=' . round($probeDuration) . 's rem=' . round($remainingDuration) . 's' . ($isSafari ? ' [Safari]' : '') . ' | UA=' . substr($ua, 0, 80));
-            if ($burnSub >= 0) {
-                // Burn-in sous-titre image (PGS/VOBSUB) via filter_complex
-                // scale2ref : redimensionne le canvas PGS aux dimensions exactes de la vidéo
-                // avant l'overlay. Corrige les décalages quand PGS déclaré ≠ résolution vidéo
-                // (ex : vidéo 1440x1080 SAR 4:3 mais PGS 1920x1080, ou vidéo croppée).
-                stream_log('TRANSCODE+SUB start | quality=' . $quality . 'p audio=' . $audioTrack . ' burnSub=' . $burnSub . ' start=' . $startSec . ' | ' . basename($resolvedPath));
-                // filter_complex unifié : vidéo+subs+audio dans le même graphe → sync garantie
-                $fc = '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
-                $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                    . ' -filter_complex ' . $fc
-                    . ' -map "[v]" -map "[a]" -dn'
-                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 25 -threads 4'
-                    . ' -c:a aac -ac 2 -b:a 192k'
-                    . ' -shortest'
-                    . ' -avoid_negative_ts make_zero -start_at_zero'
-                    . ' -max_muxing_queue_size 1024'
-                    . ' -min_frag_duration 300000'
-                    . ' -movflags frag_keyframe+empty_moov+default_base_moof'
-                    . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
-            } else {
-                stream_log('TRANSCODE start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
-                // filter_complex unifié : audio et vidéo partagent le même graphe de filtres
-                // → timeline synchronisée, pas de drift entre les deux flux
-                $fc = '"[0:v:0]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
-                $cmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                    . ' -filter_complex ' . $fc
-                    . ' -map "[v]" -map "[a]" -dn'
-                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 25 -threads 4'
-                    . ' -c:a aac -ac 2 -b:a 192k'
-                    . ' -shortest'
-                    . ' -avoid_negative_ts make_zero -start_at_zero'
-                    . ' -max_muxing_queue_size 1024'
-                    . ' -min_frag_duration 300000'
-                    . ' -movflags frag_keyframe+empty_moov+default_base_moof'
-                    . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
-            }
+            $logLabel = $burnSub >= 0 ? 'TRANSCODE+SUB' : 'TRANSCODE';
+            stream_log($logLabel . ' start | quality=' . $quality . 'p audio=' . $audioTrack . ($burnSub >= 0 ? ' burnSub=' . $burnSub : '') . ' start=' . $startSec . ' | ' . basename($resolvedPath));
+            $fc = buildFilterGraph($quality, $audioTrack, $burnSub);
+            $cmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
+                . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
+                . buildFfmpegCodecArgs(25) . buildFmp4MuxerArgs()
+                . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
             [$slotFp, $queued] = acquireStreamSlot();
             if ($queued) { stream_log('TRANSCODE queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }
-            if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) shell_exec('vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &');
+            warmFileCache($resolvedPath);
             passthru($cmd);
             releaseStreamSlot($slotFp);
             exit;
@@ -379,8 +321,7 @@ if (is_file($resolvedPath)) {
         $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
         if ($mime && str_starts_with($mime, 'video/')) {
             $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
-            $allowedQualities = [480, 576, 720, 1080];
-            if (!in_array($quality, $allowedQualities)) $quality = 720;
+            $quality = validateQuality($quality);
             $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
 
@@ -438,27 +379,17 @@ if (is_file($resolvedPath)) {
                 array_map('unlink', glob($hlsDir . '/seg*.ts'));
                 if (file_exists($m3u8)) unlink($m3u8);
 
-                if ($burnSub >= 0) {
-                    $fc = '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
-                } else {
-                    $fc = '"[0:v:0]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
-                }
+                $fc = buildFilterGraph($quality, $audioTrack, $burnSub);
 
                 [$slotFp, $queued] = acquireStreamSlot();
                 if ($queued) stream_log('HLS queued | ' . basename($resolvedPath));
                 stream_log('HLS start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
 
-                if (filesize($resolvedPath) < 2 * 1024 * 1024 * 1024) {
-                    exec('vmtouch -qt ' . escapeshellarg($resolvedPath) . ' >/dev/null 2>&1 &');
-                }
+                warmFileCache($resolvedPath);
 
-                $ffmpegCmd = 'ffmpeg' . $seekArgBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($resolvedPath)
-                    . ' -filter_complex ' . $fc
-                    . ' -map "[v]" -map "[a]" -dn'
-                    . ' -c:v libx264 -preset ultrafast -crf 23 -g 50 -threads 4'
-                    . ' -c:a aac -ac 2 -b:a 192k'
-                    . ' -shortest'
-                    . ' -avoid_negative_ts make_zero -start_at_zero'
+                $ffmpegCmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
+                    . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
+                    . buildFfmpegCodecArgs(50)
                     . ' -f hls -hls_time 4 -hls_list_size 0 -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
                     . ' -hls_flags append_list'
                     . ' ' . escapeshellarg($m3u8)
@@ -955,30 +886,9 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     $prevFile = null;
     $nextFile = null;
     if ($subPath && $basePath && $mediaType === 'video') {
-        $parentSub = dirname($subPath);
-        $parentDir = ($parentSub === '.') ? $basePath : $basePath . '/' . $parentSub;
-        if (is_dir($parentDir)) {
-            $siblings = [];
-            foreach (scandir($parentDir) as $item) {
-                if ($item[0] === '.') continue;
-                if (is_file($parentDir . '/' . $item) && get_media_type($item) === 'video') {
-                    $siblings[] = $item;
-                }
-            }
-            usort($siblings, 'strnatcasecmp');
-            $currentName = basename($subPath);
-            $idx = array_search($currentName, $siblings, true);
-            if ($idx !== false) {
-                if ($idx > 0) {
-                    $pSub = ($parentSub === '.') ? $siblings[$idx - 1] : $parentSub . '/' . $siblings[$idx - 1];
-                    $prevFile = ['name' => $siblings[$idx - 1], 'url' => $baseUrl . '?p=' . rawurlencode($pSub) . '&play=1', 'pp' => 'p=' . rawurlencode($pSub) . '&'];
-                }
-                if ($idx < count($siblings) - 1) {
-                    $nSub = ($parentSub === '.') ? $siblings[$idx + 1] : $parentSub . '/' . $siblings[$idx + 1];
-                    $nextFile = ['name' => $siblings[$idx + 1], 'url' => $baseUrl . '?p=' . rawurlencode($nSub) . '&play=1', 'pp' => 'p=' . rawurlencode($nSub) . '&'];
-                }
-            }
-        }
+        $nav = computeEpisodeNav($subPath, $basePath, $baseUrl);
+        $prevFile = $nav['prev'];
+        $nextFile = $nav['next'];
     }
     $episodeNavJson = json_encode(['prev' => $prevFile, 'next' => $nextFile], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG);
     if ($prevFile || $nextFile) {

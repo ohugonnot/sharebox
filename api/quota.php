@@ -56,7 +56,7 @@ $day_now       = (int)date('j');
 $days_left     = $days_in_month - $day_now;
 
 // Daily average and projection
-$daily_avg  = $day_now > 0 ? $total / $day_now : 0;
+$daily_avg  = $total / $day_now;
 $projection = $daily_avg * $days_in_month;
 
 echo json_encode([
