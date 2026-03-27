@@ -409,14 +409,32 @@ function plog(tag, msg, data) {
                 startStream(pos);
             } else if (idx >= 0 && this.urls[idx]) {
                 if (wasBurning) startStream(pos);
-                var self = this;
-                fetch(this.urls[idx], {credentials:'same-origin'})
+                var self = this, baseUrl = this.urls[idx];
+                var curTime = Math.floor(realTime());
+                // Fetch partiel rapide (à partir de la position courante) puis complet en background
+                var partialUrl = curTime > 30 ? baseUrl + '&from=' + curTime : baseUrl;
+                fetch(partialUrl, {credentials:'same-origin'})
                     .then(function(r) { return r.text(); })
                     .then(function(t) {
                         if (gen !== self._gen) { plog('SUBS', 'DISCARDED: gen=' + gen + ' current=' + self._gen); return; }
                         self.cues = parseVTT(t);
                         self._idx = self._find(realTime());
-                        plog('SUBS', 'loaded ' + self.cues.length + ' cues, idx=' + self._idx + ' time=' + realTime().toFixed(1));
+                        plog('SUBS', 'loaded ' + self.cues.length + ' cues (partial=' + (curTime > 30) + '), idx=' + self._idx + ' time=' + realTime().toFixed(1));
+                        // Si c'était partiel, fetch les complets en background pour couvrir tout le fichier
+                        if (curTime > 30) {
+                            fetch(baseUrl, {credentials:'same-origin'})
+                                .then(function(r) { return r.text(); })
+                                .then(function(t2) {
+                                    if (gen !== self._gen) return;
+                                    var full = parseVTT(t2);
+                                    if (full.length > self.cues.length) {
+                                        self.cues = full;
+                                        self._idx = self._find(realTime());
+                                        plog('SUBS', 'upgraded to ' + full.length + ' cues (full)');
+                                    }
+                                })
+                                .catch(function() {});
+                        }
                     })
                     .catch(function(e) { plog('SUBS', 'fetch error: ' + e); });
             } else {
