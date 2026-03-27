@@ -102,7 +102,7 @@ if (is_file($resolvedPath)) {
     if (isset($_GET['play']) && $_GET['play'] === '1') {
         $mediaType = get_media_type(basename($resolvedPath));
         if ($mediaType) {
-            afficher_player($token, $link['name'], $subPath, $mediaType);
+            afficher_player($token, $link['name'], $subPath, $mediaType, $basePath);
             exit;
         }
     }
@@ -903,7 +903,7 @@ HTML;
 /**
  * Affiche la page du player video/audio
  */
-function afficher_player(string $token, string $shareName, string $subPath, string $mediaType): void {
+function afficher_player(string $token, string $shareName, string $subPath, string $mediaType, string $basePath = ''): void {
     $baseUrl = '/dl/' . htmlspecialchars($token);
     $fileName = $subPath ? basename($subPath) : $shareName;
     $fileNameHtml = htmlspecialchars($fileName);
@@ -927,12 +927,52 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         $backUrl = null;
     }
 
+    // ── Épisodes voisins (prev/next) ────────────────────────────────────────
+    $prevFile = null;
+    $nextFile = null;
+    if ($subPath && $basePath && $mediaType === 'video') {
+        $parentSub = dirname($subPath);
+        $parentDir = ($parentSub === '.') ? $basePath : $basePath . '/' . $parentSub;
+        if (is_dir($parentDir)) {
+            $siblings = [];
+            foreach (scandir($parentDir) as $item) {
+                if ($item[0] === '.') continue;
+                if (is_file($parentDir . '/' . $item) && get_media_type($item) === 'video') {
+                    $siblings[] = $item;
+                }
+            }
+            usort($siblings, 'strnatcasecmp');
+            $currentName = basename($subPath);
+            $idx = array_search($currentName, $siblings, true);
+            if ($idx !== false) {
+                if ($idx > 0) {
+                    $pSub = ($parentSub === '.') ? $siblings[$idx - 1] : $parentSub . '/' . $siblings[$idx - 1];
+                    $prevFile = ['name' => $siblings[$idx - 1], 'url' => $baseUrl . '?p=' . rawurlencode($pSub) . '&play=1', 'pp' => 'p=' . rawurlencode($pSub) . '&'];
+                }
+                if ($idx < count($siblings) - 1) {
+                    $nSub = ($parentSub === '.') ? $siblings[$idx + 1] : $parentSub . '/' . $siblings[$idx + 1];
+                    $nextFile = ['name' => $siblings[$idx + 1], 'url' => $baseUrl . '?p=' . rawurlencode($nSub) . '&play=1', 'pp' => 'p=' . rawurlencode($nSub) . '&'];
+                }
+            }
+        }
+    }
+    $episodeNavJson = json_encode(['prev' => $prevFile, 'next' => $nextFile], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG);
+
     $tag = $mediaType === 'video' ? 'video' : 'audio';
     $controlsAttr = $mediaType === 'audio' ? 'controls' : '';
     $css = css_public();
     $backHtml = $backUrl
         ? '<a class="player-btn" href="' . $backUrl . '"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Retour</a>'
         : '';
+
+    // Boutons épisode prev/next
+    $prevBtnHtml = $prevFile
+        ? '<a class="player-btn player-nav-btn" id="prev-ep" href="' . htmlspecialchars($prevFile['url']) . '" title="' . htmlspecialchars($prevFile['name']) . '"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></a>'
+        : '';
+    $nextBtnHtml = $nextFile
+        ? '<a class="player-btn player-nav-btn" id="next-ep" href="' . htmlspecialchars($nextFile['url']) . '" title="' . htmlspecialchars($nextFile['name']) . '"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 18h2V6h-2zM6 18l8.5-6L6 6z"/></svg></a>'
+        : '';
+
     $remuxEnabled = STREAM_REMUX_ENABLED ? 'true' : 'false';
     header('Cache-Control: no-store');
 
@@ -964,7 +1004,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 .player-card:fullscreen .player-video-wrap,
 .player-card:-webkit-full-screen .player-video-wrap { position:absolute; inset:0; }
 .player-card:fullscreen video,
-.player-card:-webkit-full-screen video { position:absolute; inset:0; width:100%; height:100%; max-height:none; object-fit:contain; }
+.player-card:-webkit-full-screen video { position:absolute; inset:0; width:100%; height:100%; max-height:none; }
 .player-card:fullscreen .player-controls,
 .player-card:-webkit-full-screen .player-controls { position:absolute; bottom:0; left:0; right:0; z-index:20; background:linear-gradient(transparent, rgba(8,10,18,.9)) !important; padding-top:2rem; transition:opacity .25s; border-top:none !important; }
 .player-card:fullscreen .player-controls .track-bar,
@@ -981,7 +1021,7 @@ video { display:block; width:100%; max-height:78vh; background:#000; object-fit:
 @keyframes popPlay  { 0%{transform:translate(-50%,-50%) scale(.6);opacity:.9} 50%{transform:translate(-50%,-50%) scale(1);opacity:.9} 100%{transform:translate(-50%,-50%) scale(1.4);opacity:0} }
 .play-icon-overlay.pop-pause { animation:popPause .2s ease forwards; }
 .play-icon-overlay.pop-play  { animation:popPlay .4s ease forwards; }
-#vol-osd { position:absolute; top:1rem; right:1rem; z-index:20; background:rgba(0,0,0,.65); color:#fff; padding:.35rem .75rem; border-radius:.4rem; font-size:1rem; font-weight:600; letter-spacing:.03em; pointer-events:none; opacity:0; transition:opacity .15s; }
+#vol-osd { position:absolute; top:1rem; right:1rem; z-index:20; background:rgba(0,0,0,.65); color:#fff; padding:.5rem 1rem; border-radius:.5rem; font-size:1.35rem; font-weight:600; letter-spacing:.03em; pointer-events:none; opacity:0; transition:opacity .15s; }
 #vol-osd.visible { opacity:1; }
 audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40,.8); }
 .player-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:10; }
@@ -1045,13 +1085,27 @@ video{max-height:100vh !important;height:100vh !important}
 .mode-badge.m-remux    { color:#4ade80; border-color:rgba(74,222,128,.25);  background:rgba(74,222,128,.07); }
 .mode-badge.m-transcode{ color:#f0a030; border-color:rgba(240,160,48,.25); background:rgba(240,160,48,.07); }
 .mode-badge:hover { filter:brightness(1.25); }
+.player-nav-btn { opacity:.7; transition:opacity .15s; }
+.player-nav-btn:hover { opacity:1; }
+.autonext-overlay { position:absolute; inset:0; z-index:50; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(8,10,18,.88); backdrop-filter:blur(6px); animation:hintFade .3s ease both; }
+.autonext-title { font-size:.85rem; color:var(--text-secondary); margin-bottom:.5rem; }
+.autonext-name { font-size:1.1rem; font-weight:700; color:var(--text-primary); margin-bottom:1.2rem; max-width:80%; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.autonext-countdown { font-size:.8rem; color:var(--text-muted); margin-bottom:1rem; }
+.autonext-actions { display:flex; gap:.6rem; }
+.autonext-actions button { padding:.5rem 1.1rem; border-radius:var(--radius-sm); font-family:var(--font-sans); font-size:.8rem; font-weight:700; cursor:pointer; border:none; transition:all .15s; }
+.autonext-actions .an-play { background:var(--accent); color:var(--bg-deep); }
+.autonext-actions .an-play:hover { background:#ffc060; }
+.autonext-actions .an-cancel { background:rgba(255,255,255,.08); color:var(--text-secondary); border:1px solid rgba(255,255,255,.1); }
+.autonext-actions .an-cancel:hover { background:rgba(255,255,255,.12); color:var(--text-primary); }
     </style>
 </head>
 <body>
 <div class="page">
     <div class="player-toolbar">
         {$backHtml}
+        {$prevBtnHtml}
         <span class="player-name" title="{$fileNameHtml}">{$fileNameHtml}</span>
+        {$nextBtnHtml}
         <a class="player-btn accent" href="{$dlUrl}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg><span> Télécharger</span></a>
     </div>
     <div class="player-card">
@@ -1087,6 +1141,9 @@ video{max-height:100vh !important;height:100vh !important}
                     <input type="range" id="vol-slider" class="vol-slider" min="0" max="1" step="0.05" value="1" title="Volume">
                 </div>
                 <button class="ctrl-mute" id="speed-btn" title="Vitesse de lecture" style="font-size:.7rem;font-weight:700;font-family:var(--font-mono);width:auto;padding:0 .45rem;border-radius:20px;">1×</button>
+                <button class="ctrl-mute" id="zoom-btn" title="Zoom (Fit/Fill/Stretch)">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6.5 12a5.5 5.5 0 1 0 0-11 5.5 5.5 0 0 0 0 11zM13 6.5a6.5 6.5 0 1 1-13 0 6.5 6.5 0 0 1 13 0z"/><path d="M10.344 11.742c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1 6.538 6.538 0 0 1-1.398 1.4z"/><path fill-rule="evenodd" d="M6.5 3a.5.5 0 0 1 .5.5V6h2.5a.5.5 0 0 1 0 1H7v2.5a.5.5 0 0 1-1 0V7H3.5a.5.5 0 0 1 0-1H6V3.5a.5.5 0 0 1 .5-.5z"/></svg>
+                </button>
                 <button class="ctrl-mute" id="pip-btn" title="Picture-in-Picture" style="display:none">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity=".3"/></svg>
                 </button>
@@ -1117,6 +1174,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     var volSlider   = document.getElementById('vol-slider');
     var speedBtn    = document.getElementById('speed-btn');
     var fsBtn       = document.getElementById('fs-btn');
+    var zoomBtn     = document.getElementById('zoom-btn');
     var pipBtn      = document.getElementById('pip-btn');
     var modeBtn     = null;
     var seekBar     = document.getElementById('seek-bar');
@@ -1132,6 +1190,7 @@ var REMUX_ENABLED = {$remuxEnabled};
     var isVideo     = {$isVideo};
     var base        = '{$baseUrl}';
     var pp          = '{$pParamJs}';
+    var episodeNav  = {$episodeNavJson};
 
     // ── Icônes SVG ───────────────────────────────────────────────────────────
     var svgPlay   = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
@@ -1141,6 +1200,17 @@ var REMUX_ENABLED = {$remuxEnabled};
     var svgFs     = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>';
     var svgFsExit = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>';
     var svgPip    = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><rect x="12" y="9" width="8" height="6" rx="1" fill="currentColor" opacity=".3"/></svg>';
+
+    // ── Click handlers épisodes ─────────────────────────────────────────────
+    var prevEpBtn = document.getElementById('prev-ep');
+    var nextEpBtn = document.getElementById('next-ep');
+    if (prevEpBtn) prevEpBtn.addEventListener('click', function(e) { e.preventDefault(); navigateEpisode('prev'); });
+    if (nextEpBtn) nextEpBtn.addEventListener('click', function(e) { e.preventDefault(); navigateEpisode('next'); });
+
+    // ── Zoom vidéo ──────────────────────────────────────────────────────────
+    var zoomModes  = ['contain', 'cover', 'fill'];
+    var zoomLabels = ['Fit', 'Fill', 'Stretch'];
+    var zoomIndex  = 0;
 
     // ── État partagé ──────────────────────────────────────────────────────────
     var S = {
@@ -1180,9 +1250,40 @@ var REMUX_ENABLED = {$remuxEnabled};
         return url;
     }
 
-    // ── Position mémorisée ────────────────────────────────────────────────────
+    // ── Position et config mémorisées ───────────────────────────────────────
     var posKey   = 'player_seek_' + base + pp;
+    var cfgKey   = 'player_cfg_'  + base + pp;
     var savedPos = isVideo ? Math.max(0, parseFloat(lsGet(posKey, '0')) || 0) : 0;
+    var savedCfg = (function() { try { return JSON.parse(lsGet(cfgKey, 'null')); } catch(e) { return null; } })();
+    function saveCfg() {
+        lsSet(cfgKey, JSON.stringify({
+            mode: S.confirmed || '',
+            audio: S.audioIdx,
+            quality: S.quality,
+            burnSub: S.burnSub
+        }));
+    }
+    function clearCfg() { lsSet(cfgKey, 'null'); }
+    // ── Navigation épisodes ─────────────────────────────────────────────────
+    function transferCfgTo(targetPp) {
+        lsSet('player_cfg_' + base + targetPp, JSON.stringify({
+            mode: S.confirmed || '',
+            audio: S.audioIdx,
+            quality: S.quality,
+            burnSub: S.burnSub
+        }));
+        // Position à 1s pour que restoreCfg s'active (< 30s = pas de resume banner)
+        lsSet('player_seek_' + base + targetPp, '1');
+        // Transférer la piste sous-titre sélectionnée
+        var curSub = lsGet('player_sub_' + base + pp, '');
+        if (curSub) lsSet('player_sub_' + base + targetPp, curSub);
+    }
+    function navigateEpisode(direction) {
+        var ep = direction === 'next' ? episodeNav.next : episodeNav.prev;
+        if (!ep) return;
+        transferCfgTo(ep.pp);
+        window.location.href = ep.url;
+    }
     var originalTitle = document.title;
     function updateTitle() {
         if (!isVideo || S.duration <= 0) return;
@@ -1211,8 +1312,9 @@ var REMUX_ENABLED = {$remuxEnabled};
         if (isImmersive() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); playerCard.classList.add('hide-cursor'); }, 3000);
     }
     function onFsChange() {
-        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;
-        if (isFs()) showFsControls(); else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
+        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;  // safe: static SVG constants
+        if (isFs()) { player.style.height = ''; showFsControls(); }
+        else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); applyZoom(); }
     }
     document.addEventListener('fullscreenchange',        onFsChange);
     document.addEventListener('webkitfullscreenchange',  onFsChange);
@@ -1232,6 +1334,40 @@ var REMUX_ENABLED = {$remuxEnabled};
     // ── localStorage (try/catch : private browsing peut throw) ───────────────
     function lsGet(k, def) { try { var v = localStorage.getItem(k); return v !== null ? v : def; } catch(e) { return def; } }
     function lsSet(k, v)   { try { localStorage.setItem(k, v); } catch(e) {} }
+
+    // ── Zoom ─────────────────────────────────────────────────────────────────
+    function applyZoom() {
+        player.style.objectFit = zoomModes[zoomIndex];
+        // En mode windowed, fixer la hauteur pour que cover/fill aient un effet
+        if (!isFs()) {
+            if (zoomIndex === 0) { player.style.height = ''; }
+            else if (player.videoWidth > 0) { player.style.height = player.offsetHeight + 'px'; }
+        }
+    }
+    function toggleZoom() {
+        zoomIndex = (zoomIndex + 1) % zoomModes.length;
+        // En windowed, relâcher la hauteur avant de la re-fixer pour recalculer
+        if (!isFs() && zoomIndex === 0) player.style.height = '';
+        applyZoom();
+        lsSet('asc_zoom', zoomModes[zoomIndex]);
+        volOsd.textContent = '\uD83D\uDD0D Zoom: ' + zoomLabels[zoomIndex];
+        volOsd.classList.add('visible');
+        clearTimeout(volOsdTimer);
+        volOsdTimer = setTimeout(function() { volOsd.classList.remove('visible'); }, 1200);
+    }
+    (function initZoom() {
+        var saved = lsGet('asc_zoom', 'contain');
+        var idx = zoomModes.indexOf(saved);
+        if (idx !== -1) zoomIndex = idx;
+        // Appliquer après le chargement de la vidéo pour avoir les dimensions
+        if (idx > 0) {
+            player.addEventListener('loadedmetadata', function onMeta() {
+                player.removeEventListener('loadedmetadata', onMeta);
+                applyZoom();
+            });
+        }
+        player.style.objectFit = zoomModes[zoomIndex];
+    })();
 
     // ── Stream ────────────────────────────────────────────────────────────────
     function lockSize()   { if (isVideo && player.videoWidth > 0) player.style.minHeight = player.offsetHeight + 'px'; }
@@ -1543,7 +1679,7 @@ var REMUX_ENABLED = {$remuxEnabled};
             sel.addEventListener('change', function() {
                 S.audioIdx = parseInt(sel.value); S.confirmed = S.step = 'transcode';
                 hint.textContent = 'Changement de piste...'; hint.className = 'player-hint transcoding';
-                startStream(realTime());
+                saveCfg(); startStream(realTime());
             });
             trackBar.append(lbl, sel);
         }
@@ -1551,7 +1687,8 @@ var REMUX_ENABLED = {$remuxEnabled};
             S.videoHeight = d.videoHeight;
             var qs = [480, 576, 720, 1080].filter(function(q) { return q <= S.videoHeight; });
             if (qs.length) {
-                S.quality = qs.indexOf(720) !== -1 ? 720 : qs[qs.length - 1];
+                if (!savedCfg || !savedPos || savedCfg.quality <= 0 || qs.indexOf(savedCfg.quality) === -1)
+                    S.quality = qs.indexOf(720) !== -1 ? 720 : qs[qs.length - 1];
                 hasControls = true;
                 var lbl3 = document.createElement('label'); lbl3.textContent = 'Qualit\u00E9 :';
                 var sel3 = document.createElement('select'); sel3.className = 'track-select';
@@ -1559,7 +1696,7 @@ var REMUX_ENABLED = {$remuxEnabled};
                 sel3.addEventListener('change', function() {
                     S.quality = parseInt(sel3.value); S.confirmed = 'transcode';
                     hint.textContent = 'Transcodage ' + S.quality + 'p...'; hint.className = 'player-hint transcoding';
-                    startStream(realTime());
+                    saveCfg(); startStream(realTime());
                 });
                 trackBar.append(lbl3, sel3);
             }
@@ -1655,6 +1792,8 @@ var REMUX_ENABLED = {$remuxEnabled};
         player.addEventListener('ended',   function() { playBtn.innerHTML = svgPlay; document.title = originalTitle; });
         // Fullscreen
         if (fsBtn) fsBtn.addEventListener('click', toggleFs);
+        // Zoom
+        if (zoomBtn) zoomBtn.addEventListener('click', toggleZoom);
         // Picture-in-Picture
         if (pipBtn && document.pictureInPictureEnabled) {
             pipBtn.style.display = '';
@@ -1714,13 +1853,40 @@ var REMUX_ENABLED = {$remuxEnabled};
         setInterval(function() {
             if (player.paused || S.duration <= 0) return;
             var t = realTime();
-            if (t > 30 && t < S.duration - 60) lsSet(posKey, t.toFixed(0));
-            else if (t >= S.duration - 60)      lsSet(posKey, '0');
+            if (t > 30 && t < S.duration - 60) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
+            else if (t >= S.duration - 60)      { lsSet(posKey, '0'); clearCfg(); }
         }, 5000);
-        player.addEventListener('ended', function() { lsSet(posKey, '0'); });
+        player.addEventListener('ended', function() { lsSet(posKey, '0'); clearCfg(); });
+        // Auto-next épisode
+        var autoNextEl = null;
+        player.addEventListener('ended', function() {
+            if (!episodeNav.next) return;
+            if (autoNextEl) autoNextEl.remove();
+            var overlay = document.createElement('div');
+            autoNextEl = overlay;
+            overlay.className = 'autonext-overlay';
+            var t1 = document.createElement('div'); t1.className = 'autonext-title'; t1.textContent = '\u00c9pisode suivant';
+            var t2 = document.createElement('div'); t2.className = 'autonext-name'; t2.textContent = episodeNav.next.name;
+            var t3 = document.createElement('div'); t3.className = 'autonext-countdown';
+            var remaining = 8;
+            t3.textContent = 'Lecture dans ' + remaining + 's\u2026';
+            var acts = document.createElement('div'); acts.className = 'autonext-actions';
+            var playNow = document.createElement('button'); playNow.className = 'an-play'; playNow.textContent = 'Lire maintenant';
+            var cancel = document.createElement('button'); cancel.className = 'an-cancel'; cancel.textContent = 'Annuler';
+            acts.appendChild(playNow); acts.appendChild(cancel);
+            overlay.appendChild(t1); overlay.appendChild(t2); overlay.appendChild(t3); overlay.appendChild(acts);
+            player.parentNode.appendChild(overlay);
+            var cdt = setInterval(function() {
+                remaining--;
+                if (remaining <= 0) { clearInterval(cdt); navigateEpisode('next'); }
+                else t3.textContent = 'Lecture dans ' + remaining + 's\u2026';
+            }, 1000);
+            playNow.addEventListener('click', function() { clearInterval(cdt); navigateEpisode('next'); });
+            cancel.addEventListener('click', function() { clearInterval(cdt); overlay.remove(); });
+        });
         window.addEventListener('pagehide', function() {
             var t = realTime();
-            if (S.duration > 0 && t > 30 && t < S.duration - 60) lsSet(posKey, t.toFixed(0));
+            if (S.duration > 0 && t > 30 && t < S.duration - 60) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
             clearStallWatchdog(); clearTimeout(stableTimer);
         });
 
@@ -1746,10 +1912,10 @@ var REMUX_ENABLED = {$remuxEnabled};
             else {
                 var qi = allQ.indexOf(S.quality);
                 if (qi >= 0 && qi < allQ.length - 1) { S.quality = allQ[qi + 1]; }
-                else { S.step = S.confirmed = 'native'; S.quality = 720; startStream(pos); return; }
+                else { S.step = S.confirmed = 'native'; S.quality = 720; saveCfg(); startStream(pos); return; }
             }
-            S.burnSub = -1; Subs.cues = []; if (Subs._div) Subs._div.innerHTML = '';
-            hint.textContent = ''; updateModeUI(); startStream(pos);
+            S.burnSub = -1; Subs.cues = []; if (Subs._div) Subs._div.textContent = '';
+            hint.textContent = ''; updateModeUI(); saveCfg(); startStream(pos);
         });
         trackBar.appendChild(modeBtn); trackBar.style.display = 'flex';
         // Overlay raccourcis clavier (touche ?)
@@ -1764,10 +1930,11 @@ var REMUX_ENABLED = {$remuxEnabled};
         var kbTitle = document.createElement('h3');
         kbTitle.textContent = 'Raccourcis clavier';
         kbCard.appendChild(kbTitle);
-        [['Espace / K','Lecture / Pause'],['← →','\u221210s / +10s'],['J / L','\u221230s / +30s'],
+        var kbShortcuts = [['Espace / K','Lecture / Pause'],['← →','\u221210s / +10s'],['J / L','\u221230s / +30s'],
          ['\u2191 \u2193','Volume \u00B15\u00A0%'],['0\u20139','Aller \u00e0 N\u00d710\u00a0%'],
-         ['F','Plein \u00e9cran'],['P','Picture-in-Picture'],['M','Muet'],['R','Resync son/image'],['?','Cette aide']]
-        .forEach(function(r) {
+         ['F','Plein \u00e9cran'],['Z','Zoom (Fit/Fill/Stretch)'],['P','Picture-in-Picture'],['M','Muet'],['R','Resync son/image'],['?','Cette aide']];
+        if (episodeNav.prev || episodeNav.next) kbShortcuts.push(['N / B','\u00c9pisode suivant / pr\u00e9c\u00e9dent']);
+        kbShortcuts.forEach(function(r) {
             var row = document.createElement('div'); row.className = 'kb-row';
             var key = document.createElement('span'); key.className = 'kb-key'; key.textContent = r[0];
             var desc = document.createElement('span'); desc.className = 'kb-desc'; desc.textContent = r[1];
@@ -1840,6 +2007,16 @@ var REMUX_ENABLED = {$remuxEnabled};
                     else player.requestPictureInPicture().catch(function(){});
                 }
             }
+            else if (e.key === 'z' || e.key === 'Z') {
+                e.preventDefault();
+                toggleZoom();
+            }
+            else if ((e.key === 'n' || e.key === 'N') && episodeNav.next) {
+                e.preventDefault(); navigateEpisode('next');
+            }
+            else if ((e.key === 'b' || e.key === 'B') && episodeNav.prev) {
+                e.preventDefault(); navigateEpisode('prev');
+            }
             else if (e.key === '?') {
                 e.preventDefault();
                 kbOverlay.classList.toggle('hidden');
@@ -1850,12 +2027,39 @@ var REMUX_ENABLED = {$remuxEnabled};
         });
     }
 
+    // ── Restauration config sauvegardée ────────────────────────────────────
+    // Appelé AVANT applyProbe pour que les sélecteurs soient construits avec les bonnes valeurs.
+    // Ne touche pas burnSub : celui-ci est restauré via player_sub_* dans applyProbe → Subs.load.
+    function restoreCfg() {
+        if (!savedCfg || !savedPos) return;
+        if (savedCfg.audio >= 0)   S.audioIdx = savedCfg.audio;
+        if (savedCfg.quality > 0)  S.quality  = savedCfg.quality;
+        if (savedCfg.mode)         { S.step = S.confirmed = savedCfg.mode; }
+    }
+    // Synchroniser les sélecteurs UI après applyProbe (qui les construit)
+    function restoreCfgUI() {
+        if (!savedCfg || !savedPos) return;
+        var selects = trackBar.querySelectorAll('select.track-select');
+        selects.forEach(function(sel) {
+            if (sel.previousElementSibling && sel.previousElementSibling.textContent === 'Audio :') {
+                var opt = sel.querySelector('option[value="' + S.audioIdx + '"]');
+                if (opt) sel.value = S.audioIdx;
+            }
+            if (sel.previousElementSibling && sel.previousElementSibling.textContent === 'Qualit\u00e9 :') {
+                var opt = sel.querySelector('option[value="' + S.quality + '"]');
+                if (opt) sel.value = S.quality;
+            }
+        });
+        updateModeUI();
+    }
+
     // ── Démarrage ─────────────────────────────────────────────────────────────
     // Stratégie probe-first : on attend le probe pour choisir le bon mode d'emblée.
     // Si probe > 2s (cache froid, ffprobe lent) → fallback natif immédiat.
     // Sur cache chaud (SQLite) le probe revient en < 100ms → mode optimal sans faux départ.
     Subs.initOverlay();
     // Bandeau reprise
+    var probeData = null;
     function showResumeBanner(pos, onResume) {
         var banner = document.createElement('div');
         banner.className = 'resume-banner';
@@ -1870,7 +2074,15 @@ var REMUX_ENABLED = {$remuxEnabled};
         banner.appendChild(noBtn);
         player.parentNode.appendChild(banner);
         yesBtn.addEventListener('click', function() { banner.remove(); onResume(pos); });
-        noBtn.addEventListener('click', function() { banner.remove(); lsSet(posKey, '0'); onResume(0); });
+        noBtn.addEventListener('click', function() {
+            banner.remove(); lsSet(posKey, '0'); clearCfg();
+            // Réinitialiser au mode optimal du probe (pas la config sauvegardée)
+            S.confirmed = ''; S.audioIdx = 0; S.quality = 720; S.burnSub = -1;
+            if (probeData) S.step = chooseModeFromProbe(probeData);
+            else S.step = 'native';
+            updateModeUI();
+            onResume(0);
+        });
         setTimeout(function() { if (banner.parentNode) { banner.remove(); onResume(pos); } }, 8000);
     }
     if (isVideo) {
@@ -1891,11 +2103,14 @@ var REMUX_ENABLED = {$remuxEnabled};
             .then(function(r) { clearTimeout(probeTimer); return r.json(); })
             .then(function(d) {
                 clearTimeout(fallbackTimer);
+                probeData = d;
+                if (savedPos > 30) restoreCfg();
                 applyProbe(d);
                 if (!streamStarted) {
                     // Probe arrivé à temps → choisir le mode optimal
                     streamStarted = true;
-                    S.step = chooseModeFromProbe(d);
+                    if (!savedCfg || !savedPos) S.step = chooseModeFromProbe(d);
+                    if (savedPos > 30) restoreCfgUI();
                     hint.textContent = '';
                     if (savedPos > 30) {
                         showResumeBanner(savedPos, function(pos) { startStream(pos); });
