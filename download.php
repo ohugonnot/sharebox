@@ -1926,7 +1926,15 @@ function plog(tag, msg, data) {
                 if (qi >= 0 && qi < allQ.length - 1) { S.quality = allQ[qi + 1]; }
                 else { S.step = S.confirmed = 'native'; S.quality = 720; saveCfg(); startStream(pos); return; }
             }
-            S.burnSub = -1; Subs.cues = []; if (Subs._div) Subs._div.textContent = '';
+            // Reset burnSub uniquement (les sous-titres texte survivent au changement de mode)
+            if (S.burnSub >= 0) { S.burnSub = -1; Subs.cues = []; if (Subs._div) Subs._div.textContent = ''; }
+            // Synchroniser le sélecteur de qualité
+            var qSel = trackBar.querySelector('select.track-select');
+            trackBar.querySelectorAll('select.track-select').forEach(function(sel) {
+                if (sel.previousElementSibling && sel.previousElementSibling.textContent === 'Qualit\u00e9 :') {
+                    sel.value = S.quality;
+                }
+            });
             hint.textContent = ''; updateModeUI(); saveCfg(); startStream(pos);
         });
         trackBar.appendChild(modeBtn); trackBar.style.display = 'flex';
