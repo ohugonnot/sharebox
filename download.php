@@ -1410,10 +1410,12 @@ function plog(tag, msg, data) {
             if (canPlay('video/webm; codecs="av01.0.05M.08"') || canPlay('video/mp4; codecs="av01"')) return 'native';
             return 'transcode';
         }
-        // HEVC : natif uniquement si MP4 + Safari (hvc1/hev1)
-        // MKV+HEVC → transcode (le remux HEVC cause des décalages audio)
+        // HEVC : natif si le navigateur supporte le codec dans le conteneur
+        // Pour MKV : canPlayType n'est pas fiable, on tente natif d'abord si MP4 HEVC est supporté
+        // (les navigateurs avec décodage HEVC hardware lisent aussi les MKV HEVC)
         if (c === 'hevc') {
-            if (d.isMP4 && (canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"'))) return 'native';
+            var hevcSupported = canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"');
+            if (hevcSupported) return 'native';
             return 'transcode';
         }
         return 'transcode';
