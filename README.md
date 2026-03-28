@@ -29,7 +29,8 @@ ShareBox is not a media center. It won't scrape metadata, build a library, or ma
 
 Try it now -- no install needed:
 
-**[Browse demo folder](https://ds72803.seedhost.eu:8282/dl/media-l18g)** -- 5 test videos showcasing all features:
+- **[Admin panel](https://ds72803.seedhost.eu:8282/share/)** (login: `admin` / `demo2026`) -- browse files, create share links, system dashboard
+- **[Shared folder](https://ds72803.seedhost.eu:8282/dl/media-l18g)** -- public link with 5 test videos showcasing all features:
 
 | File | Codec | Features | Link |
 |---|---|---|---|
