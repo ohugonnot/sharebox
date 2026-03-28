@@ -244,7 +244,10 @@ if (isset($_GET['posters'])) {
         if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
             poster_log('BG trigger | ' . $nullCount . ' NULL entries → launching --pending-path ' . basename($resolvedPath));
             $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
-            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath) . ' >> /srv/share/data/ai-titles.log 2>&1 &';
+            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath)
+                . ' >> /srv/share/data/ai-titles.log 2>&1'
+                . ' && sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --verify'
+                . ' >> /srv/share/data/ai-titles.log 2>&1 &';
             @pclose(@popen($cmd, 'r'));
         }
         if ($lockFp) fclose($lockFp);
