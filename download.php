@@ -397,9 +397,9 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 /* ── Grid view ── */
 .grid-wrap { display:grid; grid-template-columns:repeat(auto-fill,minmax(var(--card-size,180px),1fr)); gap:.75rem; margin-bottom:1rem; }
 .grid-wrap.hidden { display:none; }
-.grid-card { position:relative; aspect-ratio:2/3; border-radius:var(--radius-md); overflow:hidden; cursor:pointer; text-decoration:none; color:var(--text-primary); transition:transform .18s,box-shadow .18s; animation:fadeScale .25s ease both; border:1px solid rgba(255,255,255,.06); }
+.grid-card { position:relative; border-radius:var(--radius-md); overflow:hidden; cursor:pointer; text-decoration:none; color:var(--text-primary); transition:transform .18s,box-shadow .18s; animation:fadeScale .25s ease both; border:1px solid rgba(255,255,255,.06); display:flex; flex-direction:column; }
 .grid-card:hover { transform:translateY(-4px) scale(1.02); box-shadow:0 12px 32px rgba(0,0,0,.5); border-color:rgba(240,160,48,.2); }
-.grid-card-bg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background-size:cover; background-position:center; transition:background-image .3s; }
+.grid-card-bg { aspect-ratio:2/3; display:flex; align-items:center; justify-content:center; background-size:cover; background-position:center; transition:background-image .3s; }
 .grid-card.has-poster .grid-card-letter { display:none; }
 .grid-card.has-poster .grid-card-icon { display:none; }
 .grid-card-overview { position:absolute; inset:0; background:rgba(6,8,14,.92); backdrop-filter:blur(8px); padding:.6rem; display:flex; flex-direction:column; justify-content:flex-end; opacity:0; transition:opacity .2s; pointer-events:none; }
@@ -434,7 +434,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .poster-modal-close:hover { background:rgba(255,255,255,.05); color:var(--text-primary); }
 .grid-card-letter { font-family:var(--font-sans); font-weight:700; font-size:3rem; color:rgba(255,255,255,.18); text-transform:uppercase; user-select:none; }
 .grid-card-icon { position:absolute; top:.7rem; right:.7rem; opacity:.25; }
-.grid-card-label { position:absolute; bottom:0; left:0; right:0; display:flex; align-items:flex-end; justify-content:center; padding:.4rem .5rem; background:linear-gradient(transparent, rgba(0,0,0,.85) 40%); text-align:center; min-height:2.8rem; }
+.grid-card-label { padding:.4rem .5rem; background:rgba(0,0,0,.72); text-align:center; min-height:2rem; display:flex; align-items:center; justify-content:center; }
 .grid-card-title { font-size:.85rem; font-weight:700; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; text-shadow:0 1px 2px rgba(0,0,0,.5); overflow-wrap:break-word; word-break:break-word; hyphens:auto; text-wrap:balance; }
 .grid-card:nth-child(1){animation-delay:.03s}.grid-card:nth-child(2){animation-delay:.06s}.grid-card:nth-child(3){animation-delay:.09s}.grid-card:nth-child(4){animation-delay:.12s}.grid-card:nth-child(5){animation-delay:.15s}.grid-card:nth-child(6){animation-delay:.18s}.grid-card:nth-child(n+7){animation-delay:.21s}
 .grid-card.hidden { display:none; }
