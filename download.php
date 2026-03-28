@@ -1153,8 +1153,10 @@ function toggleCardMenu(btn, folderName) {
         menu.appendChild(item2);
     }
 
-    // Item 3: AI recheck (request AI to re-verify this poster)
-    if (card && card.classList.contains('has-poster')) {
+    // Item 3: AI recheck — visible avec ou sans poster
+    // Avec poster : "Vérifier avec l'IA" (re-check le match)
+    // Sans poster : "Chercher avec l'IA" (tenter un match IA)
+    if (card) {
         var item3 = document.createElement('div');
         item3.className = 'grid-card-menu-item';
         var svg3 = document.createElementNS('http://www.w3.org/2000/svg','svg');
@@ -1167,7 +1169,7 @@ function toggleCardMenu(btn, folderName) {
         svg3.appendChild(path3); svg3.appendChild(path3b);
         item3.appendChild(svg3);
         var span3 = document.createElement('span');
-        span3.textContent = 'V\u00e9rifier avec l\u2019IA';
+        span3.textContent = card.classList.contains('has-poster') ? 'V\u00e9rifier avec l\u2019IA' : 'Chercher avec l\u2019IA';
         item3.appendChild(span3);
         item3.onclick = function(e) {
             e.preventDefault(); e.stopPropagation();

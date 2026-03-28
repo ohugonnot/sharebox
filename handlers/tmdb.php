@@ -289,7 +289,7 @@ if (isset($_GET['posters'])) {
         $videoDbRows = [];
         if (!empty($videoPaths)) {
             $ph = implode(',', array_fill(0, count($videoPaths), '?'));
-            $stmt = $db->prepare("SELECT path, poster_url, overview FROM folder_posters WHERE path IN ($ph)");
+            $stmt = $db->prepare("SELECT path, poster_url, overview, verified FROM folder_posters WHERE path IN ($ph)");
             $stmt->execute($videoPaths);
             foreach ($stmt->fetchAll() as $row) {
                 $videoDbRows[$row['path']] = $row;
@@ -304,6 +304,8 @@ if (isset($_GET['posters'])) {
                 } elseif ($row['poster_url']) {
                     $videoCached[$vf] = ['poster' => $row['poster_url']];
                     if ($row['overview']) $videoCached[$vf]['overview'] = $row['overview'];
+                } elseif ((int)($row['verified'] ?? 0) === -1) {
+                    $videoCached[$vf] = ['pending_ai' => true];
                 }
             } else {
                 $videoUncached[] = $vf;
@@ -497,9 +499,13 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!is_dir($fullPath) && !is_file($fullPath)) { http_response_code(404); echo json_encode(['error' => 'not found']); exit; }
 
     try {
-        // Reset poster + mark as pending AI (verified=-1) so cron re-processes it
+        // Mark as pending AI (verified=-1) so cron re-processes it
+        // INSERT si pas d'entrée, UPDATE si existante (sauf __none__ = choix humain)
         poster_log('AI recheck | ' . $name . ' → reset to pending (verified=-1, poster=NULL, ai_attempts=0)');
-        $db->prepare("UPDATE folder_posters SET verified = -1, poster_url = NULL, ai_attempts = 0 WHERE path = :p AND poster_url != '__none__'")
+        $db->prepare("INSERT INTO folder_posters (path, poster_url, verified, ai_attempts) VALUES (:p, NULL, -1, 0)
+                      ON CONFLICT(path) DO UPDATE SET poster_url = CASE WHEN poster_url = '__none__' THEN '__none__' ELSE NULL END,
+                      verified = CASE WHEN poster_url = '__none__' THEN verified ELSE -1 END,
+                      ai_attempts = CASE WHEN poster_url = '__none__' THEN ai_attempts ELSE 0 END")
            ->execute([':p' => $fullPath]);
         echo json_encode(['success' => true]);
     } catch (PDOException $e) {
