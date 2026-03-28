@@ -6,12 +6,14 @@ class ProbeSemaphoreTest extends TestCase
 {
     protected function setUp(): void
     {
-        $fp = @fopen('/tmp/sharebox_probe_slot_1.lock', 'w');
-        if ($fp === false) {
-            $this->markTestSkipped('Cannot create lock files in /tmp (sandbox/permissions)');
+        for ($i = 1; $i <= 5; $i++) {
+            $path = "/tmp/sharebox_probe_slot_{$i}.lock";
+            $fp = @fopen($path, 'w');
+            if ($fp === false) {
+                $this->markTestSkipped("Cannot open $path for writing (owned by www-data?)");
+            }
+            fclose($fp);
         }
-        fclose($fp);
-        @unlink('/tmp/sharebox_probe_slot_1.lock');
     }
 
     protected function tearDown(): void
