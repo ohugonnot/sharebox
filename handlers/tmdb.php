@@ -22,6 +22,8 @@ if (isset($_GET['posters'])) {
 
     // Noms de dossiers qui ne sont PAS des titres de média → pas de fetch TMDB
     $skipPattern = '/^(season\s*\d|saison\s*\d|s\d+e?\d*|ova|oav|bonus|extras?|special|specials|featurettes?|behind.the.scenes|deleted.scenes|interviews?|trailers?|nc|op|ed|ost|soundtrack|subs?|subtitles?|vostfr|vf|multi|disc\s*\d|cd\s*\d|dvd|blu-?ray|\d{1,2}$)/i';
+    // Sous-ensemble du skipPattern : dossiers de saison (on peut leur trouver un poster TMDB via le parent)
+    $seasonPattern = '/(?:^|\b)(?:season|saison|s)[\s._-]*(\d+)/i';
 
     $result = [];
     $items = scandir($resolvedPath);
@@ -33,12 +35,68 @@ if (isset($_GET['posters'])) {
 
     if (empty($folders)) { echo json_encode(['posters' => [], 'remaining' => 0]); exit; }
 
+    // ── Season subfolders : poster via parent tmdb_id + /tv/{id}/season/{n} ──
+    // Le dossier parent (= $resolvedPath) doit avoir un tmdb_id en cache
+    $parentTmdbId = null;
+    $stmtParent = $db->prepare("SELECT tmdb_id FROM folder_posters WHERE path = :p AND tmdb_id IS NOT NULL");
+    $stmtParent->execute([':p' => $resolvedPath]);
+    $parentRow = $stmtParent->fetch();
+    if ($parentRow) $parentTmdbId = (int)$parentRow['tmdb_id'];
+
+    $seasonFolders = []; // folders handled as seasons (excluded from normal flow)
+    if ($parentTmdbId) {
+        foreach ($folders as $f) {
+            if (preg_match($seasonPattern, $f, $m)) {
+                $seasonNum = (int)$m[1];
+                $fullPath = $resolvedPath . '/' . $f;
+                // Check cache — si le tmdb_id matche le parent, c'est un vrai poster de saison
+                // Sinon c'est un vieux match foireux (ex: "S01" → série chinoise) → re-fetch
+                $stmt = $db->prepare("SELECT poster_url, overview, tmdb_id FROM folder_posters WHERE path = :p");
+                $stmt->execute([':p' => $fullPath]);
+                $row = $stmt->fetch();
+                if ($row && (int)($row['tmdb_id'] ?? 0) === $parentTmdbId) {
+                    if ($row['poster_url'] === '__none__') {
+                        $result[$f] = ['hidden' => true];
+                    } elseif ($row['poster_url']) {
+                        $result[$f] = ['poster' => $row['poster_url']];
+                        if ($row['overview']) $result[$f]['overview'] = $row['overview'];
+                    }
+                    $seasonFolders[] = $f;
+                    continue;
+                }
+                // Fetch season poster from TMDB
+                $seasonUrl = "https://api.themoviedb.org/3/tv/{$parentTmdbId}/season/{$seasonNum}?api_key={$apiKey}&language=fr";
+                $sCtx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
+                $sResp = @file_get_contents($seasonUrl, false, $sCtx);
+                $sData = $sResp ? json_decode($sResp, true) : null;
+                $posterUrl = null;
+                $seasonTitle = null;
+                $seasonOverview = null;
+                if ($sData && !empty($sData['poster_path'])) {
+                    $posterUrl = 'https://image.tmdb.org/t/p/w300' . $sData['poster_path'];
+                    $seasonTitle = $sData['name'] ?? null;
+                    $seasonOverview = $sData['overview'] ?? null;
+                }
+                try {
+                    $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)")
+                       ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $parentTmdbId, ':t' => $seasonTitle, ':o' => $seasonOverview]);
+                } catch (PDOException $e) { /* ignore */ }
+                if ($posterUrl) {
+                    $result[$f] = ['poster' => $posterUrl];
+                    if ($seasonOverview) $result[$f]['overview'] = $seasonOverview;
+                }
+                $seasonFolders[] = $f;
+            }
+        }
+    }
+
     // Check cache first
     $cached = [];
     $uncached = [];
     foreach ($folders as $f) {
         // Skip les noms d'organisation (Season, OVA, Bonus, etc.)
-        if (preg_match($skipPattern, $f)) continue;
+        // Les saisons déjà traitées ci-dessus sont aussi exclues
+        if (in_array($f, $seasonFolders, true) || preg_match($skipPattern, $f)) continue;
         $fullPath = $resolvedPath . '/' . $f;
         $stmt = $db->prepare("SELECT poster_url, overview FROM folder_posters WHERE path = :p");
         $stmt->execute([':p' => $fullPath]);
@@ -340,7 +398,7 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     try {
         // Reset verified + clear poster so AI cron re-processes it
-        $db->prepare("UPDATE folder_posters SET verified = 0, poster_url = NULL WHERE path = :p AND poster_url != '__none__'")
+        $db->prepare("UPDATE folder_posters SET verified = 0, poster_url = NULL, ai_attempts = 0 WHERE path = :p AND poster_url != '__none__'")
            ->execute([':p' => $fullPath]);
         echo json_encode(['success' => true]);
     } catch (PDOException $e) {
