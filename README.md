@@ -15,11 +15,11 @@ Plex wanted me to set up a media library, scan my files, create user accounts, i
 
 So I built ShareBox -- a single PHP app with zero dependencies. No library, no accounts, no pre-processing. You share a link, they click play, ffmpeg transcodes on the fly. It runs on a $5 VPS with 256 MB of RAM.
 
-![Player in action](https://github.com/ohugonnot/sharebox/releases/download/v1.0.0/sharebox-demo.gif)
+![Netflix-style grid view](docs/screenshots/sharebox-grid-demo.gif)
 
 ## Live Demo
 
-**[Try the demo](https://ds72803.seedhost.eu:8282/dl/browse)** -- no install needed, 5 test videos (H.264, HEVC, subtitles, multi-audio).
+**[Try the demo](https://ds72803.seedhost.eu:8282/dl/browse?view=grid)** -- no install needed. Netflix-style grid with TMDB posters, series, movies, and anime.
 
 [Admin panel](https://ds72803.seedhost.eu:8282/share/) -- `admin` / `demo2026`
 
@@ -30,6 +30,7 @@ So I built ShareBox -- a single PHP app with zero dependencies. No library, no a
 | **Setup** | `docker compose up` | Database, metadata agents, user system |
 | **Dependencies** | PHP + ffmpeg + SQLite | Java/.NET, database server, plugins |
 | **Media library** | None -- just your filesystem | Required |
+| **Browse UI** | Netflix-style poster grid (TMDB) | Library-based grid |
 | **Sharing** | Built-in: link + password + expiry | External plugins |
 | **RAM** | ~25 MB per stream | 500 MB - 2 GB+ |
 
@@ -45,12 +46,18 @@ Open `http://localhost:8080/share` -- done. See [Installation](#installation) fo
 
 ## Features
 
+**Grid View** -- Netflix-style poster grid powered by TMDB. Series display with season posters, movies as individual cards. AI-powered title matching (Claude Haiku) for messy filenames. Manual poster picker for corrections. Hover for plot synopsis.
+
+![Series Grid](docs/screenshots/gundam-grid.png)
+
 **Streaming** -- 3 modes selected automatically via ffprobe:
 - **Native** for H.264/MP4 (zero CPU)
 - **Remux** for H.264/MKV (video copy, audio transcode to AAC)
 - **Transcode** for HEVC/AV1 (libx264 ultrafast on the fly)
 
-**Player** -- custom JS video player with keyboard shortcuts, subtitle overlay (SRT/ASS → WebVTT), PGS/VOBSUB burn-in, multi-audio track selection, quality picker (480p-1080p), episode navigation with auto-next, resume playback, Picture-in-Picture, iOS Safari HLS support.
+**Player** -- custom JS video player with keyboard shortcuts, subtitle overlay (SRT/ASS -> WebVTT), PGS/VOBSUB burn-in, multi-audio track selection, quality picker (480p-1080p), episode navigation with auto-next, resume playback, Picture-in-Picture, iOS Safari HLS support.
+
+![Player in action](https://github.com/ohugonnot/sharebox/releases/download/v1.0.0/sharebox-demo.gif)
 
 **Sharing** -- human-readable URLs (`/dl/batman-begins-2005-x7k2`), optional password (bcrypt), expiration, folder browsing with ZIP download, QR codes, email sharing.
 
@@ -60,13 +67,11 @@ Open `http://localhost:8080/share` -- done. See [Installation](#installation) fo
 
 ![Admin Panel](https://i.postimg.cc/dsFd7Cgz/image.png)
 
-![Folder Sharing](https://i.postimg.cc/HLNk9fBn/image.png)
-
 ## Contributing
 
 ShareBox works, but there's room to improve. If you're into PHP, ffmpeg, or browser video -- here's where help would be useful:
 
-**Known issue -- Remux mode has A/V desync.** The remux path (H.264 MKV → MP4 without re-encoding video) produces audio drift on files with DTS/AC3 audio. It's disabled by default (`STREAM_REMUX_ENABLED = false`). Transcode works fine but costs more CPU. If you've dealt with ffmpeg `aresample` / PTS alignment, this is the one to look at -- see `handlers/stream_remux.php`.
+**Known issue -- Remux mode has A/V desync.** The remux path (H.264 MKV -> MP4 without re-encoding video) produces audio drift on files with DTS/AC3 audio. It's disabled by default (`STREAM_REMUX_ENABLED = false`). Transcode works fine but costs more CPU. If you've dealt with ffmpeg `aresample` / PTS alignment, this is the one to look at -- see `handlers/stream_remux.php`.
 
 **Other areas where PRs are welcome:**
 - Feature toggles -- ability to disable streaming, subtitles, or the dashboard from `config.php`
@@ -88,6 +93,7 @@ volumes:
 environment:
   - SHAREBOX_ADMIN_USER=admin
   - SHAREBOX_ADMIN_PASS=changeme
+  - SHAREBOX_TMDB_API_KEY=your_tmdb_api_key  # optional, for poster grid
 ```
 
 ```bash
@@ -102,6 +108,8 @@ docker compose up -d
 | `SHAREBOX_ADMIN_USER` | `admin` | Admin panel username |
 | `SHAREBOX_ADMIN_PASS` | `sharebox` | Admin panel password |
 | `SHAREBOX_MEDIA_DIR` | `/media/` | Media path inside the container |
+| `SHAREBOX_TMDB_API_KEY` | *(none)* | TMDB API key for poster grid |
+| `SHAREBOX_DEMO_DATA` | `false` | Create sample media for demo |
 | `SHAREBOX_STREAM_MAX_CONCURRENT` | `4` | Max simultaneous ffmpeg processes |
 | `SHAREBOX_STREAM_REMUX_ENABLED` | `false` | Enable remux for H.264 MKV |
 | `SHAREBOX_BANDWIDTH_QUOTA_TB` | `100` | Monthly bandwidth quota (TB) |
@@ -158,14 +166,14 @@ The `.htaccess` handles rewriting. Enable `mod_rewrite`, set `AllowOverride All`
 - Session regeneration after authentication
 - Content-Disposition header injection prevention
 - Shell commands escaped with `escapeshellarg()` everywhere
-- 156 tests including security-specific test cases
+- 159 tests including security-specific test cases
 - PHPStan level 5 static analysis in CI
 
 ## Testing
 
 ```bash
 composer install
-vendor/bin/phpunit          # 156 tests, 261 assertions
+vendor/bin/phpunit          # 159 tests, 267 assertions
 vendor/bin/phpstan analyse  # Level 5
 ```
 
