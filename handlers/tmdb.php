@@ -324,11 +324,17 @@ if (isset($_GET['posters'])) {
         $stmtNull->execute([':prefix' => $resolvedPath . '/%']);
         $nullCount = (int)$stmtNull->fetchColumn();
         if ($nullCount > 0) {
-            poster_log('AI trigger | ' . $nullCount . ' NULL entries → launching --pending-path ' . basename($resolvedPath));
-            $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
-            // sudo -u copain pour avoir accès à claude CLI + credentials
-            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath) . ' > /dev/null 2>&1 &';
-            @pclose(@popen($cmd, 'r'));
+            // Lock file pour éviter double lancement (polling JS envoie plusieurs requêtes)
+            $lockFile = sys_get_temp_dir() . '/sharebox_ai_' . md5($resolvedPath) . '.lock';
+            $lockFp = @fopen($lockFile, 'w');
+            if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
+                poster_log('AI trigger | ' . $nullCount . ' NULL entries → launching --pending-path ' . basename($resolvedPath));
+                $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
+                $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath) . ' > /dev/null 2>&1 &';
+                @pclose(@popen($cmd, 'r'));
+                // Lock libéré quand le process PHP web termine (quelques ms)
+            }
+            if ($lockFp) fclose($lockFp);
         }
     }
 
