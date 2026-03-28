@@ -278,7 +278,7 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
             // Supprimer l'entrée → le prochain fetch TMDB la recréera
             $db->prepare("DELETE FROM folder_posters WHERE path = :p")->execute([':p' => $fullPath]);
         } else {
-            $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)")
+            $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)")
                ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $title, ':o' => $overview]);
         }
         echo json_encode(['success' => true]);

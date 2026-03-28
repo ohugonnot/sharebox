@@ -5,13 +5,16 @@
  *
  * Usage: php tools/ai-titles.php <folder-path>   (process one folder with AI)
  *        php tools/ai-titles.php --all            (AI pass on all movies-tagged folders)
- *        php tools/ai-titles.php --pending         (cron mode: AI retry where regex failed)
+ *        php tools/ai-titles.php --pending         (cron: AI retry where regex failed)
+ *        php tools/ai-titles.php --verify          (cron: AI checks existing matches)
+ *        php tools/ai-titles.php --cron            (runs --pending then --verify)
  *
  * Flow:
  *   1. ?posters=1 (inline, fast) does regex extract_title_year() + TMDB
  *   2. Files with no match get poster_url=NULL in DB
- *   3. This script (cron --pending) finds NULLs, asks AI for better titles, retries TMDB
- *   4. Respects human choices: __none__ = user said no poster, never overwrite
+ *   3. --pending: finds NULLs, asks AI for better titles, retries TMDB
+ *   4. --verify: sends {filename, matched_title} pairs to AI, fixes bad matches
+ *   5. Respects human choices: __none__ = user said no poster, never overwrite
  *
  * AI adapter: currently uses Claude CLI (Haiku). To switch provider,
  * replace askAI() — same interface: filenames in, {file,title,year,skip}[] out.
@@ -33,7 +36,9 @@ $arg = $argv[1] ?? '';
 if (!$arg || $arg === '--help' || $arg === '-h') {
     echo "Usage: php tools/ai-titles.php <folder-path>\n";
     echo "       php tools/ai-titles.php --all\n";
-    echo "       php tools/ai-titles.php --pending   (cron mode)\n";
+    echo "       php tools/ai-titles.php --pending   (cron: fix missing)\n";
+    echo "       php tools/ai-titles.php --verify    (cron: fix bad matches)\n";
+    echo "       php tools/ai-titles.php --cron      (runs both)\n";
     exit(0);
 }
 
@@ -45,7 +50,11 @@ if (!$AI_BIN) {
     fwrite(STDERR, "Warning: claude CLI not found, will use regex fallback only\n");
 }
 
-if ($arg === '--all' || $arg === '--pending') {
+$runModes = ($arg === '--cron') ? ['--pending', '--verify'] : [$arg];
+
+foreach ($runModes as $mode) {
+
+if ($mode === '--all' || $mode === '--pending') {
     $rows = $db->query("SELECT DISTINCT path FROM folder_posters WHERE folder_type = 'movies'")->fetchAll();
     if (empty($rows)) {
         echo "No folders tagged as 'movies' found.\n";
@@ -61,14 +70,35 @@ if ($arg === '--all' || $arg === '--pending') {
     if ($pendingOnly && $total === 0) {
         echo "Nothing pending.\n";
     }
+} elseif ($arg === '--verify') {
+    if (!$AI_BIN) {
+        fwrite(STDERR, "Error: --verify requires AI (claude CLI not found)\n");
+        exit(1);
+    }
+    $rows = $db->query("SELECT DISTINCT path FROM folder_posters WHERE folder_type = 'movies'")->fetchAll();
+    if (empty($rows)) {
+        echo "No folders tagged as 'movies' found.\n";
+        exit(0);
+    }
+    $total = 0;
+    foreach ($rows as $row) {
+        if (is_dir($row['path'])) {
+            $total += verifyFolder($row['path'], $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
+        }
+    }
+    if ($total === 0) {
+        echo "All matches look correct.\n";
+    }
 } else {
-    $path = realpath($arg);
+    $path = realpath($mode);
     if (!$path || !is_dir($path)) {
-        fwrite(STDERR, "Error: '$arg' is not a valid directory\n");
+        fwrite(STDERR, "Error: '$mode' is not a valid directory\n");
         exit(1);
     }
     processFolder($path, $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS, false);
 }
+
+} // end foreach $runModes
 
 /**
  * Process a single movies folder.
@@ -213,6 +243,166 @@ function searchTMDB(string $title, ?int $year, string $apiKey, $ctx): ?array
         }
     }
     return null;
+}
+
+/**
+ * Verify existing matches in a movies folder.
+ * Sends {filename, matched_tmdb_title} pairs to AI, asks if they're correct.
+ * Fixes bad matches by re-searching TMDB with AI-suggested titles.
+ * @return int Number of files checked
+ */
+function verifyFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, array $videoExts): int
+{
+    // Find video files with a poster (not __none__, not NULL) that haven't been verified
+    $items = scandir($dirPath);
+    $pairs = []; // [{file, tmdb_title, path}]
+    foreach ($items as $item) {
+        if ($item[0] === '.') continue;
+        if (is_dir($dirPath . '/' . $item)) continue;
+        $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+        if (!in_array($ext, $videoExts, true)) continue;
+
+        $fullPath = $dirPath . '/' . $item;
+        $stmt = $db->prepare("SELECT poster_url, title, verified FROM folder_posters WHERE path = :p");
+        $stmt->execute([':p' => $fullPath]);
+        $row = $stmt->fetch();
+        // Only verify files that have an auto-matched poster, not yet verified
+        if (!$row || !$row['poster_url'] || $row['poster_url'] === '__none__') continue;
+        if (!$row['title']) continue;
+        if (!empty($row['verified'])) continue; // Already confirmed by AI
+
+        $pairs[] = ['file' => $item, 'tmdb_title' => $row['title'], 'path' => $fullPath];
+    }
+
+    if (empty($pairs)) return 0;
+
+    echo "\n=== VERIFY " . basename($dirPath) . " (" . count($pairs) . " matches) ===\n";
+
+    // Ask AI to verify the matches
+    $verdicts = askAIVerify($pairs, $aiBin);
+    if ($verdicts === null) {
+        echo "  AI verify failed, skipping.\n";
+        return 0;
+    }
+
+    $fixed = 0;
+    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
+
+    // Build set of files flagged as bad by AI (match by basename, tolerant)
+    $badFiles = [];
+    foreach ($verdicts as $v) {
+        if (!($v['correct'] ?? true)) {
+            $badFiles[$v['file']] = $v;
+        }
+    }
+
+    // Mark all non-bad files as verified in one go
+    $confirmed = 0;
+    foreach ($pairs as $p) {
+        if (isset($badFiles[$p['file']])) continue;
+        try {
+            $stmt = $db->prepare("UPDATE folder_posters SET verified = 1 WHERE path = :p AND (verified IS NULL OR verified = 0)");
+            $stmt->execute([':p' => $p['path']]);
+            if ($stmt->rowCount() > 0) $confirmed++;
+        } catch (PDOException $e) { /* ignore */ }
+    }
+
+    // Process bad matches
+    foreach ($badFiles as $fileName => $v) {
+
+        $fileName = $v['file'];
+        $fullPath = $dirPath . '/' . $fileName;
+        $betterTitle = $v['suggested_title'] ?? '';
+        $betterYear = $v['year'] ?? null;
+
+        if (!$betterTitle) {
+            echo "  BAD   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ") — no suggestion\n";
+            continue;
+        }
+
+        echo "  FIX   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ") => searching: " . $betterTitle . "\n";
+
+        // Re-search TMDB with the AI-suggested title
+        $result = searchTMDB($betterTitle, $betterYear, $apiKey, $ctx);
+        if ($result) {
+            echo "        => " . $result['title'] . "\n";
+            $fixed++;
+            try {
+                $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)")
+                   ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
+            } catch (PDOException $e) { /* ignore */ }
+        } else {
+            echo "        => still no match for: " . $betterTitle . "\n";
+        }
+
+        usleep(250000);
+    }
+
+    $bad = count(array_filter($verdicts, fn($v) => !($v['correct'] ?? true)));
+    echo "  Verify done: $confirmed confirmed, $bad bad, $fixed fixed\n";
+    return count($pairs);
+}
+
+/**
+ * Ask AI to verify {filename, tmdb_title} pairs.
+ * Returns array of {file, tmdb_title, correct, suggested_title, year} or null.
+ */
+function askAIVerify(array $pairs, string $aiBin): ?array
+{
+    // Build compact input: just file + matched title
+    $input = array_map(fn($p) => ['file' => $p['file'], 'tmdb_title' => $p['tmdb_title']], $pairs);
+    $batches = array_chunk($input, 50);
+    $allResults = [];
+
+    foreach ($batches as $batchIdx => $batch) {
+        echo "  Verifying with AI" . (count($batches) > 1 ? " (batch " . ($batchIdx + 1) . "/" . count($batches) . ")" : "") . "...\n";
+
+        $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE);
+
+        $prompt = <<<PROMPT
+Tu reçois des paires {nom de fichier vidéo, titre TMDB matché automatiquement}.
+Vérifie si chaque match est correct (le titre TMDB correspond bien au film du fichier).
+
+Retourne UNIQUEMENT un JSON array (sans markdown, sans code fences), avec pour chaque paire:
+{"file": "nom original", "tmdb_title": "titre matché", "correct": true/false, "suggested_title": "meilleur titre pour TMDB", "year": 1999}
+
+Règles:
+- correct=true si le titre TMDB est bien le film du fichier (même si la graphie diffère légèrement)
+- correct=false si c'est clairement un mauvais match (film différent, album musique, etc.)
+- Si correct=false, suggested_title = le bon titre à chercher sur TMDB (avec caractères spéciaux si nécessaire, ex: WALL·E pas Wall-E)
+- Si correct=true, suggested_title peut être omis ou vide
+- year = année du film (utile pour désambiguïser)
+
+Paires à vérifier:
+$fileList
+PROMPT;
+
+        $tmpFile = tempnam(sys_get_temp_dir(), 'ai_verify_');
+        file_put_contents($tmpFile, $prompt);
+
+        $cmd = escapeshellarg($aiBin) . ' -p --model haiku --output-format json < ' . escapeshellarg($tmpFile) . ' 2>/dev/null';
+        $output = shell_exec($cmd);
+        @unlink($tmpFile);
+
+        if (!$output) return null;
+
+        $envelope = json_decode($output, true);
+        if (!$envelope || !isset($envelope['result'])) return null;
+
+        $text = $envelope['result'];
+        $text = preg_replace('/^```(?:json)?\s*/s', '', $text);
+        $text = preg_replace('/\s*```$/s', '', $text);
+
+        $parsed = json_decode(trim($text), true);
+        if (!is_array($parsed)) {
+            fwrite(STDERR, "  Warning: could not parse AI verify response\n");
+            return null;
+        }
+
+        $allResults = array_merge($allResults, $parsed);
+    }
+
+    return $allResults;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
