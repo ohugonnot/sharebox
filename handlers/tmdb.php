@@ -157,31 +157,6 @@ if (isset($_GET['posters'])) {
     }
     poster_log('POSTERS cache | eligible=' . count($eligibleFolders) . ' cached=' . $posterHitCount . ' hidden=' . $hiddenCount . ' pending_ai=' . $pendingCount . ' uncached=' . count($uncached) . ' seasons=' . count($seasonFolders));
 
-    // ── Phase 2 : extraire titres uniques depuis TOUS les uncached ──
-    $titleToFolders = []; // "Black Clover" => ["E001...", "E002...", ...]
-    foreach ($uncached as $f) {
-        $meta = extract_title_year($f);
-        $title = $meta['title'];
-        $titleToFolders[$title][] = $f;
-    }
-
-    // Pre-seed from cached siblings: if a title is already resolved in DB, reuse it
-    // Must run BEFORE the duplicate filter so $cached is still intact
-    $titleResults = []; // title => {posterUrl, tmdbId, tmdbTitle, tmdbOverview}
-    foreach ($cached as $name => $info) {
-        if (!isset($info['poster'])) continue;
-        $sibTitle = extract_title_year($name)['title'];
-        if (isset($titleToFolders[$sibTitle]) && !isset($titleResults[$sibTitle])) {
-            $sibPath = $resolvedPath . '/' . $name;
-            $stmtSib = $db->prepare("SELECT poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type FROM folder_posters WHERE path = :p");
-            $stmtSib->execute([':p' => $sibPath]);
-            $sibRow = $stmtSib->fetch();
-            if ($sibRow && $sibRow['poster_url']) {
-                $titleResults[$sibTitle] = ['posterUrl' => $sibRow['poster_url'], 'tmdbId' => $sibRow['tmdb_id'], 'tmdbTitle' => $sibRow['title'], 'tmdbOverview' => $sibRow['overview'], 'tmdbYear' => $sibRow['tmdb_year'], 'tmdbType' => $sibRow['tmdb_type']];
-            }
-        }
-    }
-
     // Filter out duplicate posters (> 3 cards with same image = probably episodes)
     foreach ($cached as $f => $info) {
         if (isset($info['poster']) && ($posterCount[$info['poster']] ?? 0) > 3) {
@@ -191,157 +166,92 @@ if (isset($_GET['posters'])) {
 
     $result = array_merge($result, $cached);
 
-    // Titles that still need a TMDB search
-    $titlesToSearch = array_diff_key($titleToFolders, $titleResults);
-
-    // ── Phase 3 : chercher TMDB pour max 10 titres uniques ──
-    $toSearch = array_slice(array_keys($titlesToSearch), 0, 30);
-    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
-
-    foreach ($toSearch as $title) {
-        $found = tmdb_search($title, null, $apiKey, $ctx, ['multi', 'tv']);
-        $titleResults[$title] = [
-            'posterUrl' => $found['poster'] ?? null,
-            'tmdbId' => $found['id'] ?? null,
-            'tmdbTitle' => $found['title'] ?? null,
-            'tmdbOverview' => $found['overview'] ?? null,
-            'tmdbYear' => $found['year'] ?? null,
-            'tmdbType' => $found['type'] ?? null,
-        ];
-        poster_log('TMDB search | "' . $title . '" → ' . ($found ? $found['title'] . ' (id=' . $found['id'] . ')' : 'NO MATCH'));
-        usleep(50000); // rate limit TMDB
-    }
-
-    // ── Phase 4 : dispatcher les résultats sur tous les dossiers ──
-    // Transaction pour éviter les "database is locked" avec le cron AI concurrent
-    $hasWrites = false;
-    foreach ($titleResults as $title => $tr) {
-        if (!isset($titleToFolders[$title])) continue;
-        $folderList = $titleToFolders[$title];
-        $isDuplicate = count($folderList) > 3;
-        if ($isDuplicate) poster_log('DEDUP suppress | "' . $title . '" × ' . count($folderList) . ' folders → poster hidden');
-        foreach ($folderList as $folderName) {
-            $fullPath = $resolvedPath . '/' . $folderName;
+    // ── INSERT all uncached folders as NULL (no TMDB calls, instant) ──
+    if (!empty($uncached)) {
+        try { $db->beginTransaction(); } catch (PDOException $e) {}
+        foreach ($uncached as $f) {
+            $fullPath = $resolvedPath . '/' . $f;
             try {
-                if (!$hasWrites) { $db->beginTransaction(); $hasWrites = true; }
-                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, :y, :mt)
-                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
-                   ->execute([':p' => $fullPath, ':u' => $tr['posterUrl'], ':i' => $tr['tmdbId'], ':t' => $tr['tmdbTitle'], ':o' => $tr['tmdbOverview'], ':y' => $tr['tmdbYear'] ?? null, ':mt' => $tr['tmdbType'] ?? null]);
-            } catch (PDOException $e) { poster_log('DB error | ' . $folderName . ' → ' . $e->getMessage()); }
-            if ($tr['posterUrl'] && !$isDuplicate) {
-                $result[$folderName] = ['poster' => $tr['posterUrl']];
-                if ($tr['tmdbOverview']) $result[$folderName]['overview'] = $tr['tmdbOverview'];
-            }
+                $db->prepare("INSERT OR IGNORE INTO folder_posters (path) VALUES (:p)")->execute([':p' => $fullPath]);
+            } catch (PDOException $e) {}
         }
+        try { $db->commit(); } catch (PDOException $e) {}
     }
 
-    if ($hasWrites) { try { $db->commit(); } catch (PDOException $e) { poster_log('DB commit error | ' . $e->getMessage()); } }
-
-    // remaining = titres uniques pas encore cherchés
-    $remaining = count($titlesToSearch) - count($toSearch);
-
-    // ── Video file posters (movies-type folders) ──
+    // ── Video file posters (movies-type folders) — DB read only ──
     $stmtType = $db->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
     $stmtType->execute([':p' => $resolvedPath]);
     $typeRow = $stmtType->fetch();
     $isMovies = ($typeRow && ($typeRow['folder_type'] ?? 'series') === 'movies');
 
-    $videoRemaining = 0;
     if ($isMovies) {
         $videoExts = ['mp4','mkv','avi','m4v','mov','wmv','flv','webm','ts','m2ts','mpg','mpeg'];
         $videoFiles = [];
         foreach ($items as $item) {
             if ($item[0] === '.' || is_dir($resolvedPath . '/' . $item)) continue;
             $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
-            if (in_array($ext, $videoExts, true)) {
-                $videoFiles[] = $item;
-            }
+            if (in_array($ext, $videoExts, true)) $videoFiles[] = $item;
         }
 
-        $videoCached = [];
-        $videoUncached = [];
-        // Batch query all video file paths at once (avoid N+1)
+        // Batch query DB
         $videoPaths = array_map(fn($vf) => $resolvedPath . '/' . $vf, $videoFiles);
         $videoDbRows = [];
         if (!empty($videoPaths)) {
             $ph = implode(',', array_fill(0, count($videoPaths), '?'));
             $stmt = $db->prepare("SELECT path, poster_url, overview, verified FROM folder_posters WHERE path IN ($ph)");
             $stmt->execute($videoPaths);
-            foreach ($stmt->fetchAll() as $row) {
-                $videoDbRows[$row['path']] = $row;
-            }
+            foreach ($stmt->fetchAll() as $row) $videoDbRows[$row['path']] = $row;
         }
+
+        $videoUncached = [];
         foreach ($videoFiles as $vf) {
             $fullPath = $resolvedPath . '/' . $vf;
             $row = $videoDbRows[$fullPath] ?? null;
             if ($row) {
                 if ($row['poster_url'] === '__none__') {
-                    $videoCached[$vf] = ['hidden' => true];
+                    $result[$vf] = ['hidden' => true];
                 } elseif ($row['poster_url']) {
-                    $videoCached[$vf] = ['poster' => $row['poster_url']];
-                    if ($row['overview']) $videoCached[$vf]['overview'] = $row['overview'];
+                    $result[$vf] = ['poster' => $row['poster_url']];
+                    if ($row['overview']) $result[$vf]['overview'] = $row['overview'];
                 } elseif ((int)($row['verified'] ?? 0) === -1) {
-                    $videoCached[$vf] = ['pending_ai' => true];
+                    $result[$vf] = ['pending_ai' => true];
                 }
-                // poster_url NULL + verified=0 → déjà cherché, pas trouvé. Le cron IA s'en charge.
             } else {
                 $videoUncached[] = $vf;
             }
         }
 
-        $result = array_merge($result, $videoCached);
-
-        $videoToFetch = array_slice($videoUncached, 0, 30);
-        $videoResults = [];
-        foreach ($videoToFetch as $fileName) {
-            $meta = extract_title_year($fileName);
-            $videoResults[$fileName] = tmdb_search($meta['title'], $meta['year'], $apiKey, $ctx, ['multi', 'movie']);
-            usleep(50000);
-        }
-        if (!empty($videoResults)) {
-            try { $db->beginTransaction(); } catch (PDOException $e) { /* already in transaction */ }
-            foreach ($videoResults as $fileName => $r) {
-                $fullPath = $resolvedPath . '/' . $fileName;
+        // INSERT all uncached video files as NULL (no TMDB calls)
+        if (!empty($videoUncached)) {
+            try { $db->beginTransaction(); } catch (PDOException $e) {}
+            foreach ($videoUncached as $vf) {
                 try {
-                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, :y, :mt)
-                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
-                       ->execute([':p' => $fullPath, ':u' => $r['poster'] ?? null, ':i' => $r['id'] ?? null, ':t' => $r['title'] ?? null, ':o' => $r['overview'] ?? null, ':y' => $r['year'] ?? null, ':mt' => $r['type'] ?? null]);
-                } catch (PDOException $e) { poster_log('DB error video | ' . $fileName . ' → ' . $e->getMessage()); }
-                if ($r) {
-                    $result[$fileName] = ['poster' => $r['poster']];
-                    if ($r['overview']) $result[$fileName]['overview'] = $r['overview'];
-                }
+                    $db->prepare("INSERT OR IGNORE INTO folder_posters (path) VALUES (:p)")
+                       ->execute([':p' => $resolvedPath . '/' . $vf]);
+                } catch (PDOException $e) {}
             }
-            try { $db->commit(); } catch (PDOException $e) { poster_log('DB commit error video | ' . $e->getMessage()); }
-        }
-
-        $videoRemaining = count($videoUncached) - count($videoToFetch);
-    }
-
-    $totalRemaining = $remaining + $videoRemaining;
-
-    // When all regex+TMDB batches are done, trigger AI fallback in background
-    if ($totalRemaining === 0) {
-        $stmtNull = $db->prepare("SELECT COUNT(*) FROM folder_posters WHERE path LIKE :prefix AND poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)");
-        $stmtNull->execute([':prefix' => $resolvedPath . '/%']);
-        $nullCount = (int)$stmtNull->fetchColumn();
-        if ($nullCount > 0) {
-            // Lock file pour éviter double lancement (polling JS envoie plusieurs requêtes)
-            $lockFile = sys_get_temp_dir() . '/sharebox_ai_' . md5($resolvedPath) . '.lock';
-            $lockFp = @fopen($lockFile, 'w');
-            if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
-                poster_log('AI trigger | ' . $nullCount . ' NULL entries → launching --pending-path ' . basename($resolvedPath));
-                $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
-                $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath) . ' > /dev/null 2>&1 &';
-                @pclose(@popen($cmd, 'r'));
-                // Lock libéré quand le process PHP web termine (quelques ms)
-            }
-            if ($lockFp) fclose($lockFp);
+            try { $db->commit(); } catch (PDOException $e) {}
         }
     }
 
-    poster_log('POSTERS response | result=' . count($result) . ' remaining=' . $totalRemaining);
-    echo json_encode(['posters' => $result, 'remaining' => $totalRemaining]);
+    // ── Trigger background worker if any NULLs need processing ──
+    $stmtNull = $db->prepare("SELECT COUNT(*) FROM folder_posters WHERE path LIKE :prefix AND poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)");
+    $stmtNull->execute([':prefix' => $resolvedPath . '/%']);
+    $nullCount = (int)$stmtNull->fetchColumn();
+    if ($nullCount > 0) {
+        $lockFile = sys_get_temp_dir() . '/sharebox_ai_' . md5($resolvedPath) . '.lock';
+        $lockFp = @fopen($lockFile, 'w');
+        if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
+            poster_log('BG trigger | ' . $nullCount . ' NULL entries → launching --pending-path ' . basename($resolvedPath));
+            $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
+            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath) . ' >> /srv/share/data/ai-titles.log 2>&1 &';
+            @pclose(@popen($cmd, 'r'));
+        }
+        if ($lockFp) fclose($lockFp);
+    }
+
+    poster_log('POSTERS response | result=' . count($result) . ' pending=' . $nullCount);
+    echo json_encode(['posters' => $result, 'pending' => $nullCount]);
     exit;
 }
 

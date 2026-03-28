@@ -208,62 +208,95 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
 
     foreach ($byDir as $dir => $names) {
-        ai_log('AI pending | dir=' . basename($dir) . ' files=' . count($names));
+        ai_log('PENDING | dir=' . basename($dir) . ' files=' . count($names));
 
-        // Ask AI for clean titles
-        $titles = null;
-        if ($aiBin) {
-            $titles = askAI($names, $aiBin);
-        }
-        if ($titles === null) {
-            if ($aiBin) { ai_log('AI askAI FAIL | dir=' . basename($dir) . ' → regex fallback'); }
-            $titles = [];
-            foreach ($names as $n) {
-                $meta = extract_title_year($n);
-                $titles[] = ['file' => $n, 'title' => $meta['title'], 'year' => $meta['year'], 'skip' => false];
-            }
-        }
-
+        // ── Pass 1 : regex extract_title_year() + TMDB (gratuit, rapide) ──
         $found = 0;
-        foreach ($titles as $t) {
-            $name = $t['file'];
-            $fullPath = $dir . '/' . $name;
+        $remaining = [];
+        foreach ($names as $n) {
+            $meta = extract_title_year($n);
+            $title = $meta['title'];
+            if (!$title) { $remaining[] = $n; continue; }
 
-            if ($t['skip'] ?? false) {
-                ai_log('AI SKIP | ' . $name);
-                try {
-                    $db->prepare("INSERT INTO folder_posters (path, poster_url, title) VALUES (:p, '__none__', :t)
-                                  ON CONFLICT(path) DO UPDATE SET poster_url = '__none__', title = :t, updated_at = datetime('now')")
-                       ->execute([':p' => $fullPath, ':t' => $t['title'] ?? '']);
-                } catch (PDOException $e) { poster_log('DB error SKIP | ' . $name . ' → ' . $e->getMessage()); }
-                continue;
-            }
-
-            $title = $t['title'] ?? '';
-            if (!$title) continue;
-
-            $result = searchTMDB($title, $t['year'] ?? null, $apiKey, $ctx);
+            $result = searchTMDB($title, $meta['year'], $apiKey, $ctx);
+            $fullPath = $dir . '/' . $n;
             if ($result) {
-                ai_log('AI OK | ' . $name . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
+                ai_log('REGEX OK | ' . $n . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
                 $found++;
                 try {
                     $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 0, :y, :mt)
                                   ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
                        ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
-                } catch (PDOException $e) { poster_log('DB error OK | ' . $name . ' → ' . $e->getMessage()); }
+                } catch (PDOException $e) { poster_log('DB error REGEX OK | ' . $n . ' → ' . $e->getMessage()); }
             } else {
-                ai_log('AI MISS | ' . $name . ' searched="' . $title . '"');
-                // Increment ai_attempts so we give up after 3 tries
-                try {
-                    $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
-                       ->execute([':p' => $fullPath]);
-                } catch (PDOException $e) { poster_log('DB error MISS | ' . $name . ' → ' . $e->getMessage()); }
+                $remaining[] = $n;
             }
-
             usleep(50000);
         }
+        ai_log('REGEX done | dir=' . basename($dir) . ' found=' . $found . '/' . count($names) . ' remaining=' . count($remaining));
 
-        ai_log('AI done | dir=' . basename($dir) . ' found=' . $found . '/' . count($names), false);
+        // ── Pass 2 : IA pour les restants (coûteux, plus intelligent) ──
+        if (!empty($remaining) && $aiBin) {
+            $titles = askAI($remaining, $aiBin);
+            if ($titles === null) {
+                ai_log('AI askAI FAIL | dir=' . basename($dir) . ' → giving up on ' . count($remaining) . ' files');
+                // Increment ai_attempts for remaining so we don't retry forever
+                foreach ($remaining as $n) {
+                    try {
+                        $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
+                           ->execute([':p' => $dir . '/' . $n]);
+                    } catch (PDOException $e) {}
+                }
+            } else {
+                $aiFound = 0;
+                foreach ($titles as $t) {
+                    $name = $t['file'];
+                    $fullPath = $dir . '/' . $name;
+
+                    if ($t['skip'] ?? false) {
+                        ai_log('AI SKIP | ' . $name);
+                        try {
+                            $db->prepare("INSERT INTO folder_posters (path, poster_url, title) VALUES (:p, '__none__', :t)
+                                          ON CONFLICT(path) DO UPDATE SET poster_url = '__none__', title = :t, updated_at = datetime('now')")
+                               ->execute([':p' => $fullPath, ':t' => $t['title'] ?? '']);
+                        } catch (PDOException $e) {}
+                        continue;
+                    }
+
+                    $title = $t['title'] ?? '';
+                    if (!$title) continue;
+
+                    $result = searchTMDB($title, $t['year'] ?? null, $apiKey, $ctx);
+                    if ($result) {
+                        ai_log('AI OK | ' . $name . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
+                        $aiFound++;
+                        try {
+                            $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 0, :y, :mt)
+                                          ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
+                               ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
+                        } catch (PDOException $e) {}
+                    } else {
+                        ai_log('AI MISS | ' . $name . ' searched="' . $title . '"');
+                        try {
+                            $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
+                               ->execute([':p' => $fullPath]);
+                        } catch (PDOException $e) {}
+                    }
+                    usleep(50000);
+                }
+                ai_log('AI done | dir=' . basename($dir) . ' ai_found=' . $aiFound . '/' . count($remaining));
+            }
+        } elseif (!empty($remaining)) {
+            // Pas d'IA dispo — increment attempts pour ne pas boucler
+            foreach ($remaining as $n) {
+                try {
+                    $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
+                       ->execute([':p' => $dir . '/' . $n]);
+                } catch (PDOException $e) {}
+            }
+        }
+
+        ai_log('PENDING done | dir=' . basename($dir) . ' total_found=' . $found . '/' . count($names), false);
     }
 }
 

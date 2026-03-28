@@ -970,12 +970,8 @@ function reloadAllPosters() {
                         card.appendChild(ov);
                     }
                 });
-                if (d.remaining > 0) {
-                    setTimeout(fetchPosters, 500);
-                } else if (!fetchPosters.aiRetried) {
-                    // One extra poll after AI background processing (~8s)
-                    fetchPosters.aiRetried = true;
-                    setTimeout(fetchPosters, 8000);
+                if (d.pending > 0) {
+                    setTimeout(fetchPosters, 30000);
                 }
             })
             .catch(function(){});
