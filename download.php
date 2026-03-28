@@ -1160,10 +1160,10 @@ function toggleCardMenu(btn, folderName) {
         menu.appendChild(item2);
     }
 
-    // Item 3: AI recheck — visible avec ou sans poster
-    // Avec poster : "Vérifier avec l'IA" (re-check le match)
-    // Sans poster : "Chercher avec l'IA" (tenter un match IA)
-    if (card) {
+    // Item 3: AI recheck — visible avec ou sans poster (sauf si masqué par l'utilisateur)
+    var eyeOff = card ? card.querySelector('.eye-off') : null;
+    var isHidden = eyeOff && eyeOff.style.display !== 'none';
+    if (card && !isHidden) {
         var item3 = document.createElement('div');
         item3.className = 'grid-card-menu-item';
         var svg3 = document.createElementNS('http://www.w3.org/2000/svg','svg');

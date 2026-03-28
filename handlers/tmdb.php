@@ -200,46 +200,15 @@ if (isset($_GET['posters'])) {
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
 
     foreach ($toSearch as $title) {
-        $queries = [$title];
-        $shorter = preg_replace('/\b(hd|remasted|remastered|complete|integrale|intégrale|collection|pack|coffret)\b.*/i', '', $title);
-        $shorter = trim($shorter);
-        if ($shorter !== '' && $shorter !== $title) $queries[] = $shorter;
-        $words = explode(' ', $title);
-        if (count($words) > 3) {
-            $half = implode(' ', array_slice($words, 0, (int)ceil(count($words) / 2)));
-            if ($half !== $title && $half !== $shorter) $queries[] = $half;
-        }
-
-        $posterUrl = null;
-        $tmdbId = null;
-        $tmdbTitle = null;
-        $tmdbOverview = null;
-
-        foreach ($queries as $q) {
-            $encoded = urlencode($q);
-            $urls = [
-                "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-                "https://api.themoviedb.org/3/search/tv?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-            ];
-            foreach ($urls as $searchUrl) {
-                $resp = @file_get_contents($searchUrl, false, $ctx);
-                $data = $resp ? json_decode($resp, true) : null;
-                if ($data && !empty($data['results'])) {
-                    foreach ($data['results'] as $r) {
-                        if (!empty($r['poster_path'])) {
-                            $posterUrl = 'https://image.tmdb.org/t/p/w300' . $r['poster_path'];
-                            $tmdbId = $r['id'] ?? null;
-                            $tmdbTitle = $r['title'] ?? $r['name'] ?? null;
-                            $tmdbOverview = $r['overview'] ?? null;
-                            break 3;
-                        }
-                    }
-                }
-            }
-        }
-
-        $titleResults[$title] = ['posterUrl' => $posterUrl, 'tmdbId' => $tmdbId, 'tmdbTitle' => $tmdbTitle, 'tmdbOverview' => $tmdbOverview];
-        poster_log('TMDB search | "' . $title . '" → ' . ($tmdbTitle ? $tmdbTitle . ' (id=' . $tmdbId . ')' : 'NO MATCH'));
+        $result = tmdb_search($title, null, $apiKey, $ctx, ['multi', 'tv']);
+        $titleResults[$title] = [
+            'posterUrl' => $result['poster'] ?? null,
+            'tmdbId' => $result['id'] ?? null,
+            'tmdbTitle' => $result['title'] ?? null,
+            'tmdbOverview' => $result['overview'] ?? null,
+        ];
+        poster_log('TMDB search | "' . $title . '" → ' . ($result ? $result['title'] . ' (id=' . $result['id'] . ')' : 'NO MATCH'));
+        usleep(250000); // rate limit TMDB
     }
 
     // ── Phase 4 : dispatcher les résultats sur tous les dossiers ──
@@ -321,58 +290,18 @@ if (isset($_GET['posters'])) {
         $videoToFetch = array_slice($videoUncached, 0, 10);
         foreach ($videoToFetch as $fileName) {
             $meta = extract_title_year($fileName);
-            $title = $meta['title'];
-
-            $queries = [$title];
-            $shorter = preg_replace('/\b(hd|remasted|remastered|complete|integrale|intégrale|collection|pack|coffret)\b.*/i', '', $title);
-            $shorter = trim($shorter);
-            if ($shorter !== '' && $shorter !== $title) $queries[] = $shorter;
-            $words = explode(' ', $title);
-            if (count($words) > 3) {
-                $half = implode(' ', array_slice($words, 0, (int)ceil(count($words) / 2)));
-                if ($half !== $title && $half !== $shorter) $queries[] = $half;
-            }
-
-            $posterUrl = null;
-            $tmdbId = null;
-            $tmdbTitle = null;
-            $tmdbOverview = null;
-
-            foreach ($queries as $q) {
-                $encoded = urlencode($q);
-                // For movies, search multi then movie (instead of TV for series)
-                $urls = [
-                    "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-                    "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-                ];
-                foreach ($urls as $searchUrl) {
-                    $resp = @file_get_contents($searchUrl, false, $ctx);
-                    $data = $resp ? json_decode($resp, true) : null;
-                    if ($data && !empty($data['results'])) {
-                        foreach ($data['results'] as $r) {
-                            if (!empty($r['poster_path'])) {
-                                $posterUrl = 'https://image.tmdb.org/t/p/w300' . $r['poster_path'];
-                                $tmdbId = $r['id'] ?? null;
-                                $tmdbTitle = $r['title'] ?? $r['name'] ?? null;
-                                $tmdbOverview = $r['overview'] ?? null;
-                                break 3;
-                            }
-                        }
-                    }
-                }
-            }
-
+            $r = tmdb_search($meta['title'], $meta['year'], $apiKey, $ctx, ['multi', 'movie']);
             $fullPath = $resolvedPath . '/' . $fileName;
             try {
                 $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
               ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
-                   ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
+                   ->execute([':p' => $fullPath, ':u' => $r['poster'] ?? null, ':i' => $r['id'] ?? null, ':t' => $r['title'] ?? null, ':o' => $r['overview'] ?? null]);
             } catch (PDOException $e) { /* ignore lock */ }
-
-            if ($posterUrl) {
-                $result[$fileName] = ['poster' => $posterUrl];
-                if ($tmdbOverview) $result[$fileName]['overview'] = $tmdbOverview;
+            if ($r) {
+                $result[$fileName] = ['poster' => $r['poster']];
+                if ($r['overview']) $result[$fileName]['overview'] = $r['overview'];
             }
+            usleep(250000);
         }
 
         $videoRemaining = count($videoUncached) - count($videoToFetch);

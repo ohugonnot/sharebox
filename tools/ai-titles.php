@@ -483,80 +483,12 @@ function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, 
     return count($toProcess);
 }
 
-/**
- * Search TMDB for a movie by title (and optional year).
- * Returns {poster, id, title, overview} or null.
- */
-function searchTMDB(string $title, ?int $year, string $apiKey, $ctx): ?array
-{
-    $queries = [$title];
-    if ($year) $queries[] = $title . ' ' . $year;
-
-    foreach ($queries as $q) {
-        $encoded = urlencode($q);
-        // multi d'abord (séries + films), puis tv, puis movie en fallback
-        $urls = [
-            "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-            "https://api.themoviedb.org/3/search/tv?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-            "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-        ];
-        foreach ($urls as $searchUrl) {
-            $resp = @file_get_contents($searchUrl, false, $ctx);
-            $data = $resp ? json_decode($resp, true) : null;
-            if ($data && !empty($data['results'])) {
-                foreach ($data['results'] as $r) {
-                    if (!empty($r['poster_path'])) {
-                        return [
-                            'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
-                            'id' => $r['id'] ?? null,
-                            'title' => $r['title'] ?? $r['name'] ?? null,
-                            'overview' => $r['overview'] ?? null,
-                        ];
-                    }
-                }
-            }
-        }
-    }
-    return null;
+// searchTMDB and searchTMDBCandidates — use shared functions from functions.php
+function searchTMDB(string $title, ?int $year, string $apiKey, $ctx): ?array {
+    return tmdb_search($title, $year, $apiKey, $ctx, ['multi', 'tv', 'movie']);
 }
-
-/**
- * Search TMDB and return ALL candidates (up to 8) for AI disambiguation.
- * @return array[] Array of {id, title, year, type, overview, poster}
- */
-function searchTMDBCandidates(string $title, ?int $year, string $apiKey, $ctx): array
-{
-    $candidates = [];
-    $seenIds = [];
-    $encoded = urlencode($title);
-    $urls = [
-        "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-        "https://api.themoviedb.org/3/search/tv?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-        "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-    ];
-    if ($year) {
-        $urls[] = "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query=" . urlencode($title . ' ' . $year) . "&language=fr&page=1";
-    }
-    foreach ($urls as $searchUrl) {
-        $resp = @file_get_contents($searchUrl, false, $ctx);
-        $data = $resp ? json_decode($resp, true) : null;
-        if (!$data || empty($data['results'])) continue;
-        foreach ($data['results'] as $r) {
-            if (empty($r['poster_path']) || isset($seenIds[$r['id']])) continue;
-            $seenIds[$r['id']] = true;
-            $candidates[] = [
-                'id' => $r['id'],
-                'title' => $r['title'] ?? $r['name'] ?? '?',
-                'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
-                'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
-                'overview' => substr($r['overview'] ?? '', 0, 150),
-                'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
-            ];
-            if (count($candidates) >= 15) break 2;
-        }
-        usleep(250000);
-    }
-    return $candidates;
+function searchTMDBCandidates(string $title, ?int $year, string $apiKey, $ctx): array {
+    return tmdb_search_candidates($title, $year, $apiKey, $ctx);
 }
 
 /**
