@@ -19,6 +19,7 @@ if (!$apiKey) {
 // de film/série. On skip les noms d'organisation (Season, Saison, OVA, Bonus, Extras...).
 if (isset($_GET['posters'])) {
     if (!is_dir($resolvedPath)) { echo '{}'; exit; }
+    poster_log('POSTERS request | ' . basename($resolvedPath) . ' | path=' . $resolvedPath);
 
     // Noms de dossiers qui ne sont PAS des titres de média → pas de fetch TMDB
     $skipPattern = '/^(season\s*\d|saison\s*\d|s\d+e?\d*|ova|oav|bonus|extras?|special|specials|featurettes?|behind.the.scenes|deleted.scenes|interviews?|trailers?|nc|op|ed|ost|soundtrack|subs?|subtitles?|vostfr|vf|multi|disc\s*\d|cd\s*\d|dvd|blu-?ray|\d{1,2}$)/i';
@@ -42,6 +43,7 @@ if (isset($_GET['posters'])) {
     $stmtParent->execute([':p' => $resolvedPath]);
     $parentRow = $stmtParent->fetch();
     if ($parentRow) $parentTmdbId = (int)$parentRow['tmdb_id'];
+    poster_log('POSTERS scan | folders=' . count($folders) . ' parentTmdbId=' . ($parentTmdbId ?: 'none'));
 
     $seasonFolders = []; // folders handled as seasons (excluded from normal flow)
     if ($parentTmdbId) {
@@ -65,6 +67,7 @@ if (isset($_GET['posters'])) {
                     continue;
                 }
                 // Fetch season poster from TMDB
+                poster_log('SEASON fetch | ' . $f . ' num=' . $seasonNum . ' parentId=' . $parentTmdbId . (($row ? ' stale_id=' . ($row['tmdb_id'] ?? 'null') : ' no_cache')));
                 $seasonUrl = "https://api.themoviedb.org/3/tv/{$parentTmdbId}/season/{$seasonNum}?api_key={$apiKey}&language=fr";
                 $sCtx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
                 $sResp = @file_get_contents($seasonUrl, false, $sCtx);
@@ -81,7 +84,8 @@ if (isset($_GET['posters'])) {
                     $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
                               ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                        ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $parentTmdbId, ':t' => $seasonTitle, ':o' => $seasonOverview]);
-                } catch (PDOException $e) { /* ignore */ }
+                    poster_log('SEASON DB write | ' . $f . ' → ' . ($posterUrl ? $seasonTitle : 'NULL'));
+                } catch (PDOException $e) { poster_log('SEASON DB error | ' . $f . ' → ' . $e->getMessage()); }
                 if ($posterUrl) {
                     $result[$f] = ['poster' => $posterUrl];
                     if ($seasonOverview) $result[$f]['overview'] = $seasonOverview;
@@ -115,24 +119,28 @@ if (isset($_GET['posters'])) {
         }
     }
 
+    $hiddenCount = 0; $posterHitCount = 0; $pendingCount = 0;
     foreach ($eligibleFolders as $f) {
         $fullPath = $resolvedPath . '/' . $f;
         $row = $folderDbRows[$fullPath] ?? null;
         if ($row) {
             if ($row['poster_url'] === '__none__') {
                 $cached[$f] = ['hidden' => true];
+                $hiddenCount++;
             } elseif ($row['poster_url']) {
                 $cached[$f] = ['poster' => $row['poster_url']];
                 if ($row['overview']) $cached[$f]['overview'] = $row['overview'];
                 $posterCount[$row['poster_url']] = ($posterCount[$row['poster_url']] ?? 0) + 1;
+                $posterHitCount++;
             } elseif ((int)($row['verified'] ?? 0) === -1) {
-                // poster_url NULL + verified=-1 → user requested AI recheck
                 $cached[$f] = ['pending_ai' => true];
+                $pendingCount++;
             }
         } else {
             $uncached[] = $f;
         }
     }
+    poster_log('POSTERS cache | eligible=' . count($eligibleFolders) . ' cached=' . $posterHitCount . ' hidden=' . $hiddenCount . ' pending_ai=' . $pendingCount . ' uncached=' . count($uncached) . ' seasons=' . count($seasonFolders));
 
     // ── Phase 2 : extraire titres uniques depuis TOUS les uncached ──
     $titleToFolders = []; // "Black Clover" => ["E001...", "E002...", ...]
@@ -215,6 +223,7 @@ if (isset($_GET['posters'])) {
         }
 
         $titleResults[$title] = ['posterUrl' => $posterUrl, 'tmdbId' => $tmdbId, 'tmdbTitle' => $tmdbTitle, 'tmdbOverview' => $tmdbOverview];
+        poster_log('TMDB search | "' . $title . '" → ' . ($tmdbTitle ? $tmdbTitle . ' (id=' . $tmdbId . ')' : 'NO MATCH'));
     }
 
     // ── Phase 4 : dispatcher les résultats sur tous les dossiers ──
@@ -225,14 +234,14 @@ if (isset($_GET['posters'])) {
         if (!isset($titleToFolders[$title])) continue;
         $folderList = $titleToFolders[$title];
         $isDuplicate = count($folderList) > 3;
+        if ($isDuplicate) poster_log('DEDUP suppress | "' . $title . '" × ' . count($folderList) . ' folders → poster hidden');
         foreach ($folderList as $folderName) {
             $fullPath = $resolvedPath . '/' . $folderName;
             try {
                 $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
                               ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                    ->execute([':p' => $fullPath, ':u' => $tr['posterUrl'], ':i' => $tr['tmdbId'], ':t' => $tr['tmdbTitle'], ':o' => $tr['tmdbOverview']]);
-            } catch (PDOException $e) { /* ignore */ }
-            // N'afficher le poster que si c'est pas un doublon massif
+            } catch (PDOException $e) { poster_log('DB error | ' . $folderName . ' → ' . $e->getMessage()); }
             if ($tr['posterUrl'] && !$isDuplicate) {
                 $result[$folderName] = ['poster' => $tr['posterUrl']];
                 if ($tr['tmdbOverview']) $result[$folderName]['overview'] = $tr['tmdbOverview'];
@@ -359,12 +368,14 @@ if (isset($_GET['posters'])) {
         $stmtNull->execute([':prefix' => $resolvedPath . '/%']);
         $nullCount = (int)$stmtNull->fetchColumn();
         if ($nullCount > 0 && is_executable('/usr/local/bin/claude')) {
+            poster_log('AI trigger | ' . $nullCount . ' NULL entries → launching --pending-path ' . basename($resolvedPath));
             $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
             $cmd = '/usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath) . ' > /dev/null 2>&1 &';
             @pclose(@popen($cmd, 'r'));
         }
     }
 
+    poster_log('POSTERS response | result=' . count($result) . ' remaining=' . $totalRemaining);
     echo json_encode(['posters' => $result, 'remaining' => $totalRemaining]);
     exit;
 }
@@ -372,6 +383,7 @@ if (isset($_GET['posters'])) {
 // ── Search TMDB for a folder name (manual selection) ──
 if (isset($_GET['tmdb_search'])) {
     $searchName = trim($_GET['tmdb_search']);
+    poster_log('SEARCH manual | query="' . $searchName . '"');
     if (!$searchName) { echo '[]'; exit; }
 
     $query = urlencode($searchName);
@@ -418,15 +430,17 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     try {
         if (!$posterUrl) {
-            // Supprimer l'entrée → le prochain fetch TMDB la recréera
+            poster_log('SET delete | ' . $folder . ' → clearing DB entry for re-fetch');
             $db->prepare("DELETE FROM folder_posters WHERE path = :p")->execute([':p' => $fullPath]);
         } else {
+            poster_log('SET poster | ' . $folder . ' → ' . ($title ?: '?') . ' (id=' . $tmdbId . ') ' . ($posterUrl === '__none__' ? '__none__' : 'poster') . ' verified=1');
             $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
               ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
                ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $title, ':o' => $overview]);
         }
         echo json_encode(['success' => true]);
     } catch (PDOException $e) {
+        poster_log('SET error | ' . $folder . ' → ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => 'db error']);
     }
@@ -447,6 +461,7 @@ if (isset($_GET['folder_type_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!is_dir($fullPath)) { http_response_code(404); echo json_encode(['error' => 'folder not found']); exit; }
 
     try {
+        poster_log('TYPE set | ' . $folder . ' → ' . $type);
         $db->prepare("INSERT INTO folder_posters (path, folder_type) VALUES (:p, :t)
                       ON CONFLICT(path) DO UPDATE SET folder_type = :t, updated_at = datetime('now')")
            ->execute([':p' => $fullPath, ':t' => $type]);
@@ -471,6 +486,7 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     try {
         // Reset poster + mark as pending AI (verified=-1) so cron re-processes it
+        poster_log('AI recheck | ' . $name . ' → reset to pending (verified=-1, poster=NULL, ai_attempts=0)');
         $db->prepare("UPDATE folder_posters SET verified = -1, poster_url = NULL, ai_attempts = 0 WHERE path = :p AND poster_url != '__none__'")
            ->execute([':p' => $fullPath]);
         echo json_encode(['success' => true]);

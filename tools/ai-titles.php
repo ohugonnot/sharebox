@@ -74,6 +74,7 @@ if ($mode === '--pending') {
     } else {
         $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
     }
+    poster_log('AI --pending start | entries=' . count($rows) . ($pendingPath ? ' path=' . basename($pendingPath) : ' (all)'));
     if (empty($rows)) {
         echo "Nothing pending.\n";
     } else {
@@ -98,6 +99,7 @@ if ($mode === '--pending') {
     }
     // Find ALL unverified entries with a poster (across all shared folders)
     $rows = $db->query("SELECT path, poster_url, title, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
+    poster_log('AI --verify start | unverified=' . count($rows));
 
     // Auto-verify duplicates: if >3 entries in the same dir share the same tmdb_id,
     // it's clearly episodes of the same show — no need to ask AI
@@ -126,6 +128,7 @@ if ($mode === '--pending') {
     }
     if ($autoVerified > 0) {
         echo "Auto-verified $autoVerified duplicate entries (same show, >3 in same dir).\n";
+        poster_log('AI auto-verify | ' . $autoVerified . ' entries (>3 same tmdb_id in same dir)');
     }
 
     // Remove auto-verified from the list before sending to AI
@@ -196,10 +199,11 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
         // Ask AI for clean titles
         $titles = null;
         if ($aiBin) {
+            poster_log('AI askAI | dir=' . basename($dir) . ' names=' . count($names));
             $titles = askAI($names, $aiBin);
         }
         if ($titles === null) {
-            if ($aiBin) echo "  AI failed, falling back to regex.\n";
+            if ($aiBin) { echo "  AI failed, falling back to regex.\n"; poster_log('AI askAI FAIL | dir=' . basename($dir) . ' → regex fallback'); }
             $titles = [];
             foreach ($names as $n) {
                 $meta = extract_title_year($n);
@@ -228,6 +232,7 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
             $result = searchTMDB($title, $t['year'] ?? null, $apiKey, $ctx);
             if ($result) {
                 echo "  OK    " . $name . " => " . $result['title'] . "\n";
+                poster_log('AI OK | ' . $name . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
                 $found++;
                 try {
                     $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
@@ -236,6 +241,7 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                 } catch (PDOException $e) { /* ignore */ }
             } else {
                 echo "  MISS  " . $name . " (searched: " . $title . ")\n";
+                poster_log('AI MISS | ' . $name . ' searched="' . $title . '" → ai_attempts++');
                 // Increment ai_attempts so we give up after 3 tries
                 try {
                     $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
@@ -306,14 +312,17 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
 
             if (!$betterTitle) {
                 echo "  BAD   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ")\n";
+                poster_log('AI verify BAD | ' . $fileName . ' was="' . ($v['tmdb_title'] ?? '?') . '" no suggestion');
                 continue;
             }
 
             echo "  FIX   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ") => " . $betterTitle . "\n";
+            poster_log('AI verify FIX | ' . $fileName . ' was="' . ($v['tmdb_title'] ?? '?') . '" → search="' . $betterTitle . '"');
 
             $result = searchTMDB($betterTitle, $betterYear, $apiKey, $ctx);
             if ($result) {
                 echo "        => " . $result['title'] . "\n";
+                poster_log('AI verify OK | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
                 $fixed++;
                 try {
                     $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
@@ -327,6 +336,7 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
             usleep(250000);
         }
 
+        poster_log('AI verify done | dir=' . basename($dir) . ' confirmed=' . $confirmed . ' bad=' . count($badFiles) . ' fixed=' . $fixed);
         echo "  Verify done: $confirmed confirmed, " . count($badFiles) . " bad, $fixed fixed\n";
     }
 }
