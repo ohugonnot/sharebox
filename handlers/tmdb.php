@@ -112,7 +112,8 @@ if (isset($_GET['posters'])) {
         // Cache result (even null = "no poster found")
         $fullPath = $resolvedPath . '/' . $folderName;
         try {
-            $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)")
+            $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
+              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
         } catch (PDOException $e) { /* ignore lock */ }
 
@@ -145,11 +146,20 @@ if (isset($_GET['posters'])) {
 
         $videoCached = [];
         $videoUncached = [];
+        // Batch query all video file paths at once (avoid N+1)
+        $videoPaths = array_map(fn($vf) => $resolvedPath . '/' . $vf, $videoFiles);
+        $videoDbRows = [];
+        if (!empty($videoPaths)) {
+            $ph = implode(',', array_fill(0, count($videoPaths), '?'));
+            $stmt = $db->prepare("SELECT path, poster_url, overview FROM folder_posters WHERE path IN ($ph)");
+            $stmt->execute($videoPaths);
+            foreach ($stmt->fetchAll() as $row) {
+                $videoDbRows[$row['path']] = $row;
+            }
+        }
         foreach ($videoFiles as $vf) {
             $fullPath = $resolvedPath . '/' . $vf;
-            $stmt = $db->prepare("SELECT poster_url, overview FROM folder_posters WHERE path = :p");
-            $stmt->execute([':p' => $fullPath]);
-            $row = $stmt->fetch();
+            $row = $videoDbRows[$fullPath] ?? null;
             if ($row) {
                 if ($row['poster_url'] === '__none__') {
                     $videoCached[$vf] = ['hidden' => true];
@@ -210,7 +220,8 @@ if (isset($_GET['posters'])) {
 
             $fullPath = $resolvedPath . '/' . $fileName;
             try {
-                $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)")
+                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
+              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                    ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
             } catch (PDOException $e) { /* ignore lock */ }
 
@@ -270,7 +281,8 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$folder) { http_response_code(400); echo json_encode(['error' => 'missing folder']); exit; }
 
-    $fullPath = $resolvedPath . '/' . $folder;
+    $fullPath = realpath($resolvedPath . '/' . $folder);
+    if (!$fullPath || !is_path_within($fullPath, $resolvedPath)) { http_response_code(403); echo json_encode(['error' => 'path not allowed']); exit; }
     if (!is_dir($fullPath) && !is_file($fullPath)) { http_response_code(404); echo json_encode(['error' => 'not found']); exit; }
 
     try {
@@ -278,7 +290,8 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
             // Supprimer l'entrée → le prochain fetch TMDB la recréera
             $db->prepare("DELETE FROM folder_posters WHERE path = :p")->execute([':p' => $fullPath]);
         } else {
-            $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)")
+            $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
+              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
                ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $title, ':o' => $overview]);
         }
         echo json_encode(['success' => true]);
@@ -298,7 +311,8 @@ if (isset($_GET['folder_type_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$folder) { http_response_code(400); echo json_encode(['error' => 'missing folder']); exit; }
     if (!in_array($type, ['series', 'movies'], true)) { http_response_code(400); echo json_encode(['error' => 'invalid type']); exit; }
 
-    $fullPath = $resolvedPath . '/' . $folder;
+    $fullPath = realpath($resolvedPath . '/' . $folder);
+    if (!$fullPath || !is_path_within($fullPath, $resolvedPath)) { http_response_code(403); echo json_encode(['error' => 'path not allowed']); exit; }
     if (!is_dir($fullPath)) { http_response_code(404); echo json_encode(['error' => 'folder not found']); exit; }
 
     try {
@@ -320,7 +334,8 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!$name) { http_response_code(400); echo json_encode(['error' => 'missing name']); exit; }
 
-    $fullPath = $resolvedPath . '/' . $name;
+    $fullPath = realpath($resolvedPath . '/' . $name);
+    if (!$fullPath || !is_path_within($fullPath, $resolvedPath)) { http_response_code(403); echo json_encode(['error' => 'path not allowed']); exit; }
     if (!is_dir($fullPath) && !is_file($fullPath)) { http_response_code(404); echo json_encode(['error' => 'not found']); exit; }
 
     try {

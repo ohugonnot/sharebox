@@ -175,7 +175,8 @@ function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, 
             echo "  SKIP  " . $fileName . "\n";
             $skipped++;
             try {
-                $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, title) VALUES (:p, '__none__', :t)")
+                $db->prepare("INSERT INTO folder_posters (path, poster_url, title) VALUES (:p, '__none__', :t)
+              ON CONFLICT(path) DO UPDATE SET poster_url = '__none__', title = :t, updated_at = datetime('now')")
                    ->execute([':p' => $fullPath, ':t' => $t['title'] ?? '']);
             } catch (PDOException $e) { /* ignore */ }
             continue;
@@ -199,7 +200,8 @@ function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, 
         }
 
         try {
-            $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)")
+            $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
+              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                ->execute([':p' => $fullPath, ':u' => $posterUrlStr, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
         } catch (PDOException $e) { /* ignore */ }
 
@@ -328,7 +330,8 @@ function verifyFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, a
             echo "        => " . $result['title'] . "\n";
             $fixed++;
             try {
-                $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)")
+                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
+              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
                    ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
             } catch (PDOException $e) { /* ignore */ }
         } else {
