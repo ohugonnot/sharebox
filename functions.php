@@ -117,6 +117,33 @@ function get_media_type(string $filename): ?string {
 }
 
 /**
+ * Extrait un titre et une année depuis un nom de dossier/fichier média.
+ * Ex: "Mobile Suit Gundam 0079" → ['title' => 'Mobile Suit Gundam 0079', 'year' => null]
+ *     "Batman.Begins.2005.MULTI.2160p" → ['title' => 'Batman Begins', 'year' => 2005]
+ */
+function extract_title_year(string $name): array {
+    // Retirer l'extension si c'est un fichier
+    $clean = pathinfo($name, PATHINFO_EXTENSION) ? pathinfo($name, PATHINFO_FILENAME) : $name;
+    // Remplacer les séparateurs courants par des espaces
+    $clean = preg_replace('/[._()[\]{}]+/', ' ', $clean);
+    // Chercher une année (4 chiffres entre 1950 et 2099)
+    $year = null;
+    if (preg_match('/\b((?:19|20)\d{2})\b/', $clean, $m)) {
+        $year = (int)$m[1];
+    }
+    // Couper au premier tag technique
+    $title = preg_replace('/\b(multi|vff|vfq|truefrench|french|english|vostfr|subfrench|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|hdtv|dvdrip|hdrip|x264|x265|h264|h265|hevc|avc|10bit|remux|2160p|1080p|720p|480p|uhd|4k|hdr|hdr10|dts|truehd|atmos|aac|ac3|flac|ddp?\d|proper|repack|internal|extended|unrated|directors?-?cut|complete|s\d{2}e?\d{0,2})\b.*/i', '', $clean);
+    // Si on a coupé à l'année, la retirer du titre aussi
+    if ($year) {
+        $title = preg_replace('/\b' . $year . '\b/', '', $title);
+    }
+    $title = preg_replace('/\s{2,}/', ' ', trim($title));
+    // Fallback : le nom brut nettoyé
+    if ($title === '') $title = trim($clean);
+    return ['title' => $title, 'year' => $year];
+}
+
+/**
  * Génère un slug lisible depuis un nom de fichier/dossier
  * Ex: "Batman.Begins.2005.MULTI.2160p.mkv" → "batman-begins-2005-x7k2"
  */

@@ -181,6 +181,11 @@ if (is_dir($resolvedPath)) {
         $stmt->execute([':id' => $link['id']]);
     }
 
+    // TMDB poster endpoints (search, batch, set)
+    if (isset($_GET['posters']) || isset($_GET['tmdb_search']) || isset($_GET['tmdb_set'])) {
+        require __DIR__ . '/handlers/tmdb.php';
+    }
+
     // Mode ZIP : télécharger tout le dossier en un seul fichier
     if (isset($_GET['zip']) && $_GET['zip'] === '1') {
         stream_log('ZIP start | ' . basename($resolvedPath));
@@ -289,6 +294,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
     $baseUrl = '/dl/' . htmlspecialchars($token);
     $shareNameHtml = htmlspecialchars($shareName);
     $css = css_public();
+    $hasFolders = count($folders) > 0;
 
     // Breadcrumb
     $breadcrumb = '<a href="' . $baseUrl . '">' . $shareNameHtml . '</a>';
@@ -306,6 +312,9 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
         }
     }
 
+    // Palette de couleurs pour les placeholders grille (dérivées du thème)
+    $cardColors = ['#c06020','#2a7a5a','#4a5a8a','#8a4a6a','#5a7a3a','#7a5a2a','#3a6a7a','#6a3a5a'];
+
     echo <<<HTML
 <!DOCTYPE html>
 <html lang="fr">
@@ -315,7 +324,8 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$shareNameHtml}</title>
     <style>{$css}
-@keyframes fadeUp { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+@keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+@keyframes fadeScale { from{opacity:0;transform:scale(.92)} to{opacity:1;transform:none} }
 .page { position:relative; z-index:1; max-width:1100px; margin:0 auto; padding:2rem 1.25rem 4rem; }
 .header { display:flex; align-items:center; gap:.7rem; margin-bottom:1rem; padding-bottom:1rem; border-bottom:1px solid var(--border); }
 .header-icon { width:36px; height:36px; background:var(--accent-soft); border-radius:var(--radius-md); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
@@ -329,9 +339,9 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .toolbar { display:flex; align-items:center; gap:.4rem; margin-bottom:.7rem; flex-wrap:wrap; }
 .toolbar-info { color:var(--text-muted); font-size:.79rem; margin-right:auto; white-space:nowrap; }
 .sort-bar { display:flex; align-items:center; gap:.25rem; }
-.sort-btn { display:inline-flex; align-items:center; gap:.2rem; padding:.28rem .55rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:transparent; color:var(--text-muted); font-family:var(--font-sans); font-size:.73rem; font-weight:600; cursor:pointer; transition:all .15s; white-space:nowrap; }
-.sort-btn:hover { color:var(--text-secondary); border-color:rgba(255,255,255,.12); }
-.sort-btn.active { color:var(--accent); border-color:rgba(240,160,48,.25); background:var(--accent-soft); }
+.sort-btn,.tb-icon { display:inline-flex; align-items:center; gap:.2rem; padding:.28rem .55rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:transparent; color:var(--text-muted); font-family:var(--font-sans); font-size:.73rem; font-weight:600; cursor:pointer; transition:all .15s; white-space:nowrap; }
+.sort-btn:hover,.tb-icon:hover { color:var(--text-secondary); border-color:rgba(255,255,255,.12); }
+.sort-btn.active,.tb-icon.active { color:var(--accent); border-color:rgba(240,160,48,.25); background:var(--accent-soft); }
 .sort-btn svg { transition:transform .15s; }
 .sort-btn.desc svg { transform:rotate(180deg); }
 .search-box { padding:.3rem .65rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.03); color:var(--text-primary); font-family:var(--font-sans); font-size:.8rem; outline:none; transition:border-color .15s; width:175px; }
@@ -340,6 +350,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .btn-zip { display:inline-flex; align-items:center; gap:.35rem; padding:.38rem .85rem; border:none; border-radius:var(--radius-sm); background:var(--accent); color:var(--bg-deep); font-family:var(--font-sans); font-size:.82rem; font-weight:700; cursor:pointer; text-decoration:none; transition:all .15s; white-space:nowrap; }
 .btn-zip:hover { background:#ffc060; box-shadow:0 2px 12px rgba(240,160,48,.25); }
 .btn-zip:active { transform:scale(.97); }
+/* ── List view ── */
 .panel { background:rgba(26,29,40,.65); border:1px solid rgba(255,255,255,.07); border-radius:var(--radius-lg); backdrop-filter:blur(12px); overflow:hidden; }
 .row { display:flex; align-items:center; min-height:48px; padding:.5rem 1rem; border-bottom:1px solid var(--border); transition:background .12s; text-decoration:none; color:var(--text-primary); animation:fadeUp .22s ease both; }
 .row:last-child { border-bottom:none; }
@@ -363,8 +374,60 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .empty { text-align:center; padding:3rem 1rem; color:var(--text-muted); }
 .empty-icon { font-size:2rem; display:block; margin-bottom:.6rem; opacity:.35; }
 .row.hidden { display:none; }
-@media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row{min-height:44px}}
-@media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-box{flex:1;width:auto;min-width:80px}.toolbar-info{display:none}}
+/* ── Grid view ── */
+.grid-wrap { display:grid; grid-template-columns:repeat(auto-fill,minmax(var(--card-size,180px),1fr)); gap:.75rem; margin-bottom:1rem; }
+.grid-wrap.hidden { display:none; }
+.grid-card { position:relative; aspect-ratio:2/3; border-radius:var(--radius-md); overflow:hidden; cursor:pointer; text-decoration:none; color:var(--text-primary); transition:transform .18s,box-shadow .18s; animation:fadeScale .25s ease both; border:1px solid rgba(255,255,255,.06); }
+.grid-card:hover { transform:translateY(-4px) scale(1.02); box-shadow:0 12px 32px rgba(0,0,0,.5); border-color:rgba(240,160,48,.2); }
+.grid-card-bg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background-size:cover; background-position:center; transition:background-image .3s; }
+.grid-card.has-poster .grid-card-letter { display:none; }
+.grid-card.has-poster .grid-card-icon { display:none; }
+.grid-card-overview { position:absolute; inset:0; background:rgba(6,8,14,.92); backdrop-filter:blur(8px); padding:.6rem; display:flex; flex-direction:column; justify-content:flex-end; opacity:0; transition:opacity .2s; pointer-events:none; }
+.grid-card:hover .grid-card-overview { opacity:1; }
+.grid-card-overview-title { font-size:.85rem; font-weight:700; color:var(--accent); margin-bottom:.35rem; line-height:1.25; }
+.grid-card-overview-text { font-size:.74rem; color:#ccc; line-height:1.5; display:-webkit-box; -webkit-line-clamp:8; -webkit-box-orient:vertical; overflow:hidden; }
+.grid-card-toggle { position:absolute; top:.5rem; left:.5rem; width:22px; height:22px; border-radius:50%; background:rgba(0,0,0,.5); border:1px solid rgba(255,255,255,.1); display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition:opacity .15s; z-index:5; color:rgba(255,255,255,.5); }
+.grid-card:hover .grid-card-toggle { opacity:.6; }
+.grid-card-toggle:hover { opacity:1 !important; background:rgba(0,0,0,.7); border-color:rgba(255,255,255,.3); color:#fff; }
+.grid-card-ctx { position:absolute; top:.5rem; right:.5rem; width:26px; height:26px; border-radius:50%; background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.15); display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition:opacity .15s; z-index:5; color:rgba(255,255,255,.8); }
+.grid-card:hover .grid-card-ctx { opacity:1; }
+.grid-card-ctx:hover { background:rgba(0,0,0,.8); border-color:var(--accent); color:var(--accent); }
+/* Poster picker modal */
+.poster-modal { position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px); animation:fadeUp .15s ease; }
+.poster-modal-card { background:var(--bg-surface); border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); padding:1.5rem; max-width:720px; width:94%; max-height:85vh; overflow-y:auto; }
+.poster-modal h3 { font-size:1rem; font-weight:700; margin-bottom:.6rem; color:var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.poster-modal-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.8rem; }
+.poster-modal-item { position:relative; aspect-ratio:2/3; border-radius:var(--radius-sm); overflow:hidden; cursor:pointer; border:2px solid transparent; transition:border-color .15s,transform .12s; }
+.poster-modal-item:hover { border-color:var(--accent); transform:scale(1.03); }
+.poster-modal-item img { width:100%; height:100%; object-fit:cover; }
+.poster-modal-info { position:absolute; bottom:0; left:0; right:0; padding:.4rem .5rem; background:rgba(0,0,0,.72); backdrop-filter:blur(4px); text-align:center; font-size:.78rem; color:#fff; font-weight:700; line-height:1.3; text-shadow:0 1px 2px rgba(0,0,0,.5); overflow-wrap:break-word; word-break:break-word; text-wrap:balance; }
+.poster-modal-close { margin-top:1rem; padding:.5rem .8rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:transparent; color:var(--text-secondary); font-family:var(--font-sans); font-size:.82rem; cursor:pointer; width:100%; }
+.poster-modal-close:hover { background:rgba(255,255,255,.05); color:var(--text-primary); }
+.grid-card-letter { font-family:var(--font-sans); font-weight:700; font-size:3rem; color:rgba(255,255,255,.18); text-transform:uppercase; user-select:none; }
+.grid-card-icon { position:absolute; top:.7rem; right:.7rem; opacity:.25; }
+.grid-card-label { position:absolute; bottom:0; left:0; right:0; height:3.2rem; display:flex; align-items:center; justify-content:center; padding:0 .5rem; background:rgba(0,0,0,.72); backdrop-filter:blur(4px); text-align:center; }
+.grid-card-title { font-size:.85rem; font-weight:700; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; text-shadow:0 1px 2px rgba(0,0,0,.5); overflow-wrap:break-word; word-break:break-word; hyphens:auto; text-wrap:balance; }
+.grid-card:nth-child(1){animation-delay:.03s}.grid-card:nth-child(2){animation-delay:.06s}.grid-card:nth-child(3){animation-delay:.09s}.grid-card:nth-child(4){animation-delay:.12s}.grid-card:nth-child(5){animation-delay:.15s}.grid-card:nth-child(6){animation-delay:.18s}.grid-card:nth-child(n+7){animation-delay:.21s}
+.grid-card.hidden { display:none; }
+/* ── Settings dropdown ── */
+.gear-wrap { position:relative; }
+.gear-panel { display:none; position:absolute; top:calc(100% + 6px); right:0; z-index:50; min-width:260px; background:rgba(22,25,35,.96); border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-md); backdrop-filter:blur(16px); box-shadow:0 16px 48px rgba(0,0,0,.6); padding:.5rem 0; animation:fadeUp .15s ease; }
+.gear-panel.open { display:block; }
+.gear-section { padding:.55rem .9rem; }
+.gear-section + .gear-section { border-top:1px solid rgba(255,255,255,.05); }
+.gear-label { font-size:.68rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); margin-bottom:.4rem; }
+.gear-row { display:flex; align-items:center; gap:.4rem; margin-bottom:.3rem; }
+.gear-row:last-child { margin-bottom:0; }
+.gear-toggle { display:flex; gap:0; border:1px solid var(--border); border-radius:var(--radius-sm); overflow:hidden; }
+.gear-opt { padding:.3rem .65rem; font-family:var(--font-sans); font-size:.75rem; font-weight:600; background:transparent; color:var(--text-muted); border:none; cursor:pointer; transition:all .12s; white-space:nowrap; }
+.gear-opt:not(:last-child) { border-right:1px solid var(--border); }
+.gear-opt:hover { color:var(--text-secondary); }
+.gear-opt.active { background:var(--accent-soft); color:var(--accent); }
+.gear-select { flex:1; padding:.28rem .5rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.04); color:var(--text-primary); font-family:var(--font-sans); font-size:.78rem; outline:none; cursor:pointer; -webkit-appearance:none; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right .4rem center; padding-right:1.4rem; }
+.gear-select:focus { border-color:var(--accent); }
+.gear-select option { background:#1a1d28; color:#e8eaf0; }
+@media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row{min-height:44px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem}}
+@media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-box{flex:1;width:auto;min-width:80px}.toolbar-info{display:none}.gear-panel{right:-1rem;min-width:240px}.grid-wrap{grid-template-columns:repeat(2,1fr)}}
     </style>
 </head>
 <body>
@@ -397,20 +460,91 @@ HTML;
             echo '</div>';
         }
 
-        // Recherche (seulement si 10+ fichiers)
-        if ($totalFiles >= 10) {
+        // Recherche (seulement si 10+ éléments)
+        if ($totalItems >= 10) {
             echo '<input class="search-box" type="text" placeholder="Rechercher..." oninput="filtrer(this.value)">';
         }
 
+        // Toggle grille/liste (si dossiers présents)
+        if ($hasFolders) {
+            echo '<button class="tb-icon" id="view-toggle" onclick="toggleView()" title="Basculer grille / liste">';
+            echo '<svg id="view-icon-grid" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
+            echo '</button>';
+        }
+
+        // Settings gear
+        echo '<div class="gear-wrap">';
+        echo '<button class="tb-icon" id="gear-btn" onclick="toggleGear(event)" title="Préférences">';
+        echo '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 01-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>';
+        echo '</button>';
+        echo '<div class="gear-panel" id="gear-panel">';
+        // Comportement clic
+        echo '<div class="gear-section"><div class="gear-label">Au clic sur une vidéo</div><div class="gear-row"><div class="gear-toggle" id="gt-click">';
+        echo '<button class="gear-opt active" data-val="play" onclick="setPref(\'click\',\'play\',this)">Lire</button>';
+        echo '<button class="gear-opt" data-val="download" onclick="setPref(\'click\',\'download\',this)">Télécharger</button>';
+        echo '</div></div></div>';
+        // Qualité par défaut
+        echo '<div class="gear-section"><div class="gear-label">Qualité par défaut</div><div class="gear-row">';
+        echo '<select class="gear-select" id="gs-quality" onchange="lsSet(\'pref_quality\',this.value)">';
+        echo '<option value="480">480p</option><option value="720" selected>720p</option><option value="1080">1080p</option>';
+        echo '</select></div></div>';
+        // Langue audio
+        echo '<div class="gear-section"><div class="gear-label">Audio préféré</div><div class="gear-row">';
+        echo '<select class="gear-select" id="gs-audio" onchange="lsSet(\'pref_audio\',this.value)">';
+        echo '<option value="">Auto</option><option value="fra">Français</option><option value="eng">English</option>';
+        echo '</select></div></div>';
+        // Sous-titres
+        echo '<div class="gear-section"><div class="gear-label">Sous-titres préférés</div><div class="gear-row">';
+        echo '<select class="gear-select" id="gs-subs" onchange="lsSet(\'pref_subs\',this.value)">';
+        echo '<option value="off">Désactivés</option><option value="fra">Français</option><option value="eng">English</option>';
+        echo '</select></div></div>';
+        // Taille des cartes
+        echo '<div class="gear-section"><div class="gear-label">Taille des cartes</div><div class="gear-row"><div class="gear-toggle" id="gt-cardsize">';
+        echo '<button class="gear-opt" data-val="130" onclick="setCardSize(\'130\',this)">S</button>';
+        echo '<button class="gear-opt active" data-val="180" onclick="setCardSize(\'180\',this)">M</button>';
+        echo '<button class="gear-opt" data-val="240" onclick="setCardSize(\'240\',this)">L</button>';
+        echo '</div></div></div>';
+        echo '</div></div>'; // gear-panel, gear-wrap
+
         echo '<a class="btn-zip" href="' . $zipUrl . '">';
         echo '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
-        echo ' Tout télécharger (.zip)';
+        echo ' ZIP';
         echo '</a>';
         echo '</div>';
     }
 
-    echo '<div class="panel">';
+    // ── Grid view (dossiers) ──
+    if ($hasFolders) {
+        echo '<div class="grid-wrap hidden" id="grid-folders">';
+        // Parent (..) en grille
+        if ($subPath) {
+            $parentPath = dirname($subPath);
+            $parentUrl = $parentPath === '.' ? $baseUrl : $baseUrl . '?p=' . rawurlencode($parentPath);
+            echo '<a class="grid-card" href="' . $parentUrl . '" style="background:rgba(255,255,255,.03)" data-type="folder" data-name="..">';
+            echo '<div class="grid-card-bg"><div class="grid-card-letter" style="font-size:2rem">..</div></div>';
+            echo '<div class="grid-card-label"><div class="grid-card-title">Retour</div></div>';
+            echo '</a>';
+        }
+        foreach ($folders as $idx => $folder) {
+            $folderHtml = htmlspecialchars($folder['name']);
+            $folderPath = $subPath ? $subPath . '/' . $folder['name'] : $folder['name'];
+            $folderUrl = $baseUrl . '?p=' . rawurlencode($folderPath);
+            $color = $cardColors[$idx % count($cardColors)];
+            $letter = mb_strtoupper(mb_substr($folder['name'], 0, 1));
+            echo '<a class="grid-card" href="' . $folderUrl . '" style="background:' . $color . '" data-type="folder" data-name="' . $folderHtml . '" data-folder="' . $folderHtml . '">';
+            echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
+            echo '<div class="grid-card-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" opacity=".4"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg></div>';
+            $escapedName = htmlspecialchars(addcslashes($folder['name'], "'\\"), ENT_QUOTES);
+            echo '<div class="grid-card-toggle" onclick="event.preventDefault();event.stopPropagation();togglePoster(this,\'' . $escapedName . '\')" title="Afficher/masquer l\'image"><svg class="eye-on" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></div>';
+            echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();openPosterPicker(\'' . $escapedName . '\')" title="Changer le poster"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
+            echo '<div class="grid-card-label"><div class="grid-card-title">' . $folderHtml . '</div></div>';
+            echo '</a>';
+        }
+        echo '</div>';
+    }
 
+    // ── List view (panel) ──
+    echo '<div class="panel" id="list-panel">';
 
     // Lien parent (..)
     if ($subPath) {
@@ -427,7 +561,7 @@ HTML;
         $folderHtml = htmlspecialchars($folder['name']);
         $folderPath = $subPath ? $subPath . '/' . $folder['name'] : $folder['name'];
         $folderUrl = $baseUrl . '?p=' . rawurlencode($folderPath);
-        echo '<a class="row" href="' . $folderUrl . '" data-type="folder" data-name="' . $folderHtml . '">';
+        echo '<a class="row row-folder" href="' . $folderUrl . '" data-type="folder" data-name="' . $folderHtml . '">';
         echo '<div class="row-icon folder"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:var(--accent)"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg></div>';
         echo '<span class="row-name is-folder">' . $folderHtml . '</span>';
         echo '</a>';
@@ -438,6 +572,7 @@ HTML;
         $fileHtml = htmlspecialchars($file['name']);
         $filePath = $subPath ? $subPath . '/' . $file['name'] : $file['name'];
         $fileUrl = $baseUrl . '?p=' . rawurlencode($filePath);
+        $playUrl = $baseUrl . '?p=' . rawurlencode($filePath) . '&play=1';
         $size = format_taille($file['size']);
         $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
         $mediaType = get_media_type($file['name']);
@@ -457,13 +592,14 @@ HTML;
             $iconClass = 'file';
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
         }
-        echo '<a class="row" href="' . $fileUrl . '" title="' . $fileHtml . '" data-type="file" data-name="' . $fileHtml . '" data-size="' . $file['size'] . '">';
+        // data-play stocke l'URL play pour le JS de clic configurable
+        $dataPlay = $mediaType ? ' data-play="' . htmlspecialchars($playUrl, ENT_QUOTES) . '"' : '';
+        echo '<a class="row" href="' . $fileUrl . '" title="' . $fileHtml . '" data-type="file" data-name="' . $fileHtml . '" data-size="' . $file['size'] . '"' . $dataPlay . '>';
         echo '<div class="row-icon ' . $iconClass . '">' . $iconSvg . '</div>';
         echo '<span class="row-name">' . $fileHtml . '</span>';
         if ($ext) echo '<span class="row-ext">' . htmlspecialchars($ext) . '</span>';
         echo '<span class="row-meta">' . $size . '</span>';
         if ($mediaType) {
-            $playUrl = $baseUrl . '?p=' . rawurlencode($filePath) . '&play=1';
             echo '<span class="btn-play" onclick="event.preventDefault();event.stopPropagation();location.href=\'' . htmlspecialchars($playUrl, ENT_QUOTES) . '\'" title="Lire"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>';
         }
         echo '</a>';
@@ -473,17 +609,110 @@ HTML;
         echo '<div class="empty"><span class="empty-icon">&#x1F4ED;</span>Ce dossier est vide</div>';
     }
 
+    // Inject baseUrl for JS
+    $subPathJs = $subPath ? 'p=' . rawurlencode($subPath) . '&' : '';
+    echo '</div></div>';
+    echo '<script>var BASE_URL=' . json_encode($baseUrl) . ',SUB_PATH=' . json_encode($subPathJs) . ';</script>';
     echo <<<'HTML'
-    </div>
-</div>
 <script>
+// ── localStorage helpers ──
+function lsGet(k,d){try{var v=localStorage.getItem(k);return v!==null?v:d}catch(e){return d}}
+function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+
+// ── Preferences init ──
+(function(){
+    var q=lsGet('pref_quality','720'), a=lsGet('pref_audio',''), s=lsGet('pref_subs','off'), c=lsGet('pref_click','play');
+    var el;
+    el=document.getElementById('gs-quality'); if(el)el.value=q;
+    el=document.getElementById('gs-audio');   if(el)el.value=a;
+    el=document.getElementById('gs-subs');    if(el)el.value=s;
+    // Click toggle
+    document.querySelectorAll('#gt-click .gear-opt').forEach(function(b){
+        b.classList.toggle('active',b.dataset.val===c);
+    });
+    // Card size
+    var cs=lsGet('pref_cardsize','180');
+    document.querySelectorAll('#gt-cardsize .gear-opt').forEach(function(b){ b.classList.toggle('active',b.dataset.val===cs); });
+    var gw=document.getElementById('grid-folders');
+    if(gw) gw.style.setProperty('--card-size',cs+'px');
+    // View mode
+    var vm=lsGet('pref_view','list');
+    if(vm==='grid') applyView('grid');
+    // Click behavior: redirect video file rows
+    if(c==='play'){
+        document.querySelectorAll('.row[data-play]').forEach(function(r){
+            r.href=r.dataset.play;
+        });
+    }
+})();
+
+// ── Settings gear ──
+function toggleGear(e){
+    e.stopPropagation();
+    var p=document.getElementById('gear-panel');
+    p.classList.toggle('open');
+    document.getElementById('gear-btn').classList.toggle('active',p.classList.contains('open'));
+}
+document.addEventListener('click',function(e){
+    var p=document.getElementById('gear-panel');
+    if(p && !e.target.closest('.gear-wrap')) { p.classList.remove('open'); document.getElementById('gear-btn').classList.remove('active'); }
+});
+function setPref(key,val,btn){
+    lsSet('pref_'+key,val);
+    btn.parentNode.querySelectorAll('.gear-opt').forEach(function(b){b.classList.remove('active')});
+    btn.classList.add('active');
+    if(key==='click'){
+        document.querySelectorAll('.row[data-play]').forEach(function(r){
+            r.href = val==='play' ? r.dataset.play : r.href.split('&play=')[0].split('?play=')[0];
+        });
+        // Restore original download URLs when switching to download
+        if(val==='download'){
+            document.querySelectorAll('.row[data-play]').forEach(function(r){
+                var name=r.dataset.name;
+                // Rebuild download URL from data attributes
+                r.href=r.href.replace(/[&?]play=1/,'');
+            });
+        }
+    }
+}
+
+// ── Grid/List toggle ──
+function toggleView(){
+    var grid=document.getElementById('grid-folders');
+    if(!grid) return;
+    var isGrid=!grid.classList.contains('hidden');
+    applyView(isGrid?'list':'grid');
+    lsSet('pref_view',isGrid?'list':'grid');
+}
+function applyView(mode){
+    var grid=document.getElementById('grid-folders');
+    var panel=document.getElementById('list-panel');
+    var toggle=document.getElementById('view-toggle');
+    if(!grid) return;
+    if(mode==='grid'){
+        grid.classList.remove('hidden');
+        // Hide folder rows in list, keep files
+        panel.querySelectorAll('.row-folder').forEach(function(r){r.style.display='none'});
+        // Hide the ".." row in list if grid has one
+        var upRow=panel.querySelector('.row:not([data-type])');
+        if(upRow) upRow.style.display='none';
+        if(toggle) toggle.classList.add('active');
+    } else {
+        grid.classList.add('hidden');
+        panel.querySelectorAll('.row-folder').forEach(function(r){r.style.display=''});
+        var upRow=panel.querySelector('.row:not([data-type])');
+        if(upRow) upRow.style.display='';
+        if(toggle) toggle.classList.remove('active');
+    }
+}
+
+// ── Sort & filter ──
 function tri(btn, key) {
     document.querySelectorAll('.sort-btn').forEach(b => b.classList.remove('active','desc'));
-    const panel = document.querySelector('.panel');
+    const panel = document.getElementById('list-panel');
     const rows = [...panel.querySelectorAll('.row[data-type]')];
     const folders = rows.filter(r => r.dataset.type === 'folder');
     const files = rows.filter(r => r.dataset.type === 'file');
-    // Determine direction: click same = toggle, click other = asc
     const prev = btn.dataset.dir || 'asc';
     const dir = btn.dataset.lastKey === key ? (prev === 'asc' ? 'desc' : 'asc') : 'asc';
     btn.dataset.dir = dir;
@@ -495,7 +724,6 @@ function tri(btn, key) {
         if (key === 'size') return mul * (parseInt(a.dataset.size || 0) - parseInt(b.dataset.size || 0));
         return mul * a.dataset.name.localeCompare(b.dataset.name, 'fr', {numeric: true, sensitivity: 'base'});
     });
-    // Re-insert: up link first (if exists), then folders, then sorted files
     const upLink = panel.querySelector('.row:not([data-type])');
     if (upLink) panel.appendChild(upLink);
     folders.forEach(f => panel.appendChild(f));
@@ -509,6 +737,235 @@ function filtrer(q) {
     document.querySelectorAll('.row[data-type="folder"]').forEach(r => {
         r.classList.toggle('hidden', q && !r.dataset.name.toLowerCase().includes(q));
     });
+    // Also filter grid cards
+    document.querySelectorAll('.grid-card[data-type="folder"]').forEach(r => {
+        r.classList.toggle('hidden', q && !r.dataset.name.toLowerCase().includes(q));
+    });
+}
+
+// ── Card size ──
+function setCardSize(val,btn){
+    lsSet('pref_cardsize',val);
+    btn.parentNode.querySelectorAll('.gear-opt').forEach(function(b){b.classList.remove('active')});
+    btn.classList.add('active');
+    var gw=document.getElementById('grid-folders');
+    if(gw) gw.style.setProperty('--card-size',val+'px');
+}
+
+// ── Toggle poster on/off ──
+function togglePoster(btn, folderName) {
+    var card = btn.closest('.grid-card');
+    if (!card) return;
+    var bg = card.querySelector('.grid-card-bg');
+    if (!bg) return;
+    function updateEyeIcon(b, hasPoster) {
+        var on = b.querySelector('.eye-on'), off = b.querySelector('.eye-off');
+        if (on) on.style.display = hasPoster ? '' : 'none';
+        if (off) off.style.display = hasPoster ? 'none' : '';
+    }
+    if (card.classList.contains('has-poster')) {
+        bg.style.backgroundImage = '';
+        card.classList.remove('has-poster');
+        var ov = card.querySelector('.grid-card-overview');
+        if (ov) ov.remove();
+        updateEyeIcon(btn, false);
+        selectPoster(folderName, '__none__', 0, '', '');
+    } else {
+        // Supprimer le __none__ en base puis re-fetch TMDB
+        var url = BASE_URL + '?' + SUB_PATH + 'tmdb_set=1';
+        fetch(url, {
+            method: 'POST', credentials: 'same-origin',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({folder: folderName, poster_url: null, tmdb_id: 0, title: '', overview: ''})
+        }).then(function(){
+            // Re-fetch les posters (TMDB va re-chercher celui-ci)
+            return fetch(BASE_URL + '?' + SUB_PATH + 'posters=1', {credentials:'same-origin'});
+        }).then(function(r){ return r.json(); }).then(function(d){
+            if (!d.posters || !d.posters[folderName]) return;
+            var info = d.posters[folderName];
+            var poster = typeof info === 'string' ? info : info.poster;
+            var overview = typeof info === 'object' ? info.overview : null;
+            if (bg) { bg.style.backgroundImage = 'url(' + poster + ')'; }
+            card.classList.add('has-poster');
+            updateEyeIcon(btn, true);
+            if (overview) {
+                var ov = document.createElement('div');
+                ov.className = 'grid-card-overview';
+                var ovT = document.createElement('div'); ovT.className = 'grid-card-overview-title'; ovT.textContent = folderName;
+                var ovX = document.createElement('div'); ovX.className = 'grid-card-overview-text'; ovX.textContent = overview;
+                ov.appendChild(ovT); ov.appendChild(ovX); card.appendChild(ov);
+            }
+        }).catch(function(){});
+    }
+}
+
+// ── TMDB poster fetching ──
+(function(){
+    var cards = document.querySelectorAll('.grid-card[data-folder]');
+    if (!cards.length) return;
+    function fetchPosters() {
+        var url = BASE_URL + '?' + SUB_PATH + 'posters=1';
+        fetch(url, {credentials:'same-origin'})
+            .then(function(r){ return r.json(); })
+            .then(function(d){
+                if (!d.posters) return;
+                Object.keys(d.posters).forEach(function(name){
+                    var info = d.posters[name];
+                    var card = document.querySelector('.grid-card[data-folder="'+CSS.escape(name)+'"]');
+                    if (!card) return;
+                    // Dossier masqué → œil barré
+                    if (info.hidden) {
+                        var toggleBtn = card.querySelector('.grid-card-toggle');
+                        if (toggleBtn) {
+                            var on = toggleBtn.querySelector('.eye-on'), off = toggleBtn.querySelector('.eye-off');
+                            if (on) on.style.display = 'none';
+                            if (off) off.style.display = '';
+                        }
+                        return;
+                    }
+                    var poster = typeof info === 'string' ? info : info.poster;
+                    var overview = typeof info === 'object' ? info.overview : null;
+                    var bg = card.querySelector('.grid-card-bg');
+                    if (bg) {
+                        bg.style.backgroundImage = 'url(' + poster + ')';
+                        card.classList.add('has-poster');
+                    }
+                    // Ajouter l'overlay résumé au hover
+                    if (overview && !card.querySelector('.grid-card-overview')) {
+                        var ov = document.createElement('div');
+                        ov.className = 'grid-card-overview';
+                        var ovTitle = document.createElement('div');
+                        ovTitle.className = 'grid-card-overview-title';
+                        ovTitle.textContent = name;
+                        var ovText = document.createElement('div');
+                        ovText.className = 'grid-card-overview-text';
+                        ovText.textContent = overview;
+                        ov.appendChild(ovTitle);
+                        ov.appendChild(ovText);
+                        card.appendChild(ov);
+                    }
+                });
+                if (d.remaining > 0) setTimeout(fetchPosters, 500);
+            })
+            .catch(function(){});
+    }
+    fetchPosters();
+})();
+
+// ── Poster picker modal ──
+function openPosterPicker(folderName) {
+    var old = document.querySelector('.poster-modal');
+    if (old) old.remove();
+    var modal = document.createElement('div');
+    modal.className = 'poster-modal';
+    var card = document.createElement('div');
+    card.className = 'poster-modal-card';
+    var h3 = document.createElement('h3');
+    h3.textContent = folderName;
+    card.appendChild(h3);
+    // Search bar
+    var searchRow = document.createElement('div');
+    searchRow.style.cssText = 'display:flex;gap:.4rem;margin-bottom:.7rem';
+    var searchInput = document.createElement('input');
+    searchInput.className = 'search-box';
+    searchInput.style.cssText = 'flex:1;width:auto';
+    searchInput.placeholder = 'Rechercher sur TMDB...';
+    searchInput.value = folderName;
+    var searchBtn = document.createElement('button');
+    searchBtn.className = 'btn-zip';
+    searchBtn.style.cssText = 'padding:.3rem .7rem;font-size:.78rem';
+    searchBtn.textContent = 'Chercher';
+    searchRow.appendChild(searchInput);
+    searchRow.appendChild(searchBtn);
+    card.appendChild(searchRow);
+    var grid = document.createElement('div');
+    grid.className = 'poster-modal-grid';
+    grid.textContent = 'Recherche...';
+    card.appendChild(grid);
+    var btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:.5rem;margin-top:1rem';
+    var noneBtn = document.createElement('button');
+    noneBtn.className = 'poster-modal-close';
+    noneBtn.style.cssText = 'color:var(--red);border-color:rgba(239,83,80,.2)';
+    noneBtn.textContent = 'Pas d\'image';
+    noneBtn.onclick = function(){ selectPoster(folderName, '__none__', 0, '', ''); modal.remove(); };
+    var closeBtn = document.createElement('button');
+    closeBtn.className = 'poster-modal-close';
+    closeBtn.textContent = 'Fermer';
+    closeBtn.onclick = function(){ modal.remove(); };
+    btnRow.appendChild(noneBtn);
+    btnRow.appendChild(closeBtn);
+    card.appendChild(btnRow);
+    modal.appendChild(card);
+    modal.addEventListener('click', function(e){ if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+    searchInput.focus();
+    searchInput.select();
+    function doSearch(query) {
+        grid.textContent = 'Recherche...';
+        var url = BASE_URL + '?' + SUB_PATH + 'tmdb_search=' + encodeURIComponent(query);
+        fetch(url, {credentials:'same-origin'})
+            .then(function(r){ return r.json(); })
+            .then(function(results){ renderResults(results, folderName, modal, grid); })
+            .catch(function(){ grid.textContent = 'Erreur de recherche'; });
+    }
+    searchBtn.onclick = function(){ doSearch(searchInput.value); };
+    searchInput.addEventListener('keydown', function(e){ if (e.key === 'Enter') doSearch(searchInput.value); });
+    doSearch(folderName);
+}
+function renderResults(results, folderName, modal, grid) {
+    grid.textContent = '';
+    if (!results.length) { grid.textContent = 'Aucun résultat. Essayez un autre nom.'; return; }
+    results.forEach(function(r){
+        var item = document.createElement('div');
+        item.className = 'poster-modal-item';
+        item.onclick = function(){ selectPoster(folderName, r.poster_w300, r.id, r.title, r.overview); modal.remove(); };
+        var img = document.createElement('img');
+        img.src = r.poster;
+        img.alt = r.title;
+        img.loading = 'lazy';
+        item.appendChild(img);
+        var info = document.createElement('div');
+        info.className = 'poster-modal-info';
+        info.textContent = r.title + (r.year ? ' (' + r.year + ')' : '');
+        item.appendChild(info);
+        grid.appendChild(item);
+    });
+}
+function selectPoster(folderName, posterUrl, tmdbId, title, overview) {
+    var url = BASE_URL + '?' + SUB_PATH + 'tmdb_set=1';
+    fetch(url, {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({folder: folderName, poster_url: posterUrl, tmdb_id: tmdbId, title: title, overview: overview || ''})
+    }).catch(function(){});
+    var card = document.querySelector('.grid-card[data-folder="'+CSS.escape(folderName)+'"]');
+    if (!card) return;
+    var bg = card.querySelector('.grid-card-bg');
+    // Supprimer l'ancien overlay
+    var oldOv = card.querySelector('.grid-card-overview');
+    if (oldOv) oldOv.remove();
+    if (posterUrl === '__none__') {
+        if (bg) { bg.style.backgroundImage = ''; }
+        card.classList.remove('has-poster');
+    } else {
+        if (bg) { bg.style.backgroundImage = 'url(' + posterUrl + ')'; }
+        card.classList.add('has-poster');
+        if (overview) {
+            var ov = document.createElement('div');
+            ov.className = 'grid-card-overview';
+            var ovTitle = document.createElement('div');
+            ovTitle.className = 'grid-card-overview-title';
+            ovTitle.textContent = title || folderName;
+            var ovText = document.createElement('div');
+            ovText.className = 'grid-card-overview-text';
+            ovText.textContent = overview;
+            ov.appendChild(ovTitle);
+            ov.appendChild(ovText);
+            card.appendChild(ov);
+        }
+    }
 }
 </script>
 </body>

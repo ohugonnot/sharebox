@@ -87,6 +87,29 @@ function get_db(): PDO {
         $db->query('PRAGMA user_version = 1');
     }
 
+    if ($version < 2) {
+        // v2 : table pour les posters TMDB (cache par chemin de dossier)
+        $db->query("
+            CREATE TABLE IF NOT EXISTS folder_posters (
+                path TEXT NOT NULL PRIMARY KEY,
+                poster_url TEXT,
+                tmdb_id INTEGER,
+                title TEXT,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        ");
+        $db->query('PRAGMA user_version = 2');
+    }
+
+    if ($version < 3) {
+        // v3 : ajouter overview (résumé TMDB) à folder_posters
+        $cols = array_column($db->query("PRAGMA table_info(folder_posters)")->fetchAll(), 'name');
+        if (!in_array('overview', $cols, true)) {
+            $db->query("ALTER TABLE folder_posters ADD COLUMN overview TEXT");
+        }
+        $db->query('PRAGMA user_version = 3');
+    }
+
     return $db;
 }
 

@@ -33,3 +33,8 @@ define('MAX_ZIP_SIZE', 10 * 1024 * 1024 * 1024);
 // rtorrent SCGI socket path. The torrents dashboard section is shown only if
 // this socket exists on disk. Comment out or set to '' to disable.
 // define('RTORRENT_SOCK', '/var/run/rtorrent/.rtorrent.sock');
+
+// TMDB API key for automatic poster fetching in grid view.
+// Get a free key at https://www.themoviedb.org/settings/api
+// Without this, grid view shows letter placeholders instead of posters.
+// define('TMDB_API_KEY', 'your_api_key_here');
