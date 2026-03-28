@@ -6,12 +6,15 @@ class SemaphoreTest extends TestCase
 {
     protected function setUp(): void
     {
-        $fp = @fopen('/tmp/sharebox_stream_slot_1.lock', 'w');
-        if ($fp === false) {
-            $this->markTestSkipped('Cannot create lock files in /tmp (sandbox/permissions)');
+        // Les lockfiles de prod appartiennent à www-data — vérifier qu'on peut les ouvrir en écriture
+        for ($i = 1; $i <= (defined('STREAM_MAX_CONCURRENT') ? STREAM_MAX_CONCURRENT : 3); $i++) {
+            $path = "/tmp/sharebox_stream_slot_{$i}.lock";
+            $fp = @fopen($path, 'w');
+            if ($fp === false) {
+                $this->markTestSkipped("Cannot open $path for writing (owned by www-data?)");
+            }
+            fclose($fp);
         }
-        fclose($fp);
-        @unlink('/tmp/sharebox_stream_slot_1.lock');
     }
 
     protected function tearDown(): void
