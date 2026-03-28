@@ -993,6 +993,28 @@ function openPosterPicker(folderName) {
     cleanName = cleanName.replace(/\b(x264|x265|h264|h265|HEVC|AVC|AAC|AC3|DTS|FLAC|10bit|HDR|HDR10|SDR|2160p|1080p|720p|480p|4K|UHD)\b.*/i, '');
     cleanName = cleanName.replace(/[-._]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
     searchInput.value = cleanName || folderName;
+    // Type toggle : Tous / Séries / Films
+    var typeRow = document.createElement('div');
+    typeRow.style.cssText = 'display:flex;gap:.3rem;margin-bottom:.5rem';
+    var currentType = 'multi';
+    ['multi', 'tv', 'movie'].forEach(function(t) {
+        var btn = document.createElement('button');
+        btn.className = 'poster-modal-close';
+        btn.style.cssText = 'flex:1;margin:0;padding:.25rem .4rem;font-size:.72rem;' + (t === 'multi' ? 'background:rgba(240,160,48,.15);border-color:var(--accent);color:var(--accent);' : '');
+        btn.textContent = t === 'multi' ? 'Tous' : (t === 'tv' ? 'S\u00e9ries' : 'Films');
+        btn.dataset.tmdbType = t;
+        btn.onclick = function() {
+            currentType = t;
+            typeRow.querySelectorAll('button').forEach(function(b) {
+                b.style.background = b.dataset.tmdbType === t ? 'rgba(240,160,48,.15)' : '';
+                b.style.borderColor = b.dataset.tmdbType === t ? 'var(--accent)' : '';
+                b.style.color = b.dataset.tmdbType === t ? 'var(--accent)' : '';
+            });
+            doSearch(searchInput.value);
+        };
+        typeRow.appendChild(btn);
+    });
+    card.appendChild(typeRow);
     var searchBtn = document.createElement('button');
     searchBtn.className = 'btn-zip';
     searchBtn.style.cssText = 'padding:.3rem .7rem;font-size:.78rem';
@@ -1025,7 +1047,7 @@ function openPosterPicker(folderName) {
     searchInput.select();
     function doSearch(query) {
         grid.textContent = 'Recherche...';
-        var url = BASE_URL + '?' + SUB_PATH + 'tmdb_search=' + encodeURIComponent(query);
+        var url = BASE_URL + '?' + SUB_PATH + 'tmdb_search=' + encodeURIComponent(query) + '&tmdb_type=' + currentType;
         fetch(url, {credentials:'same-origin'})
             .then(function(r){ return r.json(); })
             .then(function(results){ renderResults(results, folderName, modal, grid); })

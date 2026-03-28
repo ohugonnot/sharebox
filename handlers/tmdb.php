@@ -331,11 +331,13 @@ if (isset($_GET['posters'])) {
 // ── Search TMDB for a folder name (manual selection) ──
 if (isset($_GET['tmdb_search'])) {
     $searchName = trim($_GET['tmdb_search']);
-    poster_log('SEARCH manual | query="' . $searchName . '"');
     if (!$searchName) { echo '[]'; exit; }
 
+    $searchType = $_GET['tmdb_type'] ?? 'multi';
+    if (!in_array($searchType, ['multi', 'tv', 'movie'], true)) $searchType = 'multi';
+    poster_log('SEARCH manual | query="' . $searchName . '" type=' . $searchType);
     $query = urlencode($searchName);
-    $url = "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$query}&language=fr&page=1";
+    $url = "https://api.themoviedb.org/3/search/{$searchType}?api_key={$apiKey}&query={$query}&language=fr&page=1";
 
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
     $resp = @file_get_contents($url, false, $ctx);
@@ -349,7 +351,7 @@ if (isset($_GET['tmdb_search'])) {
                 'id' => $r['id'],
                 'title' => $r['title'] ?? $r['name'] ?? '?',
                 'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
-                'type' => $r['media_type'] ?? '?',
+                'type' => $r['media_type'] ?? ($searchType === 'multi' ? '?' : $searchType),
                 'poster' => 'https://image.tmdb.org/t/p/w200' . $r['poster_path'],
                 'poster_w300' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
                 'overview' => $r['overview'] ?? '',
