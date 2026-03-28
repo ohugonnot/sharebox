@@ -464,9 +464,11 @@ function searchTMDB(string $title, ?int $year, string $apiKey, $ctx): ?array
 
     foreach ($queries as $q) {
         $encoded = urlencode($q);
+        // multi d'abord (séries + films), puis tv, puis movie en fallback
         $urls = [
-            "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
             "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+            "https://api.themoviedb.org/3/search/tv?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+            "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
         ];
         foreach ($urls as $searchUrl) {
             $resp = @file_get_contents($searchUrl, false, $ctx);
