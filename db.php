@@ -26,7 +26,7 @@ function get_db(): PDO {
     // WAL : lectures concurrentes sans bloquer les écritures
     $statements = [
         'PRAGMA journal_mode=WAL',
-        'PRAGMA busy_timeout=3000',
+        'PRAGMA busy_timeout=10000',
     ];
     foreach ($statements as $s) $db->query($s);
 
