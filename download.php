@@ -296,6 +296,26 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
     $css = css_public();
     $hasFolders = count($folders) > 0;
 
+    // Check if this folder is tagged as "movies"
+    $db = get_db();
+    $currentFolderType = 'series';
+    $stmtType = $db->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
+    $stmtType->execute([':p' => $dirPath]);
+    $typeRow = $stmtType->fetch();
+    if ($typeRow && $typeRow['folder_type']) {
+        $currentFolderType = $typeRow['folder_type'];
+    }
+    $isMoviesFolder = ($currentFolderType === 'movies');
+    $videoFiles = [];
+    if ($isMoviesFolder) {
+        foreach ($files as $f) {
+            if (get_media_type($f['name']) === 'video') {
+                $videoFiles[] = $f;
+            }
+        }
+    }
+    $hasGridItems = $hasFolders || !empty($videoFiles);
+
     // Breadcrumb
     $breadcrumb = '<a href="' . $baseUrl . '">' . $shareNameHtml . '</a>';
     if ($subPath) {
@@ -471,7 +491,7 @@ HTML;
         }
 
         // Toggle grille/liste (si dossiers présents)
-        if ($hasFolders) {
+        if ($hasGridItems) {
             echo '<button class="tb-icon" id="view-toggle" onclick="toggleView()" title="Basculer grille / liste">';
             echo '<svg id="view-icon-grid" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>';
             echo '</button>';
@@ -519,7 +539,7 @@ HTML;
     }
 
     // ── Grid view (dossiers) ──
-    if ($hasFolders) {
+    if ($hasGridItems) {
         echo '<div class="grid-wrap hidden" id="grid-folders">';
         // Parent (..) en grille
         if ($subPath) {
@@ -531,7 +551,6 @@ HTML;
             echo '</a>';
         }
         // Look up folder types for all subfolders
-        $db = get_db();
         $folderTypes = [];
         if (!empty($folders)) {
             $paths = array_map(fn($f) => $dirPath . '/' . $f['name'], $folders);
@@ -562,6 +581,25 @@ HTML;
             }
             echo '<div class="grid-card-label"><div class="grid-card-title">' . $folderHtml . '</div></div>';
             echo '</a>';
+        }
+        // Video file cards (movies mode only)
+        if ($isMoviesFolder) {
+            foreach ($videoFiles as $idx => $vf) {
+                $vfHtml = htmlspecialchars($vf['name']);
+                $vfPath = $subPath ? $subPath . '/' . $vf['name'] : $vf['name'];
+                $vfPlayUrl = $baseUrl . '?p=' . rawurlencode($vfPath) . '&play=1';
+                $vfDownloadUrl = $baseUrl . '?p=' . rawurlencode($vfPath);
+                $color = $cardColors[($idx + count($folders)) % count($cardColors)];
+                $letter = mb_strtoupper(mb_substr($vf['name'], 0, 1));
+                $escapedVfName = htmlspecialchars(addcslashes($vf['name'], "'\\"), ENT_QUOTES);
+                echo '<a class="grid-card grid-card-file" href="' . $vfDownloadUrl . '" data-play="' . htmlspecialchars($vfPlayUrl, ENT_QUOTES) . '" style="background:' . $color . '" data-type="file" data-name="' . $vfHtml . '" data-folder="' . $vfHtml . '">';
+                echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
+                echo '<div class="grid-card-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg></div>';
+                echo '<div class="grid-card-toggle" onclick="event.preventDefault();event.stopPropagation();togglePoster(this,\'' . $escapedVfName . '\')" title="Afficher/masquer l\'image"><svg class="eye-on" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></div>';
+                echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();toggleCardMenu(this,\'' . $escapedVfName . '\')" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
+                echo '<div class="grid-card-label"><div class="grid-card-title">' . $vfHtml . '</div></div>';
+                echo '</a>';
+            }
         }
         echo '</div>';
     }
@@ -666,6 +704,9 @@ function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
         document.querySelectorAll('.row[data-play]').forEach(function(r){
             r.href=r.dataset.play;
         });
+        document.querySelectorAll('.grid-card-file[data-play]').forEach(function(r){
+            r.href=r.dataset.play;
+        });
     }
 })();
 
@@ -685,14 +726,11 @@ function setPref(key,val,btn){
     btn.parentNode.querySelectorAll('.gear-opt').forEach(function(b){b.classList.remove('active')});
     btn.classList.add('active');
     if(key==='click'){
-        document.querySelectorAll('.row[data-play]').forEach(function(r){
+        document.querySelectorAll('.row[data-play], .grid-card-file[data-play]').forEach(function(r){
             r.href = val==='play' ? r.dataset.play : r.href.split('&play=')[0].split('?play=')[0];
         });
-        // Restore original download URLs when switching to download
         if(val==='download'){
-            document.querySelectorAll('.row[data-play]').forEach(function(r){
-                var name=r.dataset.name;
-                // Rebuild download URL from data attributes
+            document.querySelectorAll('.row[data-play], .grid-card-file[data-play]').forEach(function(r){
                 r.href=r.href.replace(/[&?]play=1/,'');
             });
         }
@@ -714,15 +752,20 @@ function applyView(mode){
     if(!grid) return;
     if(mode==='grid'){
         grid.classList.remove('hidden');
-        // Hide folder rows in list, keep files
         panel.querySelectorAll('.row-folder').forEach(function(r){r.style.display='none'});
-        // Hide the ".." row in list if grid has one
+        document.querySelectorAll('.grid-card-file').forEach(function(gc){
+            var name = gc.dataset.name;
+            panel.querySelectorAll('.row[data-type="file"]').forEach(function(r){
+                if(r.dataset.name === name) r.style.display='none';
+            });
+        });
         var upRow=panel.querySelector('.row:not([data-type])');
         if(upRow) upRow.style.display='none';
         if(toggle) toggle.classList.add('active');
     } else {
         grid.classList.add('hidden');
         panel.querySelectorAll('.row-folder').forEach(function(r){r.style.display=''});
+        panel.querySelectorAll('.row[data-type="file"]').forEach(function(r){r.style.display=''});
         var upRow=panel.querySelector('.row:not([data-type])');
         if(upRow) upRow.style.display='';
         if(toggle) toggle.classList.remove('active');
@@ -762,6 +805,9 @@ function filtrer(q) {
     });
     // Also filter grid cards
     document.querySelectorAll('.grid-card[data-type="folder"]').forEach(r => {
+        r.classList.toggle('hidden', q && !r.dataset.name.toLowerCase().includes(q));
+    });
+    document.querySelectorAll('.grid-card[data-type="file"]').forEach(r => {
         r.classList.toggle('hidden', q && !r.dataset.name.toLowerCase().includes(q));
     });
 }
