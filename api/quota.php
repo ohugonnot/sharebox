@@ -4,6 +4,7 @@
  * Returns JSON with current month rx/tx in bytes, quota info.
  */
 require_once __DIR__ . '/../config.php';
+require_once __DIR__ . '/../functions.php';
 
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
@@ -17,12 +18,14 @@ exec('vnstat -m --json 2>/dev/null', $output, $ret);
 $json = implode('', $output);
 
 if ($ret !== 0 || $json === '') {
+    app_log('QUOTA error | vnstat unavailable ret=' . $ret);
     echo json_encode(['error' => 'vnstat unavailable']);
     exit;
 }
 
 $data = json_decode($json, true);
 if (!$data || empty($data['interfaces'])) {
+    app_log('QUOTA error | vnstat returned no interfaces');
     echo json_encode(['error' => 'no vnstat data']);
     exit;
 }

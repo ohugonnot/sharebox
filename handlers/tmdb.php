@@ -486,6 +486,7 @@ if (isset($_GET['folder_type_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
            ->execute([':p' => $fullPath, ':t' => $type]);
         echo json_encode(['success' => true, 'folder_type' => $type]);
     } catch (PDOException $e) {
+        poster_log('DB error TYPE set | ' . $folder . ' → ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => 'db error']);
     }
@@ -514,6 +515,7 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
            ->execute([':p' => $fullPath]);
         echo json_encode(['success' => true]);
     } catch (PDOException $e) {
+        poster_log('DB error AI recheck | ' . $name . ' → ' . $e->getMessage());
         http_response_code(500);
         echo json_encode(['error' => 'db error']);
     }
