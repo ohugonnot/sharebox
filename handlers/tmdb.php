@@ -235,16 +235,17 @@ if (isset($_GET['posters'])) {
     }
 
     // ── Trigger background worker if any NULLs need processing ──
+    // Lock global : un seul worker à la fois, traite TOUT (--cron = --pending + --verify)
     $stmtNull = $db->prepare("SELECT COUNT(*) FROM folder_posters WHERE path LIKE :prefix AND poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)");
     $stmtNull->execute([':prefix' => $resolvedPath . '/%']);
     $nullCount = (int)$stmtNull->fetchColumn();
     if ($nullCount > 0) {
-        $lockFile = sys_get_temp_dir() . '/sharebox_ai_' . md5($resolvedPath) . '.lock';
+        $lockFile = sys_get_temp_dir() . '/sharebox_ai_worker.lock';
         $lockFp = @fopen($lockFile, 'w');
         if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
-            poster_log('BG trigger | ' . $nullCount . ' NULL entries → launching --pending-path ' . basename($resolvedPath));
+            poster_log('BG trigger | ' . $nullCount . ' NULL entries in ' . basename($resolvedPath) . ' → launching --cron');
             $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
-            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath)
+            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --cron'
                 . ' >> /srv/share/data/ai-titles.log 2>&1 &';
             @pclose(@popen($cmd, 'r'));
         }
