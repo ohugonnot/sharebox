@@ -17,54 +17,95 @@ Share files and folders instantly with human-readable links. Stream videos direc
 
 ## Features
 
-- **Zero runtime dependencies** -- pure PHP, no framework. Composer used only for dev tooling (PHPUnit)
-- **SQLite database** -- auto-created on first use, zero configuration
+### Core
+
+- **Zero runtime dependencies** -- pure PHP 8.1+, no framework. Composer used only for dev tooling (PHPUnit, PHPStan)
+- **SQLite database** -- auto-created on first use, WAL mode, zero configuration
 - **Human-readable links** -- slugs generated from filenames (e.g., `/dl/batman-begins-2005-x7k2`)
-- **Password protection** -- optional, bcrypt-hashed
+- **Password protection** -- optional, bcrypt-hashed, brute-force rate-limited (per-token session counter + `sleep(1)`)
 - **Expiration** -- set links to auto-expire after a given duration
-- **System dashboard** -- real-time server metrics in the admin panel
-  - 4 metric cards: CPU (%), RAM, Disk (usage + I/O busy%), Network (upload/download MB/s)
-  - Color-coded status pills (green/orange/red) visible even when collapsed
-  - 7-day bandwidth history chart (Chart.js, gradient area fills, dark tooltips)
-  - Active torrent list via rtorrent SCGI XML-RPC (filtered ≥ 50 KB/s, sorted by speed)
-  - Adaptive polling: 10 s when expanded, 60 s pill-only when collapsed
-  - CPU & HDD temperature monitoring (coretemp + drivetemp kernel module)
-  - Accordion and graph state persisted in `localStorage`
-- **Video streaming** -- built-in player with ffmpeg transcoding
-  - **Probe-first stream selection** -- ffprobe before playback: H.264 → remux (near-zero CPU), HEVC/AV1 → transcode
-  - Smart remux for H.264: repackage to fMP4 without re-encoding video, audio transcoded to AAC
-  - Full transcode for HEVC/x265/AV1 and incompatible codecs (libx264 ultrafast)
-  - **PGS/VOBSUB burn-in** -- image subtitles (BluRay PGS, DVD VOBSUB) burned into the stream via `filter_complex`; `scale2ref` ensures correct positioning regardless of source resolution or anamorphic SAR
-  - Adaptive quality: 480p, 720p, 1080p
-  - Seek support in all stream modes (keyframe-accurate)
-  - Audio track selection
-  - Subtitle track selection: text tracks extracted to WebVTT (JS overlay), image tracks burned in
-  - ffprobe results cached in SQLite (instant reload, no re-probe on unchanged files)
-  - vmtouch page-cache warming for files < 2 GB (reduces I/O latency at stream start)
-  - A/V sync hardening: `aresample async=3000` (no `first_pts=0` in remux — preserves video PTS alignment), `-g 50`, `-thread_queue_size 512`, `-max_muxing_queue_size 1024`
-  - **Probe fallback proactive restart** -- if ffprobe resolves within 5 s of a native fallback start and the optimal mode differs (e.g. HEVC detected), stream restarts immediately in the correct mode instead of waiting for a browser error cascade
-  - **Stall watchdog with exponential backoff** -- retry timeout grows as `base × 2^n` (cap 2 min), differentiated by mode: remux 10 s, transcode 20 s, burn-in 30 s; stall counter resets after 30 s of uninterrupted playback
-  - **Resync button** -- one-click A/V resync at current position without reloading the page
-  - **Keyboard shortcuts** -- Space/K play-pause, ←/→ seek ±10 s (OSD feedback ⏪/⏩), ↑/↓ volume ±5%, F fullscreen, M mute, 0–9 jump to N×10%, `?` keyboard help overlay; Ctrl/Meta/Alt modifier bypasses all shortcuts so browser shortcuts (Ctrl+F, etc.) remain unaffected
-  - **Keyboard help overlay** -- press `?` (or Escape to close) to display all shortcuts; built with DOM APIs, no innerHTML
-  - **Instant tap response** -- single tap triggers play/pause immediately (no 250 ms delay); double-tap (< 300 ms) undoes the tap and toggles fullscreen
-  - **Playback speed** -- 0.5×, 0.75×, 1×, 1.5×, 2× cycle via speed button; persisted in localStorage
-  - **Volume slider** -- compact range input with orange fill; localStorage writes debounced 500 ms (slider and scroll wheel share the same timer); volume, mute, playback speed and per-file subtitle track selection persisted in `localStorage`
-  - **iOS fullscreen** -- `player.webkitEnterFullscreen()` on iOS Safari (requestFullscreen on `<div>` is unsupported on WebKit); fullscreen button icon synced via `webkitbeginfullscreen` / `webkitendfullscreen` events
-  - **Seekbar tooltip** -- hover preview shows timecode at cursor position
-  - Binary search subtitle cue lookup (O(log n) on seek, O(1) amortized forward)
-  - rAF throttle on `timeupdate` -- all seek-bar DOM writes go through `requestAnimationFrame`
-- **Folder sharing** -- browsable directory listing with per-file download
-- **ZIP download** -- download entire folders as a single ZIP archive
+- **Folder sharing** -- browsable directory listing with sort (name/size), search filter, per-file play button
+- **ZIP download** -- download entire folders as a single ZIP archive (size-capped via `MAX_ZIP_SIZE`)
 - **QR code generation** -- pure JavaScript, no external library
 - **Email sharing** -- send download links directly via email
-- **Dark theme UI** -- clean, modern, mobile-responsive interface
-- **Efficient file serving** -- nginx X-Accel-Redirect (sendfile) support
-- **Admin panel** -- protected by HTTP basic auth, manage all share links
-- **CSRF protection** -- token-based protection on all admin actions
-- **Security hardened** -- session fixation prevention, mail header injection protection, ZIP size limits
-- **PHPUnit test suite** -- 69 tests covering security, slug generation, file format utilities, dashboard APIs
-- **SQLite probe cache** -- `probe_cache` table stores ffprobe results keyed by path+mtime; `net_speed` table stores 1-min bandwidth samples with 7-day rolling purge
+- **Dark theme UI** -- clean, modern, mobile-responsive (DM Sans + JetBrains Mono)
+- **Efficient file serving** -- nginx X-Accel-Redirect (sendfile, zero-copy, supports resume)
+
+### Video Player
+
+Full-featured browser-based video player with on-the-fly transcoding -- no pre-processing required.
+
+- **Probe-first stream selection** -- ffprobe before playback: H.264/MP4 → native (zero CPU), H.264/MKV → remux, HEVC/AV1 → transcode. VP8/VP9 WebM detected and played natively when browser supports it
+- **3 stream modes:**
+  - **Native** -- browser plays the file directly via X-Accel-Redirect (MP4 H.264 + AAC)
+  - **Remux** -- repackage MKV → fragmented MP4 without re-encoding video, audio transcoded to AAC (near-zero CPU)
+  - **Transcode** -- full re-encode via libx264 ultrafast + AAC for HEVC/AV1/incompatible codecs
+- **HLS mode for iOS Safari** -- segmented TS output for devices that don't support fragmented MP4 progressive streaming; background ffmpeg with cleanup daemon
+- **PGS/VOBSUB burn-in** -- image subtitles (BluRay PGS, DVD VOBSUB) burned into the stream via `filter_complex`; `scale2ref` ensures correct positioning regardless of source resolution or anamorphic SAR
+- **Adaptive quality** -- 480p, 576p, 720p, 1080p (auto-filtered by source height)
+- **Seek support** -- all modes; coarse keyframe seek before `-i` for instant response on 4K HEVC; keyframe PTS correction via dedicated endpoint eliminates subtitle drift
+- **Audio track selection** -- switch tracks on the fly (triggers transcode restart)
+- **Subtitle tracks:**
+  - Text tracks (SRT/ASS/SSA) extracted to WebVTT with SQLite cache, displayed as JS overlay with binary search cue lookup (O(log n) seek, O(1) amortized playback)
+  - Image tracks (PGS/VOBSUB) burned in via transcode with `scale2ref` overlay
+  - First text track pre-cached in background after probe (instant display on first click)
+  - Per-file subtitle selection persisted in `localStorage`
+- **Probe cache** -- ffprobe results stored in SQLite keyed by path+mtime; orphan cache purged periodically
+- **Subtitle cache** -- extracted WebVTT stored in SQLite, pre-warmed on probe
+- **vmtouch** page-cache warming for files < 2 GB
+- **Concurrency control** -- `flock`-based semaphore limits concurrent ffmpeg processes (`STREAM_MAX_CONCURRENT`, default 4); probe slots separately limited (5 max)
+- **A/V sync hardening** -- `aresample async=3000`, `-thread_queue_size 512`, `-max_muxing_queue_size 1024`, `-min_frag_duration 300000`
+- **Probe fallback + proactive restart** -- 2 s fallback to native if probe is slow; if probe resolves within 5 s and optimal mode differs, stream restarts immediately
+- **Stall watchdog** -- exponential backoff `base × 2^n` (cap 2 min), differentiated: remux 10 s, transcode 20 s, burn-in 30 s; resets after 30 s of stable playback
+- **Mode badge** -- clickable badge shows current mode (NATIF / REMUX / x264 720p); click to cycle through all modes and qualities
+- **Resync button** -- one-click A/V resync at current position
+- **Keyboard shortcuts** -- Space/K play-pause, ←/→ ±10 s, J/L ±30 s, ↑/↓ volume ±5%, F fullscreen, Z zoom, P PiP, M mute, R resync, 0-9 jump to N×10%, N/B next/prev episode, `?` help overlay
+- **Episode navigation** -- prev/next episode buttons with auto-next countdown (8 s) on video end; config (mode, audio, quality, subtitle) transferred to next episode
+- **Resume playback** -- position saved every 5 s to `localStorage`; resume banner on reload with 8 s auto-accept
+- **Zoom modes** -- Fit / Fill / Stretch cycle (persisted in `localStorage`)
+- **Picture-in-Picture** -- native browser PiP support
+- **Playback speed** -- 0.5×, 0.75×, 1×, 1.5×, 2× (persisted)
+- **Volume** -- slider + scroll wheel + keyboard; debounced localStorage save; OSD feedback
+- **iOS Safari** -- `webkitEnterFullscreen` on `<video>` (div fullscreen unsupported); HLS fallback for streaming
+- **Landscape mobile** -- auto-immersive mode with auto-hide controls (same as fullscreen)
+- **Seekbar tooltip** -- hover preview with timecode
+- **rAF throttle** -- all seek-bar DOM writes batched via `requestAnimationFrame`
+- **Dynamic document title** -- shows ▶/⏸ + timecode while playing
+
+### Admin Panel
+
+- **File browser** -- browse `BASE_PATH`, create share links for files or folders
+- **Link management** -- list, search, delete; download count tracking
+- **System dashboard** -- real-time server metrics:
+  - CPU (%), RAM, Disk (usage + I/O busy%), Network (MB/s)
+  - Color-coded status pills (green/orange/red) visible when collapsed
+  - 7-day bandwidth history chart (Chart.js, gradient fills)
+  - Active torrent list via rtorrent SCGI XML-RPC (filtered ≥ 50 KB/s)
+  - CPU & HDD temperature monitoring (coretemp + drivetemp)
+  - Bandwidth quota tracking
+  - Adaptive polling: 10 s expanded, 60 s collapsed
+  - State persisted in `localStorage`
+- **CSRF protection** -- token-based on all POST actions
+- **HTTP basic auth** -- configured at web server level
+
+### Security
+
+- Path traversal prevention via `realpath()` + base path validation
+- Bcrypt password hashing with brute-force protection (session counter + sleep)
+- `session_regenerate_id(true)` after authentication
+- Mail header injection sanitisation
+- ZIP download size capped
+- Subtitle track index bounded (anti-DoS)
+- Internal PHP files blocked by nginx
+- HTTP security headers: `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`
+- No `Access-Control-Allow-Origin` on subtitle endpoint (same-origin only)
+
+### Testing & CI
+
+- **156 tests, 261 assertions** across 13 test files
+- CI: GitHub Actions on push/PR, PHP 8.1/8.2/8.3 matrix
+- PHPStan level 5 static analysis
+- Covers: security, slug generation, MIME detection, ffmpeg helpers, concurrency, database migrations, dashboard APIs
 
 ## Requirements
 
@@ -211,6 +252,9 @@ define('DL_BASE_URL', '/dl/');
 | `DB_PATH` | Path to the SQLite database file. Default: `data/share.db` relative to the app. |
 | `XACCEL_PREFIX` | Nginx internal redirect prefix. Must match the `location` block in your nginx config. Set to `''` for Apache. |
 | `DL_BASE_URL` | URL prefix for public download links. Must match your web server rewrite rules. |
+| `STREAM_MAX_CONCURRENT` | Maximum simultaneous ffmpeg transcoding processes. Default: 4. |
+| `STREAM_REMUX_ENABLED` | Enable remux mode for H.264 MKV files (video copy, audio transcode). Default: `false`. |
+| `STREAM_LOG` | Path to stream log file (PHP + ffmpeg stderr). `false` to disable. |
 | `MAX_ZIP_SIZE` | Maximum total size for ZIP downloads (bytes). Default: 10 GB. |
 
 ---
@@ -239,40 +283,58 @@ define('DL_BASE_URL', '/dl/');
 
 ```
 sharebox/
-├── install.sh          # One-line automated installer
-├── config.php          # Your local configuration (not tracked)
-├── config.example.php  # Example configuration template
-├── db.php              # SQLite database layer (auto-creates tables)
-├── ctrl.php            # JSON API (browse, create, delete, email)
-├── index.php           # Admin panel UI
-├── download.php        # Public download handler & video player
-├── app.js              # Admin panel JavaScript
-├── dashboard.php               # System dashboard HTML (included in index.php)
-├── dashboard.js                # Dashboard JS — polling, Chart.js, localStorage
+├── install.sh              # One-line automated installer
+├── config.php              # Your local configuration (not tracked)
+├── config.example.php      # Example configuration template
+├── db.php                  # SQLite database layer (WAL mode, auto-migrations)
+├── functions.php           # Shared utilities (slug, path validation, mime, ffmpeg helpers)
+├── ctrl.php                # JSON API (browse, create, delete, email)
+├── index.php               # Admin panel UI
+├── download.php            # Public download handler, router & video player page
+├── player.js               # Video player JS (~1050 lines) — state machine, subs, seekbar
+├── player.css              # Video player styles (~170 lines)
+├── app.js                  # Admin panel JavaScript
+├── style.css               # Admin panel styles (dark theme)
+├── dashboard.php           # System dashboard HTML (included in index.php)
+├── dashboard.js            # Dashboard JS — polling, Chart.js, localStorage
+├── handlers/
+│   ├── probe.php           # ffprobe with SQLite cache + background subtitle pre-cache
+│   ├── subtitle.php        # WebVTT extraction with SQLite cache
+│   ├── keyframe.php        # Keyframe PTS lookup for seek correction
+│   ├── stream_native.php   # Native streaming via X-Accel-Redirect
+│   ├── stream_remux.php    # Remux MKV → fMP4 (video copy + audio AAC)
+│   ├── stream_transcode.php # Full transcode x264 + AAC with optional burn-in
+│   └── stream_hls.php      # HLS segmented output for iOS Safari
 ├── api/
 │   ├── dashboard_helpers.php   # Testable pure parsers (/proc/*, hwmon)
 │   ├── sysinfo.php             # CPU / RAM / Disk / I/O (500 ms window)
 │   ├── speed.php               # Instantaneous network speed (8 s cache)
 │   ├── netspeed_history.php    # 7-day hourly-aggregated bandwidth history
+│   ├── quota.php               # Bandwidth quota tracking
 │   └── active_torrents.php     # rtorrent SCGI XML-RPC interface
 ├── cron/
 │   └── record_netspeed.php     # 1-min cron → net_speed table, 7-day purge
-├── style.css           # Styles (dark theme)
-├── favicon.svg         # App icon
-├── nginx.conf.example  # Nginx configuration template
-├── functions.php       # Shared utility functions (slug, path validation, mime)
-├── .htaccess           # Apache rewrite rules
-├── composer.json       # Dev dependencies (PHPUnit)
-├── phpunit.xml         # Test configuration
-├── tests/              # PHPUnit test suite
+├── favicon.svg             # App icon
+├── nginx.conf.example      # Nginx configuration template
+├── .htaccess               # Apache rewrite rules
+├── composer.json           # Dev dependencies (PHPUnit, PHPStan)
+├── phpunit.xml             # Test configuration
+├── phpstan-bootstrap.php   # PHPStan bootstrap (defines constants)
+├── tests/                  # PHPUnit test suite (156 tests)
 │   ├── SecurityTest.php
 │   ├── SlugTest.php
 │   ├── FormatAndMimeTest.php
+│   ├── FormatTailleEdgeCasesTest.php
 │   ├── SemaphoreTest.php
+│   ├── ProbeSemaphoreTest.php
+│   ├── FfmpegHelpersTest.php
+│   ├── DatabaseTest.php
+│   ├── DirSizeTest.php
+│   ├── DownloadTest.php
 │   ├── DashboardSysinfoTest.php
 │   ├── DashboardSpeedTest.php
 │   └── DashboardTorrentsTest.php
-├── data/               # SQLite database (auto-created, gitignored)
+├── data/                   # SQLite database (auto-created, gitignored)
 │   └── share.db
 └── LICENSE
 ```
@@ -281,14 +343,22 @@ sharebox/
 
 ```bash
 composer install
-vendor/bin/phpunit
+vendor/bin/phpunit          # 156 tests, 261 assertions
+vendor/bin/phpstan analyse  # Level 5 static analysis
 ```
 
+CI runs on GitHub Actions (push + PR) across PHP 8.1, 8.2, and 8.3 in parallel.
+
 The test suite covers:
-- **Security** — token regex validation, path traversal prevention (including symlinks)
-- **Slug generation** — film names, accents, truncation, uniqueness, collision avoidance
-- **File utilities** — size formatting, MIME type detection, media type classification
-- **Concurrency** — stream slot acquisition and release
+- **Security** -- token regex validation, path traversal prevention (including symlinks)
+- **Slug generation** -- film names, accents, truncation, uniqueness, collision avoidance
+- **File utilities** -- size formatting (edge cases, TB+ values), MIME type detection, media type classification
+- **FFmpeg helpers** -- filter graph building, input args, codec args, muxer args
+- **Database** -- migrations, probe cache purge logic (file vs folder matching)
+- **Concurrency** -- stream slot and probe slot acquisition/release
+- **Directory size** -- recursive size calculation
+- **Download routing** -- token validation, expiration, password auth flow
+- **Dashboard APIs** -- sysinfo parsing, speed calculation, torrent SCGI interface
 
 ## License
 
