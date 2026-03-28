@@ -22,7 +22,14 @@ if (isset($_GET['posters'])) {
     poster_log('POSTERS request | ' . basename($resolvedPath) . ' | path=' . $resolvedPath);
 
     // Noms de dossiers qui ne sont PAS des titres de média → pas de fetch TMDB
-    $skipPattern = '/^(season\s*\d|saison\s*\d|s\d+e?\d*|ova|oav|bonus|extras?|special|specials|featurettes?|behind.the.scenes|deleted.scenes|interviews?|trailers?|nc|op|ed|ost|soundtrack|subs?|subtitles?|vostfr|vf|multi|disc\s*\d|cd\s*\d|dvd|blu-?ray|\d{1,2}$)/i';
+    $skipPattern = '/^(season\s*\d|saison\s*\d|s\d+e?\d*|vol\s*\d+|part\s*\d+|tome\s*\d+'
+        . '|ova|oav|bonus|extras?|special|specials|featurettes?|behind.the.scenes|deleted.scenes'
+        . '|interviews?|trailers?|nc|op|ed|ost|soundtrack|subs?|subtitles?|vostfr|vf|multi'
+        . '|disc\s*\d|cd\s*\d|dvd|blu-?ray|\d{1,2}$'
+        . '|movies?|films?|s[ée]rie|covers?|images?|photos?|videos?|samples?|nfo'
+        . '|wii|wiiu|switch|nds|3ds|cia|gba|n64|snes|nes|psp|ps[1-4]|xbox'
+        . '|bdmv|clipinf|playlist|stream|meta|backup|certificate'
+        . ')/i';
     // Sous-ensemble du skipPattern : dossiers de saison (on peut leur trouver un poster TMDB via le parent)
     $seasonPattern = '/(?:^|\b)(?:season|saison|s)[\s._-]*(\d+)/i';
 
@@ -34,7 +41,12 @@ if (isset($_GET['posters'])) {
         $folders[] = $item;
     }
 
-    if (empty($folders)) { echo json_encode(['posters' => [], 'remaining' => 0]); exit; }
+    // Don't bail early if this is a movies folder (video files need poster fetch too)
+    $stmtTypeEarly = $db->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
+    $stmtTypeEarly->execute([':p' => $resolvedPath]);
+    $typeRowEarly = $stmtTypeEarly->fetch();
+    $isMoviesEarly = ($typeRowEarly && ($typeRowEarly['folder_type'] ?? 'series') === 'movies');
+    if (empty($folders) && !$isMoviesEarly) { echo json_encode(['posters' => [], 'remaining' => 0]); exit; }
 
     // ── Season subfolders : poster via parent tmdb_id + /tv/{id}/season/{n} ──
     // Le dossier parent (= $resolvedPath) doit avoir un tmdb_id en cache
