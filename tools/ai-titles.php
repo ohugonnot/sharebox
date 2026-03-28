@@ -587,11 +587,11 @@ function askAIPickBest(string $fileName, array $candidates, string $aiBin): ?int
     $candidateList = json_encode($compact, JSON_UNESCAPED_UNICODE);
 
     $prompt = <<<PROMPT
-Fichier/dossier : "$fileName"
+Fichier/dossier torrent : "$fileName"
 
-Voici les résultats TMDB. Choisis celui qui correspond le mieux au contenu du fichier.
-Retourne UNIQUEMENT le JSON : {"idx": N} où N est l'index du bon résultat.
-Si aucun ne correspond, retourne {"idx": -1}.
+Choisis le résultat TMDB qui correspond le mieux. Réponds UNIQUEMENT {"idx": N} sans aucune explication.
+
+Indices: INTEGRALE/COLLECTION = série principale (pas un film dérivé). S01/Saison = série TV. Année dans le nom = privilégier cette année.
 
 Candidats :
 $candidateList
@@ -608,13 +608,12 @@ PROMPT;
     if (!$envelope || !isset($envelope['result'])) return null;
 
     $text = $envelope['result'];
-    $text = preg_replace('/^```(?:json)?\s*/s', '', $text);
-    $text = preg_replace('/\s*```$/s', '', $text);
-    $parsed = json_decode(trim($text), true);
-    if (!is_array($parsed) || !isset($parsed['idx'])) return null;
-
-    $idx = (int)$parsed['idx'];
-    return ($idx >= 0 && $idx < count($candidates)) ? $idx : null;
+    // Extraire {"idx": N} même si l'IA ajoute du texte ou des code fences autour
+    if (preg_match('/\{\s*"idx"\s*:\s*(-?\d+)\s*\}/', $text, $m)) {
+        $idx = (int)$m[1];
+        return ($idx >= 0 && $idx < count($candidates)) ? $idx : null;
+    }
+    return null;
 }
 
 /**
