@@ -5,7 +5,7 @@
 - Debian, nginx + PHP-FPM 8.2, SQLite, ffmpeg 5.1
 - rtorrent en seeding lourd (utilisateur `ropixv2`) sur RAID0 (md5, 4x HDD)
 - SCGI socket rtorrent : `/var/run/ropixv2/.rtorrent.sock`
-- OPcache actif (`validate_timestamps=On`, `revalidate_freq=2s`) → après un edit PHP, faire `systemctl reload php8.2-fpm` si besoin immédiat
+- OPcache actif (`validate_timestamps=On`, `revalidate_freq=240s`) → après un edit PHP, faire `systemctl reload php8.2-fpm`
 - www-data est dans le groupe ropixv2 (accès aux fichiers en lecture)
 
 ### Hardware
@@ -35,9 +35,18 @@ Rationale : avec 3 streams long-running + retries + probes + UI admin, 5 (defaul
 | Fichier | Rôle |
 |---|---|
 | `config.php` | Constantes : `BASE_PATH`, `DB_PATH`, `XACCEL_PREFIX`, `DL_BASE_URL`, `STREAM_MAX_CONCURRENT` |
-| `db.php` | Connexion PDO SQLite, WAL mode, création tables `links` + `probe_cache`, migration `password_plain` |
-| `functions.php` | Utilitaires purs : `format_taille`, `get_stream_mime`, `get_media_type`, `generate_slug`, `dir_size`, `is_path_within`, `acquireStreamSlot`/`releaseStreamSlot` |
-| `download.php` | Handler public : probe ffprobe (avec cache SQLite), streaming ffmpeg, player HTML/JS/CSS embarqué |
+| `db.php` | Connexion PDO SQLite, WAL mode, création tables, migrations via `PRAGMA user_version` |
+| `functions.php` | Utilitaires purs + helpers ffmpeg (`buildFilterGraph`, `buildFfmpegInputArgs`, etc.) + `stream_log` + `computeEpisodeNav` |
+| `download.php` | Routeur public (~746 lignes) : auth → path validation → dispatch vers handlers |
+| `handlers/probe.php` | Probe ffprobe avec cache SQLite + pré-cache sous-titres en background |
+| `handlers/subtitle.php` | Extraction WebVTT avec cache SQLite |
+| `handlers/keyframe.php` | Keyframe PTS lookup pour correction seek |
+| `handlers/stream_native.php` | Streaming natif via X-Accel-Redirect |
+| `handlers/stream_remux.php` | Remux MKV→MP4 (video copy + audio AAC) |
+| `handlers/stream_transcode.php` | Transcode complet x264+AAC |
+| `handlers/stream_hls.php` | HLS segmenté pour iOS Safari |
+| `player.js` | Player vidéo JS (~1050 lignes), chargé via `<script src>` avec cache-busting mtime |
+| `player.css` | CSS du player (~168 lignes), chargé via `<link>` avec cache-busting mtime |
 | `ctrl.php` | API JSON admin : browse, create, delete, email |
 | `index.php` | UI panel admin |
 | `app.js` | JS panel admin |
@@ -48,7 +57,8 @@ Rationale : avec 3 streams long-running + retries + probes + UI admin, 5 (defaul
 
 ```sql
 probe_cache (path TEXT PK, mtime INTEGER, result TEXT)  -- cache ffprobe par path+mtime
-links (id, token, path, type, name, password_hash, password_plain, expires_at, created_at, download_count)
+subtitle_cache (path TEXT, track INTEGER, mtime INTEGER, vtt TEXT, PK(path,track))  -- cache WebVTT extrait
+links (id, token, path, type, name, password_hash, expires_at, created_at, download_count)
 net_speed (id INTEGER PK, ts INTEGER, rx_bytes INTEGER, tx_bytes INTEGER)  -- samples 1 min, purge 7 jours
 ```
 
