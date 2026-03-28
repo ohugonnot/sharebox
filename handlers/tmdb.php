@@ -213,9 +213,8 @@ if (isset($_GET['posters'])) {
     }
 
     // ── Phase 4 : dispatcher les résultats sur tous les dossiers ──
-    // Si un même titre a > 3 dossiers, c'est probablement des épisodes :
-    // on stocke en DB (cache, pas de re-fetch) mais on n'affiche pas le poster
-    // (le cron IA tranchera plus tard)
+    // Transaction pour éviter les "database is locked" avec le cron AI concurrent
+    $db->beginTransaction();
     foreach ($titleResults as $title => $tr) {
         if (!isset($titleToFolders[$title])) continue;
         $folderList = $titleToFolders[$title];
@@ -234,6 +233,8 @@ if (isset($_GET['posters'])) {
             }
         }
     }
+
+    try { $db->commit(); } catch (PDOException $e) { poster_log('DB commit error | ' . $e->getMessage()); }
 
     // remaining = titres uniques pas encore cherchés
     $remaining = count($titlesToSearch) - count($toSearch);
@@ -289,21 +290,26 @@ if (isset($_GET['posters'])) {
         $result = array_merge($result, $videoCached);
 
         $videoToFetch = array_slice($videoUncached, 0, 10);
+        $videoResults = [];
         foreach ($videoToFetch as $fileName) {
             $meta = extract_title_year($fileName);
-            $r = tmdb_search($meta['title'], $meta['year'], $apiKey, $ctx, ['multi', 'movie']);
+            $videoResults[$fileName] = tmdb_search($meta['title'], $meta['year'], $apiKey, $ctx, ['multi', 'movie']);
+            usleep(50000);
+        }
+        $db->beginTransaction();
+        foreach ($videoResults as $fileName => $r) {
             $fullPath = $resolvedPath . '/' . $fileName;
             try {
                 $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
               ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                    ->execute([':p' => $fullPath, ':u' => $r['poster'] ?? null, ':i' => $r['id'] ?? null, ':t' => $r['title'] ?? null, ':o' => $r['overview'] ?? null]);
-            } catch (PDOException $e) { /* ignore lock */ }
+            } catch (PDOException $e) { poster_log('DB error video | ' . $fileName . ' → ' . $e->getMessage()); }
             if ($r) {
                 $result[$fileName] = ['poster' => $r['poster']];
                 if ($r['overview']) $result[$fileName]['overview'] = $r['overview'];
             }
-            usleep(50000);
         }
+        try { $db->commit(); } catch (PDOException $e) { poster_log('DB commit error video | ' . $e->getMessage()); }
 
         $videoRemaining = count($videoUncached) - count($videoToFetch);
     }
