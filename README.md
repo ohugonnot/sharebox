@@ -30,15 +30,15 @@ ShareBox is not a media center. It won't scrape metadata, build a library, or ma
 Try it now -- no install needed:
 
 - **[Admin panel](https://ds72803.seedhost.eu:8282/share/)** (login: `admin` / `demo2026`) -- browse files, create share links, system dashboard
-- **[Shared folder](https://ds72803.seedhost.eu:8282/dl/media-l18g)** -- public link with 5 test videos showcasing all features:
+- **[Shared folder](https://ds72803.seedhost.eu:8282/dl/browse)** -- public link with 5 test videos showcasing all features:
 
 | File | Codec | Features | Link |
 |---|---|---|---|
-| Sintel.2010.720p.mp4 | H.264 MP4 | Native playback (zero CPU) | [Play](https://ds72803.seedhost.eu:8282/dl/media-l18g?p=Sintel.2010.720p.mp4&play=1) |
-| Test.Pattern.1080p.mp4 | H.264 MP4 | Native 1080p | [Play](https://ds72803.seedhost.eu:8282/dl/media-l18g?p=Test.Pattern.1080p.mp4&play=1) |
-| Tears.of.Steel.2012.720p.mp4 | H.264 MOV | Native, large file (355 MB) | [Play](https://ds72803.seedhost.eu:8282/dl/media-l18g?p=Tears.of.Steel.2012.720p.mp4&play=1) |
-| Subtitle.Demo.720p.mkv | H.264 MKV | Text subtitles (WebVTT overlay) | [Play](https://ds72803.seedhost.eu:8282/dl/media-l18g?p=Subtitle.Demo.720p.mkv&play=1) |
-| MultiTrack.HEVC.720p.mkv | HEVC MKV | Transcode + 2 audio + 2 subs (EN/FR) | [Play](https://ds72803.seedhost.eu:8282/dl/media-l18g?p=MultiTrack.HEVC.720p.mkv&play=1) |
+| Sintel.2010.720p.mp4 | H.264 MP4 | Native playback (zero CPU) | [Play](https://ds72803.seedhost.eu:8282/dl/browse?p=Sintel.2010.720p.mp4&play=1) |
+| Test.Pattern.1080p.mp4 | H.264 MP4 | Native 1080p | [Play](https://ds72803.seedhost.eu:8282/dl/browse?p=Test.Pattern.1080p.mp4&play=1) |
+| Tears.of.Steel.2012.720p.mp4 | H.264 MOV | Native, large file (355 MB) | [Play](https://ds72803.seedhost.eu:8282/dl/browse?p=Tears.of.Steel.2012.720p.mp4&play=1) |
+| Subtitle.Demo.720p.mkv | H.264 MKV | Text subtitles (WebVTT overlay) | [Play](https://ds72803.seedhost.eu:8282/dl/browse?p=Subtitle.Demo.720p.mkv&play=1) |
+| MultiTrack.HEVC.720p.mkv | HEVC MKV | Transcode + 2 audio + 2 subs (EN/FR) | [Play](https://ds72803.seedhost.eu:8282/dl/browse?p=MultiTrack.HEVC.720p.mkv&play=1) |
 
 ![Admin Panel](https://i.postimg.cc/dsFd7Cgz/image.png)
 
