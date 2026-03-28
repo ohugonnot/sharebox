@@ -167,7 +167,8 @@ if (is_file($resolvedPath)) {
     $fileName = basename($resolvedPath);
 
     header('Content-Type: application/octet-stream');
-    header('Content-Disposition: attachment; filename="' . addcslashes($fileName, '"\\') . '"');
+    $safeFileName = preg_replace('/[\r\n\0]/', '', $fileName);
+    header('Content-Disposition: attachment; filename="' . addcslashes($safeFileName, '"\\') . '"');
     header('X-Accel-Redirect: ' . $encodedPath);
     exit;
 }
@@ -195,7 +196,8 @@ if (is_dir($resolvedPath)) {
         $baseName = basename($resolvedPath);
 
         header('Content-Type: application/zip');
-        header('Content-Disposition: attachment; filename="' . addcslashes($zipName, '"\\') . '"');
+        $safeZipName = preg_replace('/[\r\n\0]/', '', $zipName);
+        header('Content-Disposition: attachment; filename="' . addcslashes($safeZipName, '"\\') . '"');
         header('X-Accel-Buffering: no');
 
         passthru('cd ' . escapeshellarg($parentDir) . ' && zip -r -0 - ' . escapeshellarg($baseName));
