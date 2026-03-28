@@ -652,7 +652,8 @@ function plog(tag, msg, data) {
                 Subs.load(savedSubIdx);
             }
             selSub.addEventListener('change', function() {
-                var idx = parseInt(selSub.value, 10) || -1;
+                var idx = parseInt(selSub.value, 10);
+                if (isNaN(idx)) idx = -1;
                 lsSet(subKey, idx);
                 Subs.load(idx);
             });
