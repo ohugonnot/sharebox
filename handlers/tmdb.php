@@ -113,7 +113,7 @@ if (isset($_GET['posters'])) {
         }
     }
 
-    $result = $cached;
+    $result = array_merge($result, $cached);
 
     // Fetch from TMDB for uncached folders (max 10 per request to avoid timeout)
     // Stratégie de recherche : essayer plusieurs variantes du titre pour maximiser les chances
