@@ -540,7 +540,8 @@ HTML;
 
     // ── Grid view (dossiers) ──
     if ($hasGridItems) {
-        echo '<div class="grid-wrap hidden" id="grid-folders">';
+        $gridHidden = isset($_GET['view']) && $_GET['view'] === 'grid' ? '' : ' hidden';
+        echo '<div class="grid-wrap' . $gridHidden . '" id="grid-folders">';
         // Parent (..) en grille
         if ($subPath) {
             $parentPath = dirname($subPath);
