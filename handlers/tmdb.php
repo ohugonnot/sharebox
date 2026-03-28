@@ -93,6 +93,8 @@ if (isset($_GET['posters'])) {
     // ── Phase 1 : séparer cached / uncached ──
     $cached = [];
     $uncached = [];
+    // Track poster URLs to detect duplicates (e.g. 170 episodes with same poster)
+    $posterCount = []; // poster_url => count
     foreach ($folders as $f) {
         if (in_array($f, $seasonFolders, true) || preg_match($skipPattern, $f)) continue;
         $fullPath = $resolvedPath . '/' . $f;
@@ -105,9 +107,17 @@ if (isset($_GET['posters'])) {
             } elseif ($row['poster_url']) {
                 $cached[$f] = ['poster' => $row['poster_url']];
                 if ($row['overview']) $cached[$f]['overview'] = $row['overview'];
+                $posterCount[$row['poster_url']] = ($posterCount[$row['poster_url']] ?? 0) + 1;
             }
         } else {
             $uncached[] = $f;
+        }
+    }
+
+    // Filter out duplicate posters (> 3 cards with same image = probably episodes)
+    foreach ($cached as $f => $info) {
+        if (isset($info['poster']) && ($posterCount[$info['poster']] ?? 0) > 3) {
+            unset($cached[$f]);
         }
     }
 
@@ -187,16 +197,22 @@ if (isset($_GET['posters'])) {
     }
 
     // ── Phase 4 : dispatcher les résultats sur tous les dossiers ──
+    // Si un même titre a > 3 dossiers, c'est probablement des épisodes :
+    // on stocke en DB (cache, pas de re-fetch) mais on n'affiche pas le poster
+    // (le cron IA tranchera plus tard)
     foreach ($titleResults as $title => $tr) {
         if (!isset($titleToFolders[$title])) continue;
-        foreach ($titleToFolders[$title] as $folderName) {
+        $folderList = $titleToFolders[$title];
+        $isDuplicate = count($folderList) > 3;
+        foreach ($folderList as $folderName) {
             $fullPath = $resolvedPath . '/' . $folderName;
             try {
                 $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
                               ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                    ->execute([':p' => $fullPath, ':u' => $tr['posterUrl'], ':i' => $tr['tmdbId'], ':t' => $tr['tmdbTitle'], ':o' => $tr['tmdbOverview']]);
             } catch (PDOException $e) { /* ignore */ }
-            if ($tr['posterUrl']) {
+            // N'afficher le poster que si c'est pas un doublon massif
+            if ($tr['posterUrl'] && !$isDuplicate) {
                 $result[$folderName] = ['poster' => $tr['posterUrl']];
                 if ($tr['tmdbOverview']) $result[$folderName]['overview'] = $tr['tmdbOverview'];
             }
