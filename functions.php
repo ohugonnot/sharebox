@@ -343,7 +343,7 @@ function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx,
             ];
             if (count($candidates) >= $limit) break 2;
         }
-        usleep(250000);
+        usleep(50000);
     }
     return $candidates;
 }
