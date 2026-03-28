@@ -22,6 +22,11 @@ define('STREAM_LOG', '/data/stream.log');
 define('BANDWIDTH_QUOTA_TB', ${QUOTA_TB});
 PHPEOF
 
+# ── Optional: TMDB API key for poster grid ──────────────────────────────────
+if [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
+    echo "define('TMDB_API_KEY', '${SHAREBOX_TMDB_API_KEY}');" >> /app/config.php
+fi
+
 # ── Generate htpasswd ────────────────────────────────────────────────────────
 htpasswd -cb /etc/sharebox.htpasswd "$ADMIN_USER" "$ADMIN_PASS" 2>/dev/null
 
@@ -54,6 +59,11 @@ if [ "${SHAREBOX_AUTO_SHARE:-}" = "yes" ]; then
         }
     ' 2>/dev/null || true
     chown -R www-data:www-data /data
+fi
+
+# ── Demo data (optional) ────────────────────────────────────────────────────
+if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
+    /bin/sh /docker/demo-data.sh
 fi
 
 # ── Cron (bandwidth history) ─────────────────────────────────────────────────
