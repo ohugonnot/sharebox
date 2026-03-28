@@ -592,7 +592,7 @@ HTML;
                 $color = $cardColors[($idx + count($folders)) % count($cardColors)];
                 $letter = mb_strtoupper(mb_substr($vf['name'], 0, 1));
                 $escapedVfName = htmlspecialchars(addcslashes($vf['name'], "'\\"), ENT_QUOTES);
-                echo '<a class="grid-card grid-card-file" href="' . $vfDownloadUrl . '" data-play="' . htmlspecialchars($vfPlayUrl, ENT_QUOTES) . '" style="background:' . $color . '" data-type="file" data-name="' . $vfHtml . '" data-folder="' . $vfHtml . '">';
+                echo '<a class="grid-card grid-card-file" href="' . $vfDownloadUrl . '" data-play="' . htmlspecialchars($vfPlayUrl, ENT_QUOTES) . '" style="background:' . $color . '" data-type="file" data-name="' . $vfHtml . '" data-folder="' . $vfHtml . '" data-size="' . $vf['size'] . '">';
                 echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
                 echo '<div class="grid-card-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg></div>';
                 echo '<div class="grid-card-toggle" onclick="event.preventDefault();event.stopPropagation();togglePoster(this,\'' . $escapedVfName . '\')" title="Afficher/masquer l\'image"><svg class="eye-on" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></div>';
@@ -794,6 +794,20 @@ function tri(btn, key) {
     if (upLink) panel.appendChild(upLink);
     folders.forEach(f => panel.appendChild(f));
     files.forEach(f => panel.appendChild(f));
+    // Also sort grid cards
+    const grid = document.getElementById('grid-folders');
+    if (grid) {
+        const cards = [...grid.querySelectorAll('.grid-card[data-name]')];
+        const folderCards = cards.filter(c => c.dataset.type === 'folder' && c.dataset.name !== '..');
+        const fileCards = cards.filter(c => c.dataset.type === 'file');
+        folderCards.sort((a, b) => mul * a.dataset.name.localeCompare(b.dataset.name, 'fr', {numeric: true, sensitivity: 'base'}));
+        fileCards.sort((a, b) => {
+            if (key === 'size') return mul * (parseInt(a.dataset.size || 0) - parseInt(b.dataset.size || 0));
+            return mul * a.dataset.name.localeCompare(b.dataset.name, 'fr', {numeric: true, sensitivity: 'base'});
+        });
+        folderCards.forEach(c => grid.appendChild(c));
+        fileCards.forEach(c => grid.appendChild(c));
+    }
 }
 function filtrer(q) {
     q = q.toLowerCase();
