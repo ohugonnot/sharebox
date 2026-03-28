@@ -80,9 +80,9 @@ if ($mode === '--pending') {
     } else {
         $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
     }
-    poster_log('AI --pending start | entries=' . count($rows) . ($pendingPath ? ' path=' . basename($pendingPath) : ' (all)'));
+    ai_log('AI --pending start | entries=' . count($rows) . ($pendingPath ? ' path=' . basename($pendingPath) : ' (all)'));
     if (empty($rows)) {
-        echo "Nothing pending.\n";
+        ai_log('AI --pending | nothing pending', false);
     } else {
         processPendingEntries($rows, $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
     }
@@ -90,7 +90,7 @@ if ($mode === '--pending') {
     // Process all movies-tagged folders (full rescan, not just pending)
     $rows = $db->query("SELECT DISTINCT path FROM folder_posters WHERE folder_type = 'movies'")->fetchAll();
     if (empty($rows)) {
-        echo "No folders tagged as 'movies' found.\n";
+        ai_log('AI --all | no folders tagged as movies', false);
     } else {
         foreach ($rows as $row) {
             if (is_dir($row['path'])) {
@@ -105,7 +105,7 @@ if ($mode === '--pending') {
     }
     // Find ALL unverified entries with a poster (across all shared folders)
     $rows = $db->query("SELECT path, poster_url, title, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
-    poster_log('AI --verify start | unverified=' . count($rows));
+    ai_log('AI --verify start | unverified=' . count($rows));
 
     // Auto-verify duplicates: if >3 entries in the same dir share the same tmdb_id,
     // it's clearly episodes of the same show — no need to ask AI
@@ -133,15 +133,14 @@ if ($mode === '--pending') {
         }
     }
     if ($autoVerified > 0) {
-        echo "Auto-verified $autoVerified duplicate entries (same show, >3 in same dir).\n";
-        poster_log('AI auto-verify | ' . $autoVerified . ' entries (>3 same tmdb_id in same dir)');
+        ai_log('AI auto-verify | ' . $autoVerified . ' entries (>3 same tmdb_id in same dir)');
     }
 
     // Remove auto-verified from the list before sending to AI
     $rows = array_filter($rows, fn($r) => !isset($skipPaths[$r['path']]));
 
     if (empty($rows)) {
-        echo "All matches look correct.\n";
+        ai_log('AI --verify | all matches correct', false);
     } else {
         verifyEntries(array_values($rows), $db, $AI_BIN, $TMDB_API_KEY);
     }
@@ -155,6 +154,15 @@ if ($mode === '--pending') {
 }
 
 } // end foreach $runModes
+
+/**
+ * Log to stdout with timestamp (for ai-titles.log) and to poster.log.
+ * Ensures ai-titles.log is parseable with same format as other logs.
+ */
+function ai_log(string $msg, bool $toPosterLog = true): void {
+    echo '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n";
+    if ($toPosterLog) poster_log($msg);
+}
 
 /**
  * Process pending entries (poster_url IS NULL) from any shared folder.
@@ -200,16 +208,15 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
 
     foreach ($byDir as $dir => $names) {
-        echo "\n=== " . basename($dir) . " (" . count($names) . " pending) ===\n";
+        ai_log('AI pending | dir=' . basename($dir) . ' files=' . count($names));
 
         // Ask AI for clean titles
         $titles = null;
         if ($aiBin) {
-            poster_log('AI askAI | dir=' . basename($dir) . ' names=' . count($names));
             $titles = askAI($names, $aiBin);
         }
         if ($titles === null) {
-            if ($aiBin) { echo "  AI failed, falling back to regex.\n"; poster_log('AI askAI FAIL | dir=' . basename($dir) . ' → regex fallback'); }
+            if ($aiBin) { ai_log('AI askAI FAIL | dir=' . basename($dir) . ' → regex fallback'); }
             $titles = [];
             foreach ($names as $n) {
                 $meta = extract_title_year($n);
@@ -223,12 +230,12 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
             $fullPath = $dir . '/' . $name;
 
             if ($t['skip'] ?? false) {
-                echo "  SKIP  " . $name . "\n";
+                ai_log('AI SKIP | ' . $name);
                 try {
                     $db->prepare("INSERT INTO folder_posters (path, poster_url, title) VALUES (:p, '__none__', :t)
                                   ON CONFLICT(path) DO UPDATE SET poster_url = '__none__', title = :t, updated_at = datetime('now')")
                        ->execute([':p' => $fullPath, ':t' => $t['title'] ?? '']);
-                } catch (PDOException $e) { /* ignore */ }
+                } catch (PDOException $e) { poster_log('DB error SKIP | ' . $name . ' → ' . $e->getMessage()); }
                 continue;
             }
 
@@ -237,28 +244,26 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
 
             $result = searchTMDB($title, $t['year'] ?? null, $apiKey, $ctx);
             if ($result) {
-                echo "  OK    " . $name . " => " . $result['title'] . "\n";
-                poster_log('AI OK | ' . $name . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
+                ai_log('AI OK | ' . $name . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
                 $found++;
                 try {
                     $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
                                   ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                        ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
-                } catch (PDOException $e) { /* ignore */ }
+                } catch (PDOException $e) { poster_log('DB error OK | ' . $name . ' → ' . $e->getMessage()); }
             } else {
-                echo "  MISS  " . $name . " (searched: " . $title . ")\n";
-                poster_log('AI MISS | ' . $name . ' searched="' . $title . '" → ai_attempts++');
+                ai_log('AI MISS | ' . $name . ' searched="' . $title . '"');
                 // Increment ai_attempts so we give up after 3 tries
                 try {
                     $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
                        ->execute([':p' => $fullPath]);
-                } catch (PDOException $e) { /* ignore */ }
+                } catch (PDOException $e) { poster_log('DB error MISS | ' . $name . ' → ' . $e->getMessage()); }
             }
 
             usleep(250000);
         }
 
-        echo "  Done: $found found out of " . count($names) . "\n";
+        ai_log('AI done | dir=' . basename($dir) . ' found=' . $found . '/' . count($names), false);
     }
 }
 
@@ -282,11 +287,11 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
 
     foreach ($byDir as $dir => $pairs) {
-        echo "\n=== VERIFY " . basename($dir) . " (" . count($pairs) . " matches) ===\n";
+        ai_log('AI verify | dir=' . basename($dir) . ' pairs=' . count($pairs));
 
         $verdicts = askAIVerify($pairs, $aiBin);
         if ($verdicts === null) {
-            echo "  AI verify failed, skipping.\n";
+            ai_log('AI verify FAIL | dir=' . basename($dir) . ' → skipping');
             continue;
         }
 
@@ -306,7 +311,7 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
                 $stmt = $db->prepare("UPDATE folder_posters SET verified = 1 WHERE path = :p AND (verified IS NULL OR verified = 0)");
                 $stmt->execute([':p' => $p['path']]);
                 if ($stmt->rowCount() > 0) $confirmed++;
-            } catch (PDOException $e) { /* ignore */ }
+            } catch (PDOException $e) { poster_log('DB error verify-confirm | ' . $p['file'] . ' → ' . $e->getMessage()); }
         }
 
         // Fix bad matches
@@ -317,64 +322,53 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
             $betterYear = $v['year'] ?? null;
 
             if (!$betterTitle) {
-                echo "  BAD   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ")\n";
-                poster_log('AI verify BAD | ' . $fileName . ' was="' . ($v['tmdb_title'] ?? '?') . '" no suggestion');
+                ai_log('AI verify BAD | ' . $fileName . ' was="' . ($v['tmdb_title'] ?? '?') . '" no suggestion');
                 continue;
             }
 
-            echo "  FIX   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ") => search: " . $betterTitle . "\n";
-            poster_log('AI verify FIX | ' . $fileName . ' was="' . ($v['tmdb_title'] ?? '?') . '" → search="' . $betterTitle . '"');
+            ai_log('AI verify FIX | ' . $fileName . ' was="' . ($v['tmdb_title'] ?? '?') . '" → search="' . $betterTitle . '"');
 
             // Pass 2 : chercher tous les candidats TMDB puis demander à l'IA de choisir le bon
             $candidates = searchTMDBCandidates($betterTitle, $betterYear, $apiKey, $ctx);
             if (empty($candidates)) {
-                echo "        => no TMDB results\n";
-                poster_log('AI verify MISS | ' . $fileName . ' no TMDB candidates for "' . $betterTitle . '"');
+                ai_log('AI verify MISS | ' . $fileName . ' no TMDB candidates for "' . $betterTitle . '"');
             } elseif (count($candidates) === 1) {
-                // Un seul résultat → pas besoin de l'IA pour choisir
                 $result = $candidates[0];
-                echo "        => " . $result['title'] . " (seul résultat)\n";
-                poster_log('AI verify OK | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ') single result');
+                ai_log('AI verify OK | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ') single result');
                 $fixed++;
                 try {
                     $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
                                   ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
                        ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
-                } catch (PDOException $e) { /* ignore */ }
+                } catch (PDOException $e) { poster_log('DB error verify-fix | ' . $fileName . ' → ' . $e->getMessage()); }
             } else {
-                // Plusieurs candidats → pass 2 IA pour choisir le bon
-                echo "        => " . count($candidates) . " candidates, asking AI...\n";
-                poster_log('AI pick | ' . $fileName . ' ' . count($candidates) . ' candidates: ' . implode(', ', array_map(fn($c) => $c['title'] . '(' . $c['id'] . ')', array_slice($candidates, 0, 5))));
+                ai_log('AI pick | ' . $fileName . ' candidates=' . count($candidates));
                 $picked = askAIPickBest($fileName, $candidates, $aiBin);
                 if ($picked !== null) {
                     $result = $candidates[$picked];
-                    echo "        => AI picked: " . $result['title'] . " (id=" . $result['id'] . ")\n";
-                    poster_log('AI picked | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ') idx=' . $picked);
+                    ai_log('AI picked | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ') idx=' . $picked);
                     $fixed++;
                     try {
                         $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
                                       ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
                            ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
-                    } catch (PDOException $e) { /* ignore */ }
+                    } catch (PDOException $e) { poster_log('DB error pick | ' . $fileName . ' → ' . $e->getMessage()); }
                 } else {
-                    // Fallback : prendre le premier candidat
                     $result = $candidates[0];
-                    echo "        => AI pick failed, using first: " . $result['title'] . "\n";
-                    poster_log('AI pick FAIL | ' . $fileName . ' fallback to first: ' . $result['title'] . ' (id=' . $result['id'] . ')');
+                    ai_log('AI pick FAIL | ' . $fileName . ' fallback=' . $result['title'] . ' (id=' . $result['id'] . ')');
                     $fixed++;
                     try {
                         $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 0)
                                       ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, updated_at = datetime('now')")
                            ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
-                    } catch (PDOException $e) { /* ignore */ }
+                    } catch (PDOException $e) { poster_log('DB error pick-fallback | ' . $fileName . ' → ' . $e->getMessage()); }
                 }
             }
 
             usleep(250000);
         }
 
-        poster_log('AI verify done | dir=' . basename($dir) . ' confirmed=' . $confirmed . ' bad=' . count($badFiles) . ' fixed=' . $fixed);
-        echo "  Verify done: $confirmed confirmed, " . count($badFiles) . " bad, $fixed fixed\n";
+        ai_log('AI verify done | dir=' . basename($dir) . ' confirmed=' . $confirmed . ' bad=' . count($badFiles) . ' fixed=' . $fixed);
     }
 }
 
@@ -423,8 +417,7 @@ function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, 
 
     if (empty($toProcess)) return 0;
 
-    echo "\n=== " . basename($dirPath) . " ===\n";
-    echo "  " . count($toProcess) . " files to process\n";
+    ai_log('AI folder | dir=' . basename($dirPath) . ' files=' . count($toProcess));
 
     // Ask AI for clean titles
     $titles = null;
@@ -432,7 +425,7 @@ function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, 
         $titles = askAI($toProcess, $aiBin);
     }
     if ($titles === null) {
-        if ($aiBin) echo "  AI failed, falling back to regex.\n";
+        if ($aiBin) ai_log('AI askAI FAIL | dir=' . basename($dirPath) . ' → regex fallback');
         $titles = [];
         foreach ($toProcess as $vf) {
             $meta = extract_title_year($vf);
@@ -450,13 +443,13 @@ function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, 
         $fullPath = $dirPath . '/' . $fileName;
 
         if ($t['skip'] ?? false) {
-            echo "  SKIP  " . $fileName . "\n";
+            ai_log('AI SKIP | ' . $fileName, false);
             $skipped++;
             try {
                 $db->prepare("INSERT INTO folder_posters (path, poster_url, title) VALUES (:p, '__none__', :t)
               ON CONFLICT(path) DO UPDATE SET poster_url = '__none__', title = :t, updated_at = datetime('now')")
                    ->execute([':p' => $fullPath, ':t' => $t['title'] ?? '']);
-            } catch (PDOException $e) { /* ignore */ }
+            } catch (PDOException $e) { poster_log('DB error folder-skip | ' . $fileName . ' → ' . $e->getMessage()); }
             continue;
         }
 
@@ -471,22 +464,22 @@ function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, 
         $posterUrlStr = $posterUrl ? $posterUrl['poster'] : null;
 
         if ($posterUrlStr) {
-            echo "  OK    " . $fileName . " => " . $tmdbTitle . "\n";
+            ai_log('AI OK | ' . $fileName . ' → ' . $tmdbTitle . ' (id=' . $tmdbId . ')', false);
             $found++;
         } else {
-            echo "  MISS  " . $fileName . " (searched: " . $title . ")\n";
+            ai_log('AI MISS | ' . $fileName . ' searched="' . $title . '"', false);
         }
 
         try {
             $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
               ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                ->execute([':p' => $fullPath, ':u' => $posterUrlStr, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
-        } catch (PDOException $e) { /* ignore */ }
+        } catch (PDOException $e) { poster_log('DB error folder-write | ' . $fileName . ' → ' . $e->getMessage()); }
 
         usleep(250000); // 250ms TMDB rate limit
     }
 
-    echo "  Done: $found found, $skipped skipped, " . (count($toProcess) - $found - $skipped) . " missed\n";
+    ai_log('AI folder done | dir=' . basename($dirPath) . ' found=' . $found . ' skipped=' . $skipped . ' missed=' . (count($toProcess) - $found - $skipped), false);
     return count($toProcess);
 }
 
@@ -567,7 +560,21 @@ function searchTMDBCandidates(string $title, ?int $year, string $apiKey, $ctx): 
 }
 
 /**
- * Ask AI to pick the best TMDB candidate for a filename.
+ * Extract a JSON array from AI text that may contain code fences or extra commentary.
+ * Finds outermost [ ... ] bracket pair, ignoring surrounding prose.
+ */
+function extractJsonArray(string $text): ?array
+{
+    $start = strpos($text, '[');
+    $end = strrpos($text, ']');
+    if ($start === false || $end === false || $end <= $start) return null;
+    $json = substr($text, $start, $end - $start + 1);
+    $parsed = json_decode($json, true);
+    return is_array($parsed) ? $parsed : null;
+}
+
+/**
+ * Ask AI to pick the best TMDB candidate from a list.
  * Uses a temp file for the prompt (no shell injection risk).
  * @param string $fileName Original filename/folder name
  * @param array $candidates TMDB search results
@@ -628,7 +635,7 @@ function askAIVerify(array $pairs, string $aiBin): ?array
     $allResults = [];
 
     foreach ($batches as $batchIdx => $batch) {
-        echo "  Verifying with AI" . (count($batches) > 1 ? " (batch " . ($batchIdx + 1) . "/" . count($batches) . ")" : "") . "...\n";
+        ai_log('AI verifying' . (count($batches) > 1 ? ' batch ' . ($batchIdx + 1) . '/' . count($batches) : '') . '...', false);
 
         $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE);
 
@@ -674,10 +681,7 @@ PROMPT;
         if (!$envelope || !isset($envelope['result'])) return null;
 
         $text = $envelope['result'];
-        $text = preg_replace('/^```(?:json)?\s*/s', '', $text);
-        $text = preg_replace('/\s*```$/s', '', $text);
-
-        $parsed = json_decode(trim($text), true);
+        $parsed = extractJsonArray($text);
         if (!is_array($parsed)) {
             fwrite(STDERR, "  Warning: could not parse AI verify response\n");
             return null;
@@ -710,9 +714,9 @@ function askAI(array $fileNames, string $aiBin): ?array
 
     foreach ($batches as $batchIdx => $batch) {
         if (count($batches) > 1) {
-            echo "  Asking AI (batch " . ($batchIdx + 1) . "/" . count($batches) . ")...\n";
+            ai_log('AI asking batch ' . ($batchIdx + 1) . '/' . count($batches) . '...', false);
         } else {
-            echo "  Asking AI...\n";
+            ai_log('AI asking...', false);
         }
 
         $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE);
@@ -759,10 +763,7 @@ PROMPT;
         if (!$envelope || !isset($envelope['result'])) return null;
 
         $text = $envelope['result'];
-        $text = preg_replace('/^```(?:json)?\s*/s', '', $text);
-        $text = preg_replace('/\s*```$/s', '', $text);
-
-        $parsed = json_decode(trim($text), true);
+        $parsed = extractJsonArray($text);
         if (!is_array($parsed)) {
             fwrite(STDERR, "  Warning: could not parse AI response for batch " . ($batchIdx + 1) . "\n");
             return null;

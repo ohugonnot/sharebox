@@ -25,7 +25,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
             $probeData = json_decode($probeRow['result'], true);
             $probeDuration = (float)($probeData['duration'] ?? 0);
         }
-    } catch (PDOException $e) { /* ignore */ }
+    } catch (PDOException $e) { /* probe cache miss — non-blocking, transcode proceeds */ }
     $remainingDuration = max(0, $probeDuration - $startSec);
     $estimatedCL = $remainingDuration > 0 ? (int)($estimatedBps * $remainingDuration / 8 * 1.2) : 0;
     if ($estimatedCL > 0 && $isSafari) {

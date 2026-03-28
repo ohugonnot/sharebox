@@ -3,6 +3,7 @@
  * API active_torrents — Liste des torrents actifs via rtorrent SCGI
  */
 require_once __DIR__ . '/dashboard_helpers.php';
+require_once __DIR__ . '/../functions.php';
 
 if (!defined('RTORRENT_SOCK')) {
     define('RTORRENT_SOCK', '');
@@ -112,6 +113,7 @@ function get_torrents_from_rtorrent(string $sockPath = RTORRENT_SOCK): array
             'd.size_chunks='
         );
     } catch (\RuntimeException $e) {
+        app_log('RTORRENT error | ' . $e->getMessage());
         return ['downloads' => [], 'uploads' => [], 'error' => 'rtorrent unavailable'];
     }
 

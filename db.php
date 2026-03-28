@@ -76,6 +76,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
+    $targetVersion = 6; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -135,6 +136,10 @@ function get_db(): PDO {
             $db->query("ALTER TABLE folder_posters ADD COLUMN ai_attempts INTEGER DEFAULT 0");
         }
         $db->query('PRAGMA user_version = 6');
+    }
+
+    if ($version < $targetVersion) {
+        error_log('ShareBox DB migrated from v' . $version . ' to v' . $targetVersion);
     }
 
     return $db;
