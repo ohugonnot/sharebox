@@ -107,6 +107,24 @@ function get_stream_mime(string $ext): ?string {
 }
 
 /**
+ * Vérifie récursivement si un dossier contient au moins un fichier vidéo.
+ * S'arrête dès le premier trouvé (early return).
+ */
+function dir_has_video(string $path): bool {
+    static $videoExts = ['mp4' => 1, 'm4v' => 1, 'mov' => 1, 'webm' => 1, 'mkv' => 1, 'avi' => 1];
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::LEAVES_ONLY
+    );
+    foreach ($it as $f) {
+        if ($f->isFile() && isset($videoExts[strtolower($f->getExtension())])) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * Retourne 'video', 'audio' ou null selon l'extension du fichier
  */
 function get_media_type(string $filename): ?string {
@@ -124,15 +142,19 @@ function get_media_type(string $filename): ?string {
 function extract_title_year(string $name): array {
     // Retirer l'extension si c'est un fichier
     $clean = pathinfo($name, PATHINFO_EXTENSION) ? pathinfo($name, PATHINFO_FILENAME) : $name;
+    // Retirer les tags entre crochets (ex: [Torrent911.com], [1080p], [FR])
+    $clean = preg_replace('/\[.*?\]/', '', $clean);
     // Remplacer les séparateurs courants par des espaces
     $clean = preg_replace('/[._()[\]{}]+/', ' ', $clean);
+    // Retirer la numérotation en début (ex: "01 - ", "01. ", "95 - ")
+    $clean = preg_replace('/^\s*\d{1,3}\s*[-–.]\s*/', '', $clean);
     // Chercher une année (4 chiffres entre 1950 et 2099)
     $year = null;
     if (preg_match('/\b((?:19|20)\d{2})\b/', $clean, $m)) {
         $year = (int)$m[1];
     }
     // Couper au premier tag technique
-    $title = preg_replace('/\b(multi|vff|vfq|truefrench|french|english|vostfr|subfrench|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|hdtv|dvdrip|hdrip|x264|x265|h264|h265|hevc|avc|10bit|remux|2160p|1080p|720p|480p|uhd|4k|hdr|hdr10|dts|truehd|atmos|aac|ac3|flac|ddp?\d|proper|repack|internal|extended|unrated|directors?-?cut|complete|s\d{2}e?\d{0,2})\b.*/i', '', $clean);
+    $title = preg_replace('/\b(multi|vff|vfq|truefrench|french|english|vostfr|subfrench|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|hdtv|dvdrip|hdrip|x264|x265|h264|h265|hevc|avc|xvid|divx|avi|mpeg|mpg|10bit|remux|2160p|1080p|720p|480p|uhd|4k|hdr|hdr10|dts|truehd|atmos|aac|ac3|flac|ddp?\d|proper|repack|internal|extended|unrated|directors?-?cut|complete|s\d{2}e?\d{0,2})\b.*/i', '', $clean);
     // Si on a coupé à l'année, la retirer du titre aussi
     if ($year) {
         $title = preg_replace('/\b' . $year . '\b/', '', $title);
