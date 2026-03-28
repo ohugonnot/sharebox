@@ -6,9 +6,9 @@ if ($mime && str_starts_with($mime, 'video/')) {
     $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
     $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
 
-    // Dossier temp unique par fichier+qualité+audio+burnSub (PAS startSec)
-    // Seek ne crée pas de nouvelle session — le JS gère le seek dans la playlist existante
-    $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $burnSub);
+    // Dossier temp unique par fichier+qualité+audio+burnSub+startSec
+    // Chaque seek crée une nouvelle session HLS (Safari ne peut pas seek au-delà des segments encodés)
+    $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $burnSub . '|' . $startSec);
     $hlsDir = sys_get_temp_dir() . '/hls_' . $hlsKey;
     $m3u8   = $hlsDir . '/stream.m3u8';
     $pidFile = $hlsDir . '/ffmpeg.pid';
@@ -45,12 +45,8 @@ if ($mime && str_starts_with($mime, 'video/')) {
     if (!$needStart && is_file($pidFile)) {
         $pid = (int)file_get_contents($pidFile);
         if ($pid > 0 && !file_exists('/proc/' . $pid)) {
-            // ffmpeg est mort — si seek demandé, relancer avec le nouveau start
-            if ($startSec > 0) {
-                // Nettoyer l'ancien dossier et relancer
-                array_map('unlink', glob($hlsDir . '/*'));
-                $needStart = true;
-            }
+            array_map('unlink', glob($hlsDir . '/*'));
+            $needStart = true;
         }
     }
 
@@ -71,7 +67,8 @@ if ($mime && str_starts_with($mime, 'video/')) {
         $ffmpegCmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
             . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
             . buildFfmpegCodecArgs(50)
-            . ' -f hls -hls_time 4 -hls_list_size 0 -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
+            . ' -f hls -hls_time 4 -hls_list_size 0 -hls_playlist_type event'
+            . ' -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
             . ' -hls_flags append_list'
             . ' ' . escapeshellarg($m3u8)
             . ' -loglevel error 2>>' . escapeshellarg($logFile);
