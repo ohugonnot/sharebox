@@ -434,7 +434,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .poster-modal-close:hover { background:rgba(255,255,255,.05); color:var(--text-primary); }
 .grid-card-letter { font-family:var(--font-sans); font-weight:700; font-size:3rem; color:rgba(255,255,255,.18); text-transform:uppercase; user-select:none; }
 .grid-card-icon { position:absolute; top:.7rem; right:.7rem; opacity:.25; }
-.grid-card-label { padding:.4rem .5rem; background:rgba(0,0,0,.72); text-align:center; min-height:2rem; display:flex; align-items:center; justify-content:center; }
+.grid-card-label { padding:.4rem .5rem; background:rgba(0,0,0,.72); text-align:center; height:3rem; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .grid-card-title { font-size:.85rem; font-weight:700; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; text-shadow:0 1px 2px rgba(0,0,0,.5); overflow-wrap:break-word; word-break:break-word; hyphens:auto; text-wrap:balance; }
 .grid-card:nth-child(1){animation-delay:.03s}.grid-card:nth-child(2){animation-delay:.06s}.grid-card:nth-child(3){animation-delay:.09s}.grid-card:nth-child(4){animation-delay:.12s}.grid-card:nth-child(5){animation-delay:.15s}.grid-card:nth-child(6){animation-delay:.18s}.grid-card:nth-child(n+7){animation-delay:.21s}
 .grid-card.hidden { display:none; }
