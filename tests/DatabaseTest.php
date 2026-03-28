@@ -130,13 +130,24 @@ class DatabaseTest extends TestCase
         $this->assertSame('wal', strtolower($mode));
     }
 
-    // ── 5. Migration: user_version is 1 ─────────────────────────────────
+    // ── 5. Migration: user_version is current ──────────────────────────
 
-    public function testUserVersionIsOne(): void
+    public function testUserVersionIsCurrent(): void
     {
         $db = get_db();
         $version = (int) $db->query('PRAGMA user_version')->fetchColumn();
-        $this->assertSame(1, $version);
+        $this->assertSame(3, $version);
+    }
+
+    // ── 5b. folder_posters table exists ──────────────────────────────────
+
+    public function testFolderPostersTableExists(): void
+    {
+        $db = get_db();
+        $cols = $this->getColumnNames($db, 'folder_posters');
+        $this->assertContains('path', $cols);
+        $this->assertContains('poster_url', $cols);
+        $this->assertContains('tmdb_id', $cols);
     }
 
     // ── 6. purge_probe_cache() ──────────────────────────────────────────
