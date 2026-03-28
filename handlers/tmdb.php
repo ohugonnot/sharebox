@@ -80,6 +80,7 @@ if (isset($_GET['posters'])) {
                 }
                 // Fetch season poster from TMDB
                 poster_log('SEASON fetch | ' . $f . ' num=' . $seasonNum . ' parentId=' . $parentTmdbId . (($row ? ' stale_id=' . ($row['tmdb_id'] ?? 'null') : ' no_cache')));
+                usleep(250000); // rate limit TMDB
                 $seasonUrl = "https://api.themoviedb.org/3/tv/{$parentTmdbId}/season/{$seasonNum}?api_key={$apiKey}&language=fr";
                 $sCtx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
                 $sResp = @file_get_contents($seasonUrl, false, $sCtx);
