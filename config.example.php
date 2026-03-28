@@ -32,4 +32,4 @@ define('MAX_ZIP_SIZE', 10 * 1024 * 1024 * 1024);
 
 // rtorrent SCGI socket path. The torrents dashboard section is shown only if
 // this socket exists on disk. Comment out or set to '' to disable.
-// define('RTORRENT_SOCK', '/var/run/ropixv2/.rtorrent.sock');
+// define('RTORRENT_SOCK', '/var/run/rtorrent/.rtorrent.sock');
