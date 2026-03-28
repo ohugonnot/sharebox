@@ -55,12 +55,12 @@ $runModes = ($arg === '--cron') ? ['--pending', '--verify'] : [$arg];
 foreach ($runModes as $mode) {
 
 if ($mode === '--pending') {
-    // Find ALL entries with poster_url IS NULL (regex+TMDB failed, needs AI)
-    $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll();
+    // Find entries with poster_url IS NULL, skip those already tried 3+ times
+    $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
     if (empty($rows)) {
         echo "Nothing pending.\n";
     } else {
-        processPendingEntries($rows, $db, $AI_BIN, $TMDB_API_KEY);
+        processPendingEntries($rows, $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
     }
 } elseif ($mode === '--all') {
     // Process all movies-tagged folders (full rescan, not just pending)
@@ -99,9 +99,10 @@ if ($mode === '--pending') {
 
 /**
  * Process pending entries (poster_url IS NULL) from any shared folder.
- * Groups by parent directory, sends batch to AI, retries TMDB.
+ * Groups by parent directory, filters out dirs without video content,
+ * sends batch to AI, retries TMDB. Increments ai_attempts on miss.
  */
-function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiKey): void
+function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiKey, array $videoExts): void
 {
     // Group entries by parent directory
     $byDir = [];
@@ -110,6 +111,31 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
         $dir = dirname($path);
         $name = basename($path);
         $byDir[$dir][] = $name;
+    }
+
+    // Filter: only keep directories that contain at least one video file or subfolder
+    foreach ($byDir as $dir => $names) {
+        if (!is_dir($dir)) { unset($byDir[$dir]); continue; }
+        $hasMedia = false;
+        $items = @scandir($dir);
+        if ($items === false) { unset($byDir[$dir]); continue; }
+        foreach ($items as $item) {
+            if ($item[0] === '.') continue;
+            // A subfolder counts (it's a series folder with subfolders)
+            if (is_dir($dir . '/' . $item)) { $hasMedia = true; break; }
+            $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+            if (in_array($ext, $videoExts, true)) { $hasMedia = true; break; }
+        }
+        if (!$hasMedia) {
+            // No media content — mark these entries as given up
+            foreach ($names as $n) {
+                try {
+                    $db->prepare("UPDATE folder_posters SET ai_attempts = 3 WHERE path = :p")
+                       ->execute([':p' => $dir . '/' . $n]);
+                } catch (PDOException $e) { /* ignore */ }
+            }
+            unset($byDir[$dir]);
+        }
     }
 
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
@@ -160,6 +186,11 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                 } catch (PDOException $e) { /* ignore */ }
             } else {
                 echo "  MISS  " . $name . " (searched: " . $title . ")\n";
+                // Increment ai_attempts so we give up after 3 tries
+                try {
+                    $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
+                       ->execute([':p' => $fullPath]);
+                } catch (PDOException $e) { /* ignore */ }
             }
 
             usleep(250000);

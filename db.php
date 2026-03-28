@@ -128,6 +128,15 @@ function get_db(): PDO {
         $db->query('PRAGMA user_version = 5');
     }
 
+    if ($version < 6) {
+        // v6 : compteur de tentatives AI (abandon après N échecs)
+        $cols = array_column($db->query("PRAGMA table_info(folder_posters)")->fetchAll(), 'name');
+        if (!in_array('ai_attempts', $cols, true)) {
+            $db->query("ALTER TABLE folder_posters ADD COLUMN ai_attempts INTEGER DEFAULT 0");
+        }
+        $db->query('PRAGMA user_version = 6');
+    }
+
     return $db;
 }
 
