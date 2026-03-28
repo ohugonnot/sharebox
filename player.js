@@ -78,11 +78,13 @@ function plog(tag, msg, data) {
         if (h > 0) return h + ':' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec;
         return m + ':' + (sec < 10 ? '0' : '') + sec;
     }
-    function realTime() { return useHLS ? (player.currentTime || 0) : S.offset + (player.currentTime || 0); }
+    function realTime() { return S.offset + (player.currentTime || 0); }
     // Safari iOS : utiliser HLS au lieu de fMP4 (Safari coupe les streams fMP4 sans Range support)
-    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+    // Détection iPad Desktop Mode : platform peut être "MacIntel" ou futur "macOS" → /^Mac/
+    var isIOS = (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream)
+             || (/^Mac/.test(navigator.platform || '') && navigator.maxTouchPoints > 1);
     var isSafari = /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent);
-    var useHLS = isIOS || (isSafari && 'ontouchend' in document);
+    var useHLS = isIOS;
     function buildUrl(mode, audio, startSec) {
         if (mode === 'native') return base + '?' + pp + 'stream=1';
         // Sur Safari iOS, remplacer transcode par HLS
@@ -284,7 +286,7 @@ function plog(tag, msg, data) {
         // FLAC/AC3/DTS/TrueHD → transcode (le navigateur ne décode pas ces audios)
         if (c === 'hevc') {
             var hevcSupported = canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"');
-            if (hevcSupported && nativeAudio) return 'native';
+            if (d.isMP4 && hevcSupported && nativeAudio) return 'native';
             return 'transcode';
         }
         return 'transcode';
@@ -332,7 +334,7 @@ function plog(tag, msg, data) {
     // transcode sans burnSub : 20s  (décode depuis keyframe)
     // transcode avec burnSub : 30s  (décode + overlay = très lourd sur 4K HEVC)
     function stallTimeout() {
-        var base = S.confirmed === 'remux' ? 10000 : (S.burnSub >= 0 ? 30000 : 20000);
+        var base = S.confirmed === 'remux' ? 10000 : (useHLS ? 30000 : (S.burnSub >= 0 ? 30000 : 20000));
         return Math.min(base * Math.pow(2, S.stallCount), 120000); // exponentiel, cap 2min
     }
     function startStallWatchdog() {
@@ -378,12 +380,42 @@ function plog(tag, msg, data) {
     // ── Module sous-titres ────────────────────────────────────────────────────
     var Subs = {
         cues: [], types: [], urls: [],
-        _div: null, _idx: 0, _gen: 0,
+        _div: null, _idx: 0, _gen: 0, _track: null, _trackUrl: null,
         resetIdx: function() { this._idx = this.cues.length ? this._find(realTime()) : 0; },
         _find: function(t) {
             var lo = 0, hi = this.cues.length;
             while (lo < hi) { var mid = (lo + hi) >> 1; if (this.cues[mid].end <= t) lo = mid + 1; else hi = mid; }
             return lo;
+        },
+        // <track> pour sous-titres en fullscreen natif iOS (DOM overlay invisible derrière le player natif)
+        _syncTrack: function() {
+            if (!isIOS) return;
+            if (this._track) { this._track.remove(); this._track = null; }
+            if (this._trackUrl) { URL.revokeObjectURL(this._trackUrl); this._trackUrl = null; }
+            if (!this.cues.length) return;
+            var lines = ['WEBVTT', ''];
+            for (var i = 0; i < this.cues.length; i++) {
+                var c = this.cues[i];
+                var st = c.start - S.offset, en = c.end - S.offset;
+                if (en <= 0) continue;
+                if (st < 0) st = 0;
+                lines.push(this._fmtVtt(st) + ' --> ' + this._fmtVtt(en));
+                lines.push(c.text);
+                lines.push('');
+            }
+            var blob = new Blob([lines.join('\n')], {type: 'text/vtt'});
+            this._trackUrl = URL.createObjectURL(blob);
+            this._track = document.createElement('track');
+            this._track.kind = 'subtitles';
+            this._track.label = 'Sous-titres';
+            this._track.srclang = 'und';
+            this._track.src = this._trackUrl;
+            player.appendChild(this._track);
+            this._track.track.mode = player.webkitDisplayingFullscreen ? 'showing' : 'hidden';
+        },
+        _fmtVtt: function(s) {
+            var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+            return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec.toFixed(3);
         },
         render: function() {
             if (!this._div) return;
@@ -403,6 +435,7 @@ function plog(tag, msg, data) {
             var wasBurning = S.burnSub >= 0, pos = realTime();
             this.cues = []; this._idx = 0; S.burnSub = -1;
             if (this._div) this._div.innerHTML = '';
+            this._syncTrack();
             if (idx >= 0 && this.types[idx] === 'image') {
                 S.burnSub = idx; S.confirmed = S.step = 'transcode';
                 hint.textContent = 'Transcodage avec sous-titres...'; hint.className = 'player-hint transcoding';
@@ -418,6 +451,7 @@ function plog(tag, msg, data) {
                         if (gen !== self._gen) { plog('SUBS', 'DISCARDED: gen=' + gen + ' current=' + self._gen); return; }
                         self.cues = parseVTT(t);
                         self._idx = self._find(realTime());
+                        self._syncTrack();
                         plog('SUBS', 'loaded ' + self.cues.length + ' cues, idx=' + self._idx + ' time=' + realTime().toFixed(1));
                     })
                     .catch(function(e) { plog('SUBS', 'fetch error: ' + e); });
@@ -449,6 +483,17 @@ function plog(tag, msg, data) {
             document.addEventListener('webkitfullscreenchange', function() { setTimeout(pos, 50); });
             if (window.ResizeObserver) { this._ro = new ResizeObserver(pos); this._ro.observe(player); }
             else { this._resizeHandler = pos; window.addEventListener('resize', pos); }
+            // iOS fullscreen natif : afficher/masquer le <track> (seul moyen d'avoir les sous-titres)
+            if (isIOS) {
+                var self = this;
+                player.addEventListener('webkitbeginfullscreen', function() {
+                    if (self.cues.length) self._syncTrack();
+                    if (self._track) self._track.track.mode = 'showing';
+                });
+                player.addEventListener('webkitendfullscreen', function() {
+                    if (self._track) self._track.track.mode = 'hidden';
+                });
+            }
         }
     };
 
@@ -492,7 +537,7 @@ function plog(tag, msg, data) {
         var pct = t / S.duration * 100;
         seekFill.style.width = pct + '%'; seekThumb.style.left = pct + '%'; timeCurrent.textContent = fmtTime(t);
         clearTimeout(S.seekDebounce);
-        if (S.confirmed === 'native' || useHLS) {
+        if (S.confirmed === 'native') {
             S.seekPending = false; player.currentTime = t; hint.textContent = '';
             Subs.resetIdx();
         } else {
@@ -525,7 +570,7 @@ function plog(tag, msg, data) {
     seekBar.addEventListener('mousedown',  function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); });
     seekBar.addEventListener('touchstart', function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); }, {passive:true});
     document.addEventListener('mousemove', function(e) { if (S.dragging) seekToFraction(getFraction(e)); });
-    document.addEventListener('touchmove', function(e) { if (S.dragging) seekToFraction(getFraction(e)); }, {passive:true});
+    document.addEventListener('touchmove', function(e) { if (S.dragging) { e.preventDefault(); seekToFraction(getFraction(e)); } }, {passive:false});
     document.addEventListener('mouseup',   function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } });
     document.addEventListener('touchend',  function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } });
     seekBar.addEventListener('mousemove', function(e) {
@@ -660,6 +705,9 @@ function plog(tag, msg, data) {
             lastClickTime = isDouble ? 0 : now;
             if (isDouble) {
                 // Double-tap : annuler le play/pause du premier tap, toggle fullscreen
+                // Sur iOS : toggle fullscreen d'abord — le user gesture est consommé par play()/pause()
+                // ce qui fait échouer webkitEnterFullscreen si on l'appelle après
+                if (isIOS) { toggleFs(); return; }
                 if (wasPausedBeforeTap) { player.pause(); showPlayIcon(true); }
                 else { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
                 toggleFs();
@@ -683,12 +731,18 @@ function plog(tag, msg, data) {
         if (fsBtn) fsBtn.addEventListener('click', toggleFs);
         // Zoom
         if (zoomBtn) zoomBtn.addEventListener('click', toggleZoom);
-        // Picture-in-Picture
-        if (pipBtn && document.pictureInPictureEnabled) {
+        // Picture-in-Picture (standard API + fallback iOS webkitPresentationMode)
+        var hasPip = document.pictureInPictureEnabled;
+        var hasIosPip = !hasPip && isIOS && typeof player.webkitSetPresentationMode === 'function';
+        if (pipBtn && (hasPip || hasIosPip)) {
             pipBtn.style.display = '';
             pipBtn.addEventListener('click', function() {
-                if (document.pictureInPictureElement) document.exitPictureInPicture().catch(function(){});
-                else player.requestPictureInPicture().catch(function(){});
+                if (hasIosPip) {
+                    player.webkitSetPresentationMode(player.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+                } else {
+                    if (document.pictureInPictureElement) document.exitPictureInPicture().catch(function(){});
+                    else player.requestPictureInPicture().catch(function(){});
+                }
             });
         }
         // Volume
@@ -696,6 +750,12 @@ function plog(tag, msg, data) {
         player.volume = isNaN(savedVol) ? 1 : Math.max(0, Math.min(1, savedVol));
         player.muted  = lsGet('player_muted', 'false') === 'true';
         updateVolUI();
+        // iOS Safari ignore player.volume/muted via JS — cacher les contrôles volume
+        if (isIOS) {
+            muteBtn.style.display = 'none';
+            var volWrap = muteBtn.closest('.vol-wrap') || (volSlider ? volSlider.parentNode : null);
+            if (volWrap) volWrap.style.display = 'none';
+        }
         muteBtn.addEventListener('click', function() {
             player.muted = !player.muted;
             lsSet('player_muted', player.muted);
@@ -714,8 +774,8 @@ function plog(tag, msg, data) {
                 lsSet('player_muted',  player.muted);
             }, 500);
         });
-        // Molette : volume
-        playerCard.addEventListener('wheel', function(e) {
+        // Molette : volume (pas sur iOS — volume contrôlé par boutons physiques uniquement)
+        if (!isIOS) playerCard.addEventListener('wheel', function(e) {
             e.preventDefault();
             var delta = e.deltaY < 0 ? 0.05 : -0.05;
             player.volume = Math.min(1, Math.max(0, player.volume + delta));
@@ -738,6 +798,8 @@ function plog(tag, msg, data) {
             player.playbackRate = S.speed; speedBtn.textContent = S.speed + '\u00D7';
             lsSet('player_speed', S.speed);
         }); }
+        // iOS Safari ignore playbackRate sur HLS — masquer le bouton vitesse
+        if (isIOS && speedBtn) speedBtn.style.display = 'none';
         // Sauvegarde de position toutes les 5 s (30s min, 60s avant fin)
         setInterval(function() {
             if (player.paused || S.duration <= 0) return;
@@ -817,7 +879,7 @@ function plog(tag, msg, data) {
         trackBar.appendChild(modeBtn); trackBar.style.display = 'flex';
         // Overlay raccourcis clavier (touche ?)
         var kbStyle = document.createElement('style');
-        kbStyle.textContent = '#kb-overlay{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)}#kb-overlay.hidden{display:none}#kb-card{background:#1a1d28;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:1.5rem 2rem;min-width:270px}#kb-card h3{font-size:.8rem;font-weight:700;color:#8b90a0;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.85rem}.kb-row{display:flex;align-items:center;justify-content:space-between;padding:.27rem 0;border-bottom:1px solid rgba(255,255,255,.055);font-size:.81rem;gap:1.2rem}.kb-row:last-child{border-bottom:none}.kb-key{font-family:monospace;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:4px;padding:.13rem .48rem;font-size:.72rem;color:#e8eaf0;white-space:nowrap;flex-shrink:0}.kb-desc{color:#8b90a0}';
+        kbStyle.textContent = '#kb-overlay{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}#kb-overlay.hidden{display:none}#kb-card{background:#1a1d28;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:1.5rem 2rem;min-width:270px}#kb-card h3{font-size:.8rem;font-weight:700;color:#8b90a0;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.85rem}.kb-row{display:flex;align-items:center;justify-content:space-between;padding:.27rem 0;border-bottom:1px solid rgba(255,255,255,.055);font-size:.81rem;gap:1.2rem}.kb-row:last-child{border-bottom:none}.kb-key{font-family:monospace;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:4px;padding:.13rem .48rem;font-size:.72rem;color:#e8eaf0;white-space:nowrap;flex-shrink:0}.kb-desc{color:#8b90a0}';
         document.head.appendChild(kbStyle);
         var kbOverlay = document.createElement('div');
         kbOverlay.id = 'kb-overlay';
@@ -899,7 +961,9 @@ function plog(tag, msg, data) {
             }
             else if (e.key === 'p' || e.key === 'P') {
                 e.preventDefault();
-                if (document.pictureInPictureEnabled) {
+                if (hasIosPip) {
+                    player.webkitSetPresentationMode(player.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture');
+                } else if (document.pictureInPictureEnabled) {
                     if (document.pictureInPictureElement) document.exitPictureInPicture().catch(function(){});
                     else player.requestPictureInPicture().catch(function(){});
                 }
