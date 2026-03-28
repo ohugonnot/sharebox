@@ -634,18 +634,29 @@ function askAIVerify(array $pairs, string $aiBin): ?array
         $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE);
 
         $prompt = <<<PROMPT
-Tu reçois des paires {nom de fichier vidéo, titre TMDB matché automatiquement}.
-Vérifie si chaque match est correct (le titre TMDB correspond bien au film du fichier).
+Tu reçois des paires {nom de fichier/dossier, titre TMDB matché automatiquement}.
+Vérifie si chaque match est correct.
 
 Retourne UNIQUEMENT un JSON array (sans markdown, sans code fences), avec pour chaque paire:
 {"file": "nom original", "tmdb_title": "titre matché", "correct": true/false, "suggested_title": "meilleur titre pour TMDB", "year": 1999}
 
 Règles:
-- correct=true si le titre TMDB est bien le film du fichier (même si la graphie diffère légèrement)
-- correct=false si c'est clairement un mauvais match (film différent, album musique, etc.)
-- Si correct=false, suggested_title = le bon titre à chercher sur TMDB (avec caractères spéciaux si nécessaire, ex: WALL·E pas Wall-E)
-- Si correct=true, suggested_title peut être omis ou vide
-- year = année du film (utile pour désambiguïser)
+- correct=true si le titre TMDB correspond au contenu du fichier/dossier (même si la graphie diffère, même si c'est le titre traduit)
+- correct=false UNIQUEMENT si c'est clairement un mauvais match (film totalement différent, série sans rapport)
+
+Cas spéciaux — NE PAS marquer comme incorrect:
+- Les dossiers de saison (S01, S02, Season 1, Saison 2...) matchés à "Saison N" : c'est CORRECT, ce sont des posters de saison TMDB
+- Les collections/sagas (INTEGRALE, COLLECTION, COMPLETE) matchées à un titre de saga : c'est CORRECT
+- Un titre traduit (ex: "Despicable Me" → "Moi, moche et méchant") : c'est CORRECT
+- Une légère différence de graphie ou de sous-titre : c'est CORRECT
+
+Cas à marquer comme incorrect:
+- Un dossier matché à un film/série complètement différent (ex: "Vol 1" → "Kill Bill")
+- Un dossier générique (Films, Movie, Covers) matché à un contenu spécifique
+- Une série matchée à un épisode spécial ou un film dérivé au lieu de la série principale
+
+Si correct=false : suggested_title = le bon titre à chercher sur TMDB
+Si correct=true : suggested_title peut être omis
 
 Paires à vérifier:
 $fileList
