@@ -108,7 +108,7 @@ if (isset($_GET['posters'])) {
     if (!empty($eligibleFolders)) {
         $folderPaths = array_map(fn($f) => $resolvedPath . '/' . $f, $eligibleFolders);
         $ph = implode(',', array_fill(0, count($folderPaths), '?'));
-        $stmt = $db->prepare("SELECT path, poster_url, overview FROM folder_posters WHERE path IN ($ph)");
+        $stmt = $db->prepare("SELECT path, poster_url, overview, verified FROM folder_posters WHERE path IN ($ph)");
         $stmt->execute($folderPaths);
         foreach ($stmt->fetchAll() as $row) {
             $folderDbRows[$row['path']] = $row;
@@ -125,6 +125,9 @@ if (isset($_GET['posters'])) {
                 $cached[$f] = ['poster' => $row['poster_url']];
                 if ($row['overview']) $cached[$f]['overview'] = $row['overview'];
                 $posterCount[$row['poster_url']] = ($posterCount[$row['poster_url']] ?? 0) + 1;
+            } elseif ((int)($row['verified'] ?? 0) === -1) {
+                // poster_url NULL + verified=-1 → user requested AI recheck
+                $cached[$f] = ['pending_ai' => true];
             }
         } else {
             $uncached[] = $f;
@@ -467,8 +470,8 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!is_dir($fullPath) && !is_file($fullPath)) { http_response_code(404); echo json_encode(['error' => 'not found']); exit; }
 
     try {
-        // Reset verified + clear poster so AI cron re-processes it
-        $db->prepare("UPDATE folder_posters SET verified = 0, poster_url = NULL, ai_attempts = 0 WHERE path = :p AND poster_url != '__none__'")
+        // Reset poster + mark as pending AI (verified=-1) so cron re-processes it
+        $db->prepare("UPDATE folder_posters SET verified = -1, poster_url = NULL, ai_attempts = 0 WHERE path = :p AND poster_url != '__none__'")
            ->execute([':p' => $fullPath]);
         echo json_encode(['success' => true]);
     } catch (PDOException $e) {

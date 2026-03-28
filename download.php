@@ -417,6 +417,10 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card-menu-item { display:flex; align-items:center; gap:.5rem; padding:.45rem .75rem; color:rgba(255,255,255,.85); font-size:.78rem; cursor:pointer; white-space:nowrap; transition:background .1s; }
 .grid-card-menu-item:hover { background:rgba(255,255,255,.08); }
 .grid-card-menu-item svg { width:14px; height:14px; flex-shrink:0; }
+.grid-card-ai-pending { position:absolute; inset:0; background:rgba(0,0,0,.7); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:4; pointer-events:none; gap:.4rem; }
+.grid-card-ai-pending svg { width:20px; height:20px; color:var(--accent); opacity:.8; animation:spin 2s linear infinite; }
+.grid-card-ai-pending span { font-size:.65rem; color:rgba(255,255,255,.7); text-align:center; line-height:1.3; padding:0 .5rem; }
+@keyframes spin { to { transform:rotate(360deg); } }
 /* Poster picker modal */
 .poster-modal { position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px); animation:fadeUp .15s ease; }
 .poster-modal-card { background:var(--bg-surface); border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); padding:1.5rem; max-width:720px; width:94%; max-height:85vh; overflow-y:auto; }
@@ -907,6 +911,27 @@ function togglePoster(btn, folderName) {
                         }
                         return;
                     }
+                    // En attente de vérification IA → badge overlay
+                    if (info.pending_ai) {
+                        if (!card.querySelector('.grid-card-ai-pending')) {
+                            var ai = document.createElement('div');
+                            ai.className = 'grid-card-ai-pending';
+                            var aiSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+                            aiSvg.setAttribute('viewBox','0 0 24 24'); aiSvg.setAttribute('fill','none');
+                            aiSvg.setAttribute('stroke','currentColor'); aiSvg.setAttribute('stroke-width','2');
+                            var aiPath = document.createElementNS('http://www.w3.org/2000/svg','path');
+                            aiPath.setAttribute('d','M21 12a9 9 0 11-6.22-8.57');
+                            aiSvg.appendChild(aiPath);
+                            var aiText = document.createElement('span');
+                            aiText.textContent = 'V\u00e9rification IA\nen attente';
+                            ai.appendChild(aiSvg); ai.appendChild(aiText);
+                            card.appendChild(ai);
+                        }
+                        return;
+                    }
+                    // Si le badge AI pending existait, le retirer (IA a traité)
+                    var oldAi = card.querySelector('.grid-card-ai-pending');
+                    if (oldAi) oldAi.remove();
                     var poster = typeof info === 'string' ? info : info.poster;
                     var overview = typeof info === 'object' ? info.overview : null;
                     var bg = card.querySelector('.grid-card-bg');
@@ -1097,21 +1122,28 @@ function toggleCardMenu(btn, folderName) {
         var item2 = document.createElement('div');
         item2.className = 'grid-card-menu-item';
         var nextType = currentType === 'movies' ? 'series' : 'movies';
-        // Icon: film strip
+        // Icon: TV for series, film clap for movies (shows target type)
         var svg2 = document.createElementNS('http://www.w3.org/2000/svg','svg');
         svg2.setAttribute('viewBox','0 0 24 24'); svg2.setAttribute('fill','none');
         svg2.setAttribute('stroke','currentColor'); svg2.setAttribute('stroke-width','2');
-        var r2 = document.createElementNS('http://www.w3.org/2000/svg','rect');
-        r2.setAttribute('x','2'); r2.setAttribute('y','2'); r2.setAttribute('width','20'); r2.setAttribute('height','20'); r2.setAttribute('rx','2.18');
-        svg2.appendChild(r2);
-        [['7','2','7','22'],['17','2','17','22'],['2','12','22','12']].forEach(function(c){
-            var ln = document.createElementNS('http://www.w3.org/2000/svg','line');
-            ln.setAttribute('x1',c[0]); ln.setAttribute('y1',c[1]); ln.setAttribute('x2',c[2]); ln.setAttribute('y2',c[3]);
-            svg2.appendChild(ln);
-        });
+        if (nextType === 'movies') {
+            // Film clap icon → "passer en films"
+            var p2a = document.createElementNS('http://www.w3.org/2000/svg','path');
+            p2a.setAttribute('d','M4 20h16a2 2 0 002-2V8H2v10a2 2 0 002 2z');
+            var p2b = document.createElementNS('http://www.w3.org/2000/svg','path');
+            p2b.setAttribute('d','M2 8l4-4h4l-4 4M10 8l4-4h4l-4 4M18 8l4-4');
+            svg2.appendChild(p2a); svg2.appendChild(p2b);
+        } else {
+            // TV icon → "passer en séries"
+            var r2 = document.createElementNS('http://www.w3.org/2000/svg','rect');
+            r2.setAttribute('x','2'); r2.setAttribute('y','7'); r2.setAttribute('width','20'); r2.setAttribute('height','15'); r2.setAttribute('rx','2');
+            var p2a = document.createElementNS('http://www.w3.org/2000/svg','polyline');
+            p2a.setAttribute('points','17 2 12 7 7 2');
+            svg2.appendChild(r2); svg2.appendChild(p2a);
+        }
         item2.appendChild(svg2);
         var span2 = document.createElement('span');
-        span2.textContent = currentType === 'movies' ? 'Contenu : Films (changer)' : 'Contenu : S\u00e9ries (changer)';
+        span2.textContent = nextType === 'movies' ? 'Passer en mode Films' : 'Passer en mode S\u00e9ries';
         item2.appendChild(span2);
         item2.onclick = function(e) {
             e.preventDefault(); e.stopPropagation();
@@ -1171,8 +1203,26 @@ function requestAIRecheck(name) {
         if (d.success) {
             var card = document.querySelector('.grid-card[data-folder="'+CSS.escape(name)+'"]');
             if (card) {
+                // Retirer le poster et ajouter le badge AI pending
+                card.classList.remove('has-poster');
                 var bg = card.querySelector('.grid-card-bg');
-                if (bg) bg.style.opacity = '0.5';
+                if (bg) bg.style.backgroundImage = '';
+                var oldOv = card.querySelector('.grid-card-overview');
+                if (oldOv) oldOv.remove();
+                if (!card.querySelector('.grid-card-ai-pending')) {
+                    var ai = document.createElement('div');
+                    ai.className = 'grid-card-ai-pending';
+                    var aiSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+                    aiSvg.setAttribute('viewBox','0 0 24 24'); aiSvg.setAttribute('fill','none');
+                    aiSvg.setAttribute('stroke','currentColor'); aiSvg.setAttribute('stroke-width','2');
+                    var aiPath = document.createElementNS('http://www.w3.org/2000/svg','path');
+                    aiPath.setAttribute('d','M21 12a9 9 0 11-6.22-8.57');
+                    aiSvg.appendChild(aiPath);
+                    var aiText = document.createElement('span');
+                    aiText.textContent = 'V\u00e9rification IA\nen attente';
+                    ai.appendChild(aiSvg); ai.appendChild(aiText);
+                    card.appendChild(ai);
+                }
             }
         }
     }).catch(function(){});
