@@ -254,6 +254,22 @@ function stream_log(string $msg): void {
     @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
 }
 
+/**
+ * Log un message dans le fichier poster.log avec rotation (5 MB max, 3 fichiers).
+ * Utilisé pour tracer les opérations TMDB, AI, et les changements en DB.
+ */
+function poster_log(string $msg): void {
+    $logFile = (defined('STREAM_LOG') && STREAM_LOG) ? dirname(STREAM_LOG) . '/poster.log' : null;
+    if (!$logFile) return;
+    if (@filesize($logFile) > LOG_ROTATION_SIZE) {
+        for ($r = LOG_ROTATION_COUNT; $r > 1; $r--) @rename($logFile . '.' . ($r - 1), $logFile . '.' . $r);
+        @rename($logFile, $logFile . '.1');
+    }
+    $caller = php_sapi_name() === 'cli' ? 'CLI' : ($_SERVER['REMOTE_ADDR'] ?? '-');
+    $line = '[' . date('Y-m-d H:i:s') . '] [' . $caller . '] ' . $msg . "\n";
+    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
+}
+
 // ── FFmpeg helpers ──────────────────────────────────────────────────────────
 
 const ALLOWED_QUALITIES = [480, 576, 720, 1080];
