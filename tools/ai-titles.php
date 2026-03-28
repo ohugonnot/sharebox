@@ -105,6 +105,7 @@ if ($mode === '--pending') {
     foreach ($rows as $row) {
         $dir = dirname($row['path']);
         $tid = $row['tmdb_id'] ?? 0;
+        if ($tid === 0) continue; // Don't group entries with unknown tmdb_id
         $byDirTmdb[$dir][$tid][] = $row['path'];
     }
     $autoVerified = 0;
