@@ -136,7 +136,7 @@ class DatabaseTest extends TestCase
     {
         $db = get_db();
         $version = (int) $db->query('PRAGMA user_version')->fetchColumn();
-        $this->assertSame(6, $version);
+        $this->assertSame(7, $version);
     }
 
     // ── 5b. folder_posters table exists ──────────────────────────────────
@@ -168,6 +168,16 @@ class DatabaseTest extends TestCase
         $row->execute(['/test/default-type']);
         $value = $row->fetchColumn();
         $this->assertSame('series', $value);
+    }
+
+    // ── 5d. folder_posters has tmdb_year and tmdb_type columns ──────────
+
+    public function testFolderPostersHasTmdbYearAndTypeColumns(): void
+    {
+        $db = get_db();
+        $cols = $this->getColumnNames($db, 'folder_posters');
+        $this->assertContains('tmdb_year', $cols);
+        $this->assertContains('tmdb_type', $cols);
     }
 
     // ── 6. purge_probe_cache() ──────────────────────────────────────────

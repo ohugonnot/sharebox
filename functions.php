@@ -303,6 +303,8 @@ function tmdb_search(string $title, ?int $year, string $apiKey, $ctx, array $end
                             'id' => $r['id'] ?? null,
                             'title' => $r['title'] ?? $r['name'] ?? null,
                             'overview' => $r['overview'] ?? null,
+                            'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
+                            'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
                         ];
                     }
                 }

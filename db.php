@@ -76,7 +76,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 6; // bump when adding migrations
+    $targetVersion = 7; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -136,6 +136,18 @@ function get_db(): PDO {
             $db->query("ALTER TABLE folder_posters ADD COLUMN ai_attempts INTEGER DEFAULT 0");
         }
         $db->query('PRAGMA user_version = 6');
+    }
+
+    if ($version < 7) {
+        // v7 : année et type TMDB pour enrichir le contexte AI de vérification
+        $cols = array_column($db->query("PRAGMA table_info(folder_posters)")->fetchAll(), 'name');
+        if (!in_array('tmdb_year', $cols, true)) {
+            $db->query("ALTER TABLE folder_posters ADD COLUMN tmdb_year TEXT");
+        }
+        if (!in_array('tmdb_type', $cols, true)) {
+            $db->query("ALTER TABLE folder_posters ADD COLUMN tmdb_type TEXT");
+        }
+        $db->query('PRAGMA user_version = 7');
     }
 
     if ($version < $targetVersion) {

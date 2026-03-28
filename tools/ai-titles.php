@@ -247,9 +247,9 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                 ai_log('AI OK | ' . $name . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
                 $found++;
                 try {
-                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 0)
-                                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, updated_at = datetime('now')")
-                       ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 0, :y, :mt)
+                                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
+                       ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
                 } catch (PDOException $e) { poster_log('DB error OK | ' . $name . ' → ' . $e->getMessage()); }
             } else {
                 ai_log('AI MISS | ' . $name . ' searched="' . $title . '"');
@@ -337,9 +337,9 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
                 ai_log('AI verify OK | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ') single result');
                 $fixed++;
                 try {
-                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
-                                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
-                       ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 1, :y, :mt)
+                                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
+                       ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
                 } catch (PDOException $e) { poster_log('DB error verify-fix | ' . $fileName . ' → ' . $e->getMessage()); }
             } else {
                 ai_log('AI pick | ' . $fileName . ' candidates=' . count($candidates));
@@ -349,18 +349,18 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
                     ai_log('AI picked | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ') idx=' . $picked);
                     $fixed++;
                     try {
-                        $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
-                                      ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
-                           ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
+                        $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 1, :y, :mt)
+                                      ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
+                           ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
                     } catch (PDOException $e) { poster_log('DB error pick | ' . $fileName . ' → ' . $e->getMessage()); }
                 } else {
                     $result = $candidates[0];
                     ai_log('AI pick FAIL | ' . $fileName . ' fallback=' . $result['title'] . ' (id=' . $result['id'] . ')');
                     $fixed++;
                     try {
-                        $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 0)
-                                      ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, updated_at = datetime('now')")
-                           ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
+                        $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 0, :y, :mt)
+                                      ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
+                           ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
                     } catch (PDOException $e) { poster_log('DB error pick-fallback | ' . $fileName . ' → ' . $e->getMessage()); }
                 }
             }
@@ -471,9 +471,9 @@ function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, 
         }
 
         try {
-            $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
-              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
-               ->execute([':p' => $fullPath, ':u' => $posterUrlStr, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
+            $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, :y, :mt)
+              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
+               ->execute([':p' => $fullPath, ':u' => $posterUrlStr, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview, ':y' => $posterUrl['year'] ?? null, ':mt' => $posterUrl['type'] ?? null]);
         } catch (PDOException $e) { poster_log('DB error folder-write | ' . $fileName . ' → ' . $e->getMessage()); }
 
         usleep(50000); // 250ms TMDB rate limit

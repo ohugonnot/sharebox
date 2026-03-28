@@ -94,9 +94,9 @@ if (isset($_GET['posters'])) {
                     $seasonOverview = $sData['overview'] ?? null;
                 }
                 try {
-                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
-                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
-                       ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $parentTmdbId, ':t' => $seasonTitle, ':o' => $seasonOverview]);
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, :y, :mt)
+                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
+                       ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $parentTmdbId, ':t' => $seasonTitle, ':o' => $seasonOverview, ':y' => null, ':mt' => 'tv']);
                     poster_log('SEASON DB write | ' . $f . ' → ' . ($posterUrl ? $seasonTitle : 'NULL'));
                 } catch (PDOException $e) { poster_log('SEASON DB error | ' . $f . ' → ' . $e->getMessage()); }
                 if ($posterUrl) {
@@ -173,11 +173,11 @@ if (isset($_GET['posters'])) {
         $sibTitle = extract_title_year($name)['title'];
         if (isset($titleToFolders[$sibTitle]) && !isset($titleResults[$sibTitle])) {
             $sibPath = $resolvedPath . '/' . $name;
-            $stmtSib = $db->prepare("SELECT poster_url, tmdb_id, title, overview FROM folder_posters WHERE path = :p");
+            $stmtSib = $db->prepare("SELECT poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type FROM folder_posters WHERE path = :p");
             $stmtSib->execute([':p' => $sibPath]);
             $sibRow = $stmtSib->fetch();
             if ($sibRow && $sibRow['poster_url']) {
-                $titleResults[$sibTitle] = ['posterUrl' => $sibRow['poster_url'], 'tmdbId' => $sibRow['tmdb_id'], 'tmdbTitle' => $sibRow['title'], 'tmdbOverview' => $sibRow['overview']];
+                $titleResults[$sibTitle] = ['posterUrl' => $sibRow['poster_url'], 'tmdbId' => $sibRow['tmdb_id'], 'tmdbTitle' => $sibRow['title'], 'tmdbOverview' => $sibRow['overview'], 'tmdbYear' => $sibRow['tmdb_year'], 'tmdbType' => $sibRow['tmdb_type']];
             }
         }
     }
@@ -205,6 +205,8 @@ if (isset($_GET['posters'])) {
             'tmdbId' => $found['id'] ?? null,
             'tmdbTitle' => $found['title'] ?? null,
             'tmdbOverview' => $found['overview'] ?? null,
+            'tmdbYear' => $found['year'] ?? null,
+            'tmdbType' => $found['type'] ?? null,
         ];
         poster_log('TMDB search | "' . $title . '" → ' . ($found ? $found['title'] . ' (id=' . $found['id'] . ')' : 'NO MATCH'));
         usleep(50000); // rate limit TMDB
@@ -222,9 +224,9 @@ if (isset($_GET['posters'])) {
             $fullPath = $resolvedPath . '/' . $folderName;
             try {
                 if (!$hasWrites) { $db->beginTransaction(); $hasWrites = true; }
-                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
-                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
-                   ->execute([':p' => $fullPath, ':u' => $tr['posterUrl'], ':i' => $tr['tmdbId'], ':t' => $tr['tmdbTitle'], ':o' => $tr['tmdbOverview']]);
+                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, :y, :mt)
+                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
+                   ->execute([':p' => $fullPath, ':u' => $tr['posterUrl'], ':i' => $tr['tmdbId'], ':t' => $tr['tmdbTitle'], ':o' => $tr['tmdbOverview'], ':y' => $tr['tmdbYear'] ?? null, ':mt' => $tr['tmdbType'] ?? null]);
             } catch (PDOException $e) { poster_log('DB error | ' . $folderName . ' → ' . $e->getMessage()); }
             if ($tr['posterUrl'] && !$isDuplicate) {
                 $result[$folderName] = ['poster' => $tr['posterUrl']];
@@ -301,9 +303,9 @@ if (isset($_GET['posters'])) {
             foreach ($videoResults as $fileName => $r) {
                 $fullPath = $resolvedPath . '/' . $fileName;
                 try {
-                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
-                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
-                       ->execute([':p' => $fullPath, ':u' => $r['poster'] ?? null, ':i' => $r['id'] ?? null, ':t' => $r['title'] ?? null, ':o' => $r['overview'] ?? null]);
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, :y, :mt)
+                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
+                       ->execute([':p' => $fullPath, ':u' => $r['poster'] ?? null, ':i' => $r['id'] ?? null, ':t' => $r['title'] ?? null, ':o' => $r['overview'] ?? null, ':y' => $r['year'] ?? null, ':mt' => $r['type'] ?? null]);
                 } catch (PDOException $e) { poster_log('DB error video | ' . $fileName . ' → ' . $e->getMessage()); }
                 if ($r) {
                     $result[$fileName] = ['poster' => $r['poster']];
