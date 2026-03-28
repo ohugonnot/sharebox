@@ -90,12 +90,10 @@ if (isset($_GET['posters'])) {
         }
     }
 
-    // Check cache first
+    // ── Phase 1 : séparer cached / uncached ──
     $cached = [];
     $uncached = [];
     foreach ($folders as $f) {
-        // Skip les noms d'organisation (Season, OVA, Bonus, etc.)
-        // Les saisons déjà traitées ci-dessus sont aussi exclues
         if (in_array($f, $seasonFolders, true) || preg_match($skipPattern, $f)) continue;
         $fullPath = $resolvedPath . '/' . $f;
         $stmt = $db->prepare("SELECT poster_url, overview FROM folder_posters WHERE path = :p");
@@ -115,57 +113,42 @@ if (isset($_GET['posters'])) {
 
     $result = array_merge($result, $cached);
 
-    // Fetch from TMDB for uncached folders (max 10 per request to avoid timeout)
-    // Stratégie de recherche : essayer plusieurs variantes du titre pour maximiser les chances
-    $toFetch = array_slice($uncached, 0, 10);
-    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
+    // ── Phase 2 : extraire titres uniques depuis TOUS les uncached ──
+    $titleToFolders = []; // "Black Clover" => ["E001...", "E002...", ...]
+    foreach ($uncached as $f) {
+        $meta = extract_title_year($f);
+        $title = $meta['title'];
+        $titleToFolders[$title][] = $f;
+    }
 
-    // Deduplicate: group folders by extracted title to avoid spamming TMDB
-    // e.g. 170 folders "Black.Clover.E001...", "Black.Clover.E002..." all extract to "Black Clover"
-    // Pre-seed from DB: if a sibling folder with the same title already has a result, reuse it
-    $titleCache = []; // title → {posterUrl, tmdbId, tmdbTitle, tmdbOverview}
+    // Pre-seed from cached siblings: if a title is already resolved in DB, reuse it
+    $titleResults = []; // title => {posterUrl, tmdbId, tmdbTitle, tmdbOverview}
     foreach ($cached as $name => $info) {
-        $siblingMeta = extract_title_year($name);
-        $siblingTitle = $siblingMeta['title'];
-        if (!isset($titleCache[$siblingTitle]) && isset($info['poster'])) {
-            // Look up full data from DB
-            $siblingPath = $resolvedPath . '/' . $name;
+        if (!isset($info['poster'])) continue;
+        $sibTitle = extract_title_year($name)['title'];
+        if (isset($titleToFolders[$sibTitle]) && !isset($titleResults[$sibTitle])) {
+            $sibPath = $resolvedPath . '/' . $name;
             $stmtSib = $db->prepare("SELECT poster_url, tmdb_id, title, overview FROM folder_posters WHERE path = :p");
-            $stmtSib->execute([':p' => $siblingPath]);
+            $stmtSib->execute([':p' => $sibPath]);
             $sibRow = $stmtSib->fetch();
             if ($sibRow && $sibRow['poster_url']) {
-                $titleCache[$siblingTitle] = ['posterUrl' => $sibRow['poster_url'], 'tmdbId' => $sibRow['tmdb_id'], 'tmdbTitle' => $sibRow['title'], 'tmdbOverview' => $sibRow['overview']];
+                $titleResults[$sibTitle] = ['posterUrl' => $sibRow['poster_url'], 'tmdbId' => $sibRow['tmdb_id'], 'tmdbTitle' => $sibRow['title'], 'tmdbOverview' => $sibRow['overview']];
             }
         }
     }
 
-    foreach ($toFetch as $folderName) {
-        $meta = extract_title_year($folderName);
-        $title = $meta['title'];
+    // Titles that still need a TMDB search
+    $titlesToSearch = array_diff_key($titleToFolders, $titleResults);
 
-        // If we already searched this exact title in this batch, reuse the result
-        if (isset($titleCache[$title])) {
-            $fullPath = $resolvedPath . '/' . $folderName;
-            $c = $titleCache[$title];
-            try {
-                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
-                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
-                   ->execute([':p' => $fullPath, ':u' => $c['posterUrl'], ':i' => $c['tmdbId'], ':t' => $c['tmdbTitle'], ':o' => $c['tmdbOverview']]);
-            } catch (PDOException $e) { /* ignore */ }
-            if ($c['posterUrl']) {
-                $result[$folderName] = ['poster' => $c['posterUrl']];
-                if ($c['tmdbOverview']) $result[$folderName]['overview'] = $c['tmdbOverview'];
-            }
-            continue;
-        }
+    // ── Phase 3 : chercher TMDB pour max 10 titres uniques ──
+    $toSearch = array_slice(array_keys($titlesToSearch), 0, 10);
+    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
 
-        // Construire les variantes de recherche (du plus précis au plus large)
+    foreach ($toSearch as $title) {
         $queries = [$title];
-        // Variante sans les mots parasites (HD, Remastered, Complete, Integrale...)
         $shorter = preg_replace('/\b(hd|remasted|remastered|complete|integrale|intégrale|collection|pack|coffret)\b.*/i', '', $title);
         $shorter = trim($shorter);
         if ($shorter !== '' && $shorter !== $title) $queries[] = $shorter;
-        // Première moitié du titre (si titre long)
         $words = explode(' ', $title);
         if (count($words) > 3) {
             $half = implode(' ', array_slice($words, 0, (int)ceil(count($words) / 2)));
@@ -179,7 +162,6 @@ if (isset($_GET['posters'])) {
 
         foreach ($queries as $q) {
             $encoded = urlencode($q);
-            // Essayer d'abord en multi, puis en TV seul (meilleur pour les séries/anime)
             $urls = [
                 "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
                 "https://api.themoviedb.org/3/search/tv?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
@@ -188,39 +170,41 @@ if (isset($_GET['posters'])) {
                 $resp = @file_get_contents($searchUrl, false, $ctx);
                 $data = $resp ? json_decode($resp, true) : null;
                 if ($data && !empty($data['results'])) {
-                    // Prendre le premier résultat avec un poster
                     foreach ($data['results'] as $r) {
                         if (!empty($r['poster_path'])) {
                             $posterUrl = 'https://image.tmdb.org/t/p/w300' . $r['poster_path'];
                             $tmdbId = $r['id'] ?? null;
                             $tmdbTitle = $r['title'] ?? $r['name'] ?? null;
                             $tmdbOverview = $r['overview'] ?? null;
-                            break 3; // Trouvé → sortir des 3 boucles
+                            break 3;
                         }
                     }
                 }
             }
         }
 
-        // Remember result for dedup within this batch
-        $titleCache[$title] = ['posterUrl' => $posterUrl, 'tmdbId' => $tmdbId, 'tmdbTitle' => $tmdbTitle, 'tmdbOverview' => $tmdbOverview];
+        $titleResults[$title] = ['posterUrl' => $posterUrl, 'tmdbId' => $tmdbId, 'tmdbTitle' => $tmdbTitle, 'tmdbOverview' => $tmdbOverview];
+    }
 
-        // Cache result (even null = "no poster found")
-        $fullPath = $resolvedPath . '/' . $folderName;
-        try {
-            $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
-              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
-               ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
-        } catch (PDOException $e) { /* ignore lock */ }
-
-        if ($posterUrl) {
-            $result[$folderName] = ['poster' => $posterUrl];
-            if ($tmdbOverview) $result[$folderName]['overview'] = $tmdbOverview;
+    // ── Phase 4 : dispatcher les résultats sur tous les dossiers ──
+    foreach ($titleResults as $title => $tr) {
+        if (!isset($titleToFolders[$title])) continue;
+        foreach ($titleToFolders[$title] as $folderName) {
+            $fullPath = $resolvedPath . '/' . $folderName;
+            try {
+                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
+                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
+                   ->execute([':p' => $fullPath, ':u' => $tr['posterUrl'], ':i' => $tr['tmdbId'], ':t' => $tr['tmdbTitle'], ':o' => $tr['tmdbOverview']]);
+            } catch (PDOException $e) { /* ignore */ }
+            if ($tr['posterUrl']) {
+                $result[$folderName] = ['poster' => $tr['posterUrl']];
+                if ($tr['tmdbOverview']) $result[$folderName]['overview'] = $tr['tmdbOverview'];
+            }
         }
     }
 
-    // Signal if there are more folders to fetch
-    $remaining = count($uncached) - count($toFetch);
+    // remaining = titres uniques pas encore cherchés
+    $remaining = count($titlesToSearch) - count($toSearch);
 
     // ── Video file posters (movies-type folders) ──
     $stmtType = $db->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
