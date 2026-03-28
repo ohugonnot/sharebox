@@ -1,0 +1,20 @@
+version: "3.8"
+
+services:
+  sharebox:
+    build: .
+    ports:
+      - "8080:80"
+    volumes:
+      - sharebox-data:/data
+      - /path/to/your/media:/media:ro
+    environment:
+      - SHAREBOX_ADMIN_USER=admin
+      - SHAREBOX_ADMIN_PASS=changeme
+      # - SHAREBOX_STREAM_MAX_CONCURRENT=4
+      # - SHAREBOX_STREAM_REMUX_ENABLED=false
+      # - SHAREBOX_BANDWIDTH_QUOTA_TB=100
+    restart: unless-stopped
+
+volumes:
+  sharebox-data:

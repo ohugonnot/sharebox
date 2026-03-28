@@ -1,0 +1,13 @@
+.git
+data/
+vendor/
+tests/
+phpunit.xml
+phpstan.neon
+phpstan-bootstrap.php
+CLAUDE.md
+install.sh
+config.php
+config.example.php
+test_router.php
+*.md
