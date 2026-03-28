@@ -241,26 +241,11 @@ function is_path_within(string|false $resolvedPath, string $basePath): bool {
 // ── Logging ─────────────────────────────────────────────────────────────────
 
 /**
- * Log un message dans le fichier STREAM_LOG avec rotation (5 MB max, 3 fichiers).
+ * Log avec rotation (5 MB max, 3 fichiers). Channels : stream, poster, app.
  */
-function stream_log(string $msg): void {
+function sharebox_log(string $msg, string $channel = 'stream'): void {
     if (!defined('STREAM_LOG') || !STREAM_LOG) return;
-    $logFile = STREAM_LOG;
-    if (@filesize($logFile) > LOG_ROTATION_SIZE) {
-        for ($r = LOG_ROTATION_COUNT; $r > 1; $r--) @rename($logFile . '.' . ($r - 1), $logFile . '.' . $r);
-        @rename($logFile, $logFile . '.1');
-    }
-    $line = '[' . date('Y-m-d H:i:s') . '] [' . ($_SERVER['REMOTE_ADDR'] ?? '-') . '] ' . $msg . "\n";
-    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
-}
-
-/**
- * Log un message dans le fichier poster.log avec rotation (5 MB max, 3 fichiers).
- * Utilisé pour tracer les opérations TMDB, AI, et les changements en DB.
- */
-function poster_log(string $msg): void {
-    $logFile = (defined('STREAM_LOG') && STREAM_LOG) ? dirname(STREAM_LOG) . '/poster.log' : null;
-    if (!$logFile) return;
+    $logFile = $channel === 'stream' ? STREAM_LOG : dirname(STREAM_LOG) . '/' . $channel . '.log';
     if (@filesize($logFile) > LOG_ROTATION_SIZE) {
         for ($r = LOG_ROTATION_COUNT; $r > 1; $r--) @rename($logFile . '.' . ($r - 1), $logFile . '.' . $r);
         @rename($logFile, $logFile . '.1');
@@ -270,20 +255,97 @@ function poster_log(string $msg): void {
     @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
 }
 
+// Aliases pour compatibilité et lisibilité
+function stream_log(string $msg): void { sharebox_log($msg, 'stream'); }
+function poster_log(string $msg): void { sharebox_log($msg, 'poster'); }
+function app_log(string $msg): void { sharebox_log($msg, 'app'); }
+
+// ── TMDB helpers ───────────────────────────────────────────────────────────
+
 /**
- * Log générique dans app.log — pour les composants sans log dédié (API, cron, DB).
- * Même format que stream_log/poster_log pour cohérence et parsing AI.
+ * Construit les variantes de recherche pour un titre (du plus précis au plus large).
+ * @return string[]
  */
-function app_log(string $msg): void {
-    $logFile = (defined('STREAM_LOG') && STREAM_LOG) ? dirname(STREAM_LOG) . '/app.log' : null;
-    if (!$logFile) return;
-    if (@filesize($logFile) > LOG_ROTATION_SIZE) {
-        for ($r = LOG_ROTATION_COUNT; $r > 1; $r--) @rename($logFile . '.' . ($r - 1), $logFile . '.' . $r);
-        @rename($logFile, $logFile . '.1');
+function tmdb_build_queries(string $title): array {
+    $queries = [$title];
+    $shorter = preg_replace('/\b(hd|remasted|remastered|complete|integrale|intégrale|collection|pack|coffret)\b.*/i', '', $title);
+    $shorter = trim($shorter);
+    if ($shorter !== '' && $shorter !== $title) $queries[] = $shorter;
+    $words = explode(' ', $title);
+    if (count($words) > 3) {
+        $half = implode(' ', array_slice($words, 0, (int)ceil(count($words) / 2)));
+        if ($half !== $title && $half !== $shorter) $queries[] = $half;
     }
-    $caller = php_sapi_name() === 'cli' ? 'CLI' : ($_SERVER['REMOTE_ADDR'] ?? '-');
-    $line = '[' . date('Y-m-d H:i:s') . '] [' . $caller . '] ' . $msg . "\n";
-    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
+    return $queries;
+}
+
+/**
+ * Cherche un titre sur TMDB et retourne le premier résultat avec un poster.
+ * @param string[] $endpoints Ex: ['multi', 'tv'] ou ['multi', 'tv', 'movie']
+ * @return array{poster: string, id: int, title: string, overview: string}|null
+ */
+function tmdb_search(string $title, ?int $year, string $apiKey, $ctx, array $endpoints = ['multi', 'tv']): ?array {
+    $queries = tmdb_build_queries($title);
+    if ($year) $queries[] = $title . ' ' . $year;
+    foreach ($queries as $q) {
+        $encoded = urlencode($q);
+        foreach ($endpoints as $ep) {
+            $url = "https://api.themoviedb.org/3/search/{$ep}?api_key={$apiKey}&query={$encoded}&language=fr&page=1";
+            $resp = @file_get_contents($url, false, $ctx);
+            $data = $resp ? json_decode($resp, true) : null;
+            if ($data && !empty($data['results'])) {
+                foreach ($data['results'] as $r) {
+                    if (!empty($r['poster_path'])) {
+                        return [
+                            'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
+                            'id' => $r['id'] ?? null,
+                            'title' => $r['title'] ?? $r['name'] ?? null,
+                            'overview' => $r['overview'] ?? null,
+                        ];
+                    }
+                }
+            }
+        }
+    }
+    return null;
+}
+
+/**
+ * Cherche un titre sur TMDB et retourne TOUS les candidats (pour le pick IA).
+ * @return array[] Array of {id, title, year, type, overview, poster}
+ */
+function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx, int $limit = 15): array {
+    $candidates = [];
+    $seenIds = [];
+    $encoded = urlencode($title);
+    $urls = [
+        "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+        "https://api.themoviedb.org/3/search/tv?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+        "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+    ];
+    if ($year) {
+        $urls[] = "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query=" . urlencode($title . ' ' . $year) . "&language=fr&page=1";
+    }
+    foreach ($urls as $searchUrl) {
+        $resp = @file_get_contents($searchUrl, false, $ctx);
+        $data = $resp ? json_decode($resp, true) : null;
+        if (!$data || empty($data['results'])) continue;
+        foreach ($data['results'] as $r) {
+            if (empty($r['poster_path']) || isset($seenIds[$r['id']])) continue;
+            $seenIds[$r['id']] = true;
+            $candidates[] = [
+                'id' => $r['id'],
+                'title' => $r['title'] ?? $r['name'] ?? '?',
+                'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
+                'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
+                'overview' => substr($r['overview'] ?? '', 0, 150),
+                'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
+            ];
+            if (count($candidates) >= $limit) break 2;
+        }
+        usleep(250000);
+    }
+    return $candidates;
 }
 
 // ── FFmpeg helpers ──────────────────────────────────────────────────────────

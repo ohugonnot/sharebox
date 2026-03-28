@@ -101,7 +101,8 @@ function plog(tag, msg, data) {
     // ── Position et config mémorisées ───────────────────────────────────────
     var posKey   = 'player_seek_' + base + pp;
     var cfgKey   = 'player_cfg_'  + base + pp;
-    var savedPos = isVideo ? Math.max(0, parseFloat(lsGet(posKey, '0')) || 0) : 0;
+    var rawPos = parseFloat(lsGet(posKey, '0'));
+    var savedPos = isVideo && isFinite(rawPos) && rawPos >= 0 ? rawPos : 0;
     var savedCfg = (function() { try { return JSON.parse(lsGet(cfgKey, 'null')); } catch(e) { return null; } })();
     function saveCfg() {
         lsSet(cfgKey, JSON.stringify({
@@ -335,7 +336,7 @@ function plog(tag, msg, data) {
     // transcode avec burnSub : 30s  (décode + overlay = très lourd sur 4K HEVC)
     function stallTimeout() {
         var base = S.confirmed === 'remux' ? 10000 : (useHLS ? 30000 : (S.burnSub >= 0 ? 30000 : 20000));
-        return Math.min(base * Math.pow(2, S.stallCount), 120000); // exponentiel, cap 2min
+        return Math.min(base * Math.pow(2, Math.min(S.stallCount, 6)), 120000); // exponentiel, cap 2min
     }
     function startStallWatchdog() {
         clearStallWatchdog();
@@ -609,7 +610,7 @@ function plog(tag, msg, data) {
             var sel = document.createElement('select'); sel.className = 'track-select';
             d.audio.forEach(function(a) { var o = document.createElement('option'); o.value = a.index; o.textContent = a.label; sel.appendChild(o); });
             sel.addEventListener('change', function() {
-                S.audioIdx = parseInt(sel.value); S.confirmed = S.step = 'transcode';
+                S.audioIdx = parseInt(sel.value, 10) || 0; S.confirmed = S.step = 'transcode';
                 plog('TRACK', 'audio changed → ' + S.audioIdx);
                 hint.textContent = 'Changement de piste...'; hint.className = 'player-hint transcoding';
                 saveCfg(); startStream(realTime());
@@ -627,7 +628,7 @@ function plog(tag, msg, data) {
                 var sel3 = document.createElement('select'); sel3.className = 'track-select';
                 qs.forEach(function(q) { var o = document.createElement('option'); o.value = q; o.textContent = q + 'p'; if (q === S.quality) o.selected = true; sel3.appendChild(o); });
                 sel3.addEventListener('change', function() {
-                    S.quality = parseInt(sel3.value); S.confirmed = 'transcode';
+                    S.quality = parseInt(sel3.value, 10) || 720; S.confirmed = 'transcode';
                     plog('TRACK', 'quality changed → ' + S.quality + 'p');
                     hint.textContent = 'Transcodage ' + S.quality + 'p...'; hint.className = 'player-hint transcoding';
                     saveCfg(); startStream(realTime());
@@ -645,12 +646,13 @@ function plog(tag, msg, data) {
             // Restaurer le dernier sous-titre choisi pour ce fichier
             var subKey = 'player_sub_' + base + (pp ? pp : '');
             var savedSub = lsGet(subKey, '-1');
-            if (savedSub !== '-1' && parseInt(savedSub) < d.subtitles.length) {
-                selSub.value = savedSub;
-                Subs.load(parseInt(savedSub));
+            var savedSubIdx = parseInt(savedSub, 10);
+            if (!isNaN(savedSubIdx) && savedSubIdx >= 0 && savedSubIdx < d.subtitles.length) {
+                selSub.value = savedSubIdx;
+                Subs.load(savedSubIdx);
             }
             selSub.addEventListener('change', function() {
-                var idx = parseInt(selSub.value);
+                var idx = parseInt(selSub.value, 10) || -1;
                 lsSet(subKey, idx);
                 Subs.load(idx);
             });
