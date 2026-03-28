@@ -1,6 +1,7 @@
 <?php
 $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)));
 if ($mime && str_starts_with($mime, 'video/')) {
+    set_time_limit(0);
     header('Content-Type: video/mp4');
     header('Content-Disposition: inline');
     header('X-Accel-Buffering: no');

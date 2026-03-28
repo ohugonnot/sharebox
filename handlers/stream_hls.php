@@ -82,8 +82,11 @@ if ($mime && str_starts_with($mime, 'video/')) {
         $slotPath = $slotFp ? stream_get_meta_data($slotFp)['uri'] : '';
         $activeFile = escapeshellarg($hlsDir . '/.active');
         // flock dans le shell hérite le lock — maintient le slot occupé pendant ffmpeg
+        // Avant rm -rf, vérifier qu'un nouveau ffmpeg n'a pas pris le relais
+        // (le stall watchdog peut relancer un transcode avec les mêmes params → même hlsDir)
         $cleanupBody = 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do sleep 5; done; '
             . 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '
+            . 'if [ -f ' . escapeshellarg($pidFile) . ' ] && [ "$(cat ' . escapeshellarg($pidFile) . ')" != "' . (int)$pid . '" ]; then exit 0; fi; '
             . 'rm -rf ' . escapeshellarg($hlsDir);
         $cleanupCmd = $slotPath
             ? '(flock -x 9; ' . $cleanupBody . ') 9>' . escapeshellarg($slotPath) . ' >/dev/null 2>&1 &'
