@@ -104,7 +104,7 @@ if ($mode === '--pending') {
         exit(1);
     }
     // Find ALL unverified entries with a poster (across all shared folders)
-    $rows = $db->query("SELECT path, poster_url, title, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
+    $rows = $db->query("SELECT path, poster_url, title, tmdb_id, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
     ai_log('AI --verify start | unverified=' . count($rows));
 
     // Auto-verify duplicates: if >3 entries in the same dir share the same tmdb_id,
@@ -280,6 +280,9 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
         $byDir[$dir][] = [
             'file' => basename($row['path']),
             'tmdb_title' => $row['title'],
+            'tmdb_year' => $row['tmdb_year'] ?? null,
+            'tmdb_type' => $row['tmdb_type'] ?? null,
+            'tmdb_overview' => $row['overview'] ?? null,
             'path' => $row['path'],
         ];
     }
@@ -562,7 +565,13 @@ PROMPT;
 function askAIVerify(array $pairs, string $aiBin): ?array
 {
     // Build compact input: just file + matched title
-    $input = array_map(fn($p) => ['file' => $p['file'], 'tmdb_title' => $p['tmdb_title']], $pairs);
+    $input = array_map(fn($p) => [
+        'file' => $p['file'],
+        'tmdb_title' => $p['tmdb_title'],
+        'tmdb_year' => $p['tmdb_year'] ?? null,
+        'tmdb_type' => $p['tmdb_type'] ?? null,
+        'tmdb_overview' => $p['tmdb_overview'] ?? null,
+    ], $pairs);
     $batches = array_chunk($input, 50);
     $allResults = [];
 
@@ -572,26 +581,32 @@ function askAIVerify(array $pairs, string $aiBin): ?array
         $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE);
 
         $prompt = <<<PROMPT
-Tu reçois des paires {nom de fichier/dossier, titre TMDB matché automatiquement}.
+Tu reçois des paires {nom de fichier/dossier, titre TMDB, année, type, résumé}.
 Vérifie si chaque match est correct.
 
 Retourne UNIQUEMENT un JSON array (sans markdown, sans code fences), avec pour chaque paire:
 {"file": "nom original", "tmdb_title": "titre matché", "correct": true/false, "suggested_title": "meilleur titre pour TMDB", "year": 1999}
 
 Règles:
-- correct=true si le titre TMDB correspond au contenu du fichier/dossier (même si la graphie diffère, même si c'est le titre traduit)
-- correct=false UNIQUEMENT si c'est clairement un mauvais match (film totalement différent, série sans rapport)
+- correct=true si le titre TMDB correspond au contenu du fichier/dossier
+- Vérifie EN PRIORITÉ :
+  1. Le titre correspond au contenu du fichier (même traduit, même graphie différente)
+  2. L'année correspond si visible dans le nom du fichier
+  3. Le type est cohérent (série vs film — un dossier avec S01/Season = série)
+  4. Le résumé décrit bien le contenu attendu (si disponible)
+- correct=false UNIQUEMENT si c'est clairement un mauvais match
 
 Cas spéciaux — NE PAS marquer comme incorrect:
-- Les dossiers de saison (S01, S02, Season 1, Saison 2...) matchés à "Saison N" : c'est CORRECT, ce sont des posters de saison TMDB
+- Les dossiers de saison (S01, S02, Season 1, Saison 2...) matchés à "Saison N" : c'est CORRECT
 - Les collections/sagas (INTEGRALE, COLLECTION, COMPLETE) matchées à un titre de saga : c'est CORRECT
 - Un titre traduit (ex: "Despicable Me" → "Moi, moche et méchant") : c'est CORRECT
 - Une légère différence de graphie ou de sous-titre : c'est CORRECT
 
 Cas à marquer comme incorrect:
-- Un dossier matché à un film/série complètement différent (ex: "Vol 1" → "Kill Bill")
+- Un dossier matché à un film/série complètement différent
 - Un dossier générique (Films, Movie, Covers) matché à un contenu spécifique
 - Une série matchée à un épisode spécial ou un film dérivé au lieu de la série principale
+- Le résumé est incohérent avec le contenu du fichier
 
 Si correct=false : suggested_title = le bon titre à chercher sur TMDB
 Si correct=true : suggested_title peut être omis
