@@ -195,7 +195,7 @@ if (isset($_GET['posters'])) {
     $titlesToSearch = array_diff_key($titleToFolders, $titleResults);
 
     // ── Phase 3 : chercher TMDB pour max 10 titres uniques ──
-    $toSearch = array_slice(array_keys($titlesToSearch), 0, 10);
+    $toSearch = array_slice(array_keys($titlesToSearch), 0, 30);
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
 
     foreach ($toSearch as $title) {
@@ -291,7 +291,7 @@ if (isset($_GET['posters'])) {
 
         $result = array_merge($result, $videoCached);
 
-        $videoToFetch = array_slice($videoUncached, 0, 10);
+        $videoToFetch = array_slice($videoUncached, 0, 30);
         $videoResults = [];
         foreach ($videoToFetch as $fileName) {
             $meta = extract_title_year($fileName);
