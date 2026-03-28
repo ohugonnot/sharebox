@@ -122,9 +122,108 @@ if (isset($_GET['posters'])) {
         }
     }
 
-    // Signal if there are more to fetch (JS will re-request)
+    // Signal if there are more folders to fetch
     $remaining = count($uncached) - count($toFetch);
-    echo json_encode(['posters' => $result, 'remaining' => $remaining]);
+
+    // ── Video file posters (movies-type folders) ──
+    $stmtType = $db->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
+    $stmtType->execute([':p' => $resolvedPath]);
+    $typeRow = $stmtType->fetch();
+    $isMovies = ($typeRow && ($typeRow['folder_type'] ?? 'series') === 'movies');
+
+    $videoRemaining = 0;
+    if ($isMovies) {
+        $videoExts = ['mp4','mkv','avi','m4v','mov','wmv','flv','webm','ts','m2ts','mpg','mpeg'];
+        $videoFiles = [];
+        foreach ($items as $item) {
+            if ($item[0] === '.' || is_dir($resolvedPath . '/' . $item)) continue;
+            $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+            if (in_array($ext, $videoExts, true)) {
+                $videoFiles[] = $item;
+            }
+        }
+
+        $videoCached = [];
+        $videoUncached = [];
+        foreach ($videoFiles as $vf) {
+            $fullPath = $resolvedPath . '/' . $vf;
+            $stmt = $db->prepare("SELECT poster_url, overview FROM folder_posters WHERE path = :p");
+            $stmt->execute([':p' => $fullPath]);
+            $row = $stmt->fetch();
+            if ($row) {
+                if ($row['poster_url'] === '__none__') {
+                    $videoCached[$vf] = ['hidden' => true];
+                } elseif ($row['poster_url']) {
+                    $videoCached[$vf] = ['poster' => $row['poster_url']];
+                    if ($row['overview']) $videoCached[$vf]['overview'] = $row['overview'];
+                }
+            } else {
+                $videoUncached[] = $vf;
+            }
+        }
+
+        $result = array_merge($result, $videoCached);
+
+        $videoToFetch = array_slice($videoUncached, 0, 10);
+        foreach ($videoToFetch as $fileName) {
+            $meta = extract_title_year($fileName);
+            $title = $meta['title'];
+
+            $queries = [$title];
+            $shorter = preg_replace('/\b(hd|remasted|remastered|complete|integrale|intégrale|collection|pack|coffret)\b.*/i', '', $title);
+            $shorter = trim($shorter);
+            if ($shorter !== '' && $shorter !== $title) $queries[] = $shorter;
+            $words = explode(' ', $title);
+            if (count($words) > 3) {
+                $half = implode(' ', array_slice($words, 0, (int)ceil(count($words) / 2)));
+                if ($half !== $title && $half !== $shorter) $queries[] = $half;
+            }
+
+            $posterUrl = null;
+            $tmdbId = null;
+            $tmdbTitle = null;
+            $tmdbOverview = null;
+
+            foreach ($queries as $q) {
+                $encoded = urlencode($q);
+                // For movies, search multi then movie (instead of TV for series)
+                $urls = [
+                    "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+                    "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+                ];
+                foreach ($urls as $searchUrl) {
+                    $resp = @file_get_contents($searchUrl, false, $ctx);
+                    $data = $resp ? json_decode($resp, true) : null;
+                    if ($data && !empty($data['results'])) {
+                        foreach ($data['results'] as $r) {
+                            if (!empty($r['poster_path'])) {
+                                $posterUrl = 'https://image.tmdb.org/t/p/w300' . $r['poster_path'];
+                                $tmdbId = $r['id'] ?? null;
+                                $tmdbTitle = $r['title'] ?? $r['name'] ?? null;
+                                $tmdbOverview = $r['overview'] ?? null;
+                                break 3;
+                            }
+                        }
+                    }
+                }
+            }
+
+            $fullPath = $resolvedPath . '/' . $fileName;
+            try {
+                $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)")
+                   ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
+            } catch (PDOException $e) { /* ignore lock */ }
+
+            if ($posterUrl) {
+                $result[$fileName] = ['poster' => $posterUrl];
+                if ($tmdbOverview) $result[$fileName]['overview'] = $tmdbOverview;
+            }
+        }
+
+        $videoRemaining = count($videoUncached) - count($videoToFetch);
+    }
+
+    echo json_encode(['posters' => $result, 'remaining' => $remaining + $videoRemaining]);
     exit;
 }
 
@@ -172,7 +271,7 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!$folder) { http_response_code(400); echo json_encode(['error' => 'missing folder']); exit; }
 
     $fullPath = $resolvedPath . '/' . $folder;
-    if (!is_dir($fullPath)) { http_response_code(404); echo json_encode(['error' => 'folder not found']); exit; }
+    if (!is_dir($fullPath) && !is_file($fullPath)) { http_response_code(404); echo json_encode(['error' => 'not found']); exit; }
 
     try {
         if (!$posterUrl) {
