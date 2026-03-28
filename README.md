@@ -40,6 +40,8 @@ Try it now -- no install needed:
 | Subtitle.Demo.720p.mkv | H.264 MKV | Text subtitles (WebVTT overlay) | [Play](https://ds72803.seedhost.eu:8282/dl/browse?p=Subtitle.Demo.720p.mkv&play=1) |
 | MultiTrack.HEVC.720p.mkv | HEVC MKV | Transcode + 2 audio + 2 subs (EN/FR) | [Play](https://ds72803.seedhost.eu:8282/dl/browse?p=MultiTrack.HEVC.720p.mkv&play=1) |
 
+![Player in action](https://github.com/ohugonnot/sharebox/releases/download/v1.0.0/sharebox-demo.gif)
+
 ![Admin Panel](https://i.postimg.cc/dsFd7Cgz/image.png)
 
 ![Folder Sharing](https://i.postimg.cc/HLNk9fBn/image.png)
