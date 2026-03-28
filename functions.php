@@ -292,6 +292,8 @@ function tmdb_search(string $title, ?int $year, string $apiKey, $ctx, array $end
         foreach ($endpoints as $ep) {
             $url = "https://api.themoviedb.org/3/search/{$ep}?api_key={$apiKey}&query={$encoded}&language=fr&page=1";
             $resp = @file_get_contents($url, false, $ctx);
+            // Retry 1x si échec réseau (timeout, connexion refusée)
+            if ($resp === false) { usleep(500000); $resp = @file_get_contents($url, false, $ctx); }
             $data = $resp ? json_decode($resp, true) : null;
             if ($data && !empty($data['results'])) {
                 foreach ($data['results'] as $r) {
@@ -328,6 +330,7 @@ function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx,
     }
     foreach ($urls as $searchUrl) {
         $resp = @file_get_contents($searchUrl, false, $ctx);
+        if ($resp === false) { usleep(500000); $resp = @file_get_contents($searchUrl, false, $ctx); }
         $data = $resp ? json_decode($resp, true) : null;
         if (!$data || empty($data['results'])) continue;
         foreach ($data['results'] as $r) {

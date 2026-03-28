@@ -282,6 +282,9 @@ if (isset($_GET['posters'])) {
                     if ($row['overview']) $videoCached[$vf]['overview'] = $row['overview'];
                 } elseif ((int)($row['verified'] ?? 0) === -1) {
                     $videoCached[$vf] = ['pending_ai' => true];
+                } else {
+                    // poster_url NULL + verified=0 → re-tenter
+                    $videoUncached[] = $vf;
                 }
             } else {
                 $videoUncached[] = $vf;
