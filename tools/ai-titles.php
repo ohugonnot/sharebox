@@ -247,8 +247,8 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                 ai_log('AI OK | ' . $name . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
                 $found++;
                 try {
-                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
-                                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 0)
+                                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, updated_at = datetime('now')")
                        ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
                 } catch (PDOException $e) { poster_log('DB error OK | ' . $name . ' → ' . $e->getMessage()); }
             } else {
