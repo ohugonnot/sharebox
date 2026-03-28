@@ -316,13 +316,19 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
                 continue;
             }
 
-            echo "  FIX   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ") => " . $betterTitle . "\n";
+            echo "  FIX   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ") => search: " . $betterTitle . "\n";
             poster_log('AI verify FIX | ' . $fileName . ' was="' . ($v['tmdb_title'] ?? '?') . '" → search="' . $betterTitle . '"');
 
-            $result = searchTMDB($betterTitle, $betterYear, $apiKey, $ctx);
-            if ($result) {
-                echo "        => " . $result['title'] . "\n";
-                poster_log('AI verify OK | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')');
+            // Pass 2 : chercher tous les candidats TMDB puis demander à l'IA de choisir le bon
+            $candidates = searchTMDBCandidates($betterTitle, $betterYear, $apiKey, $ctx);
+            if (empty($candidates)) {
+                echo "        => no TMDB results\n";
+                poster_log('AI verify MISS | ' . $fileName . ' no TMDB candidates for "' . $betterTitle . '"');
+            } elseif (count($candidates) === 1) {
+                // Un seul résultat → pas besoin de l'IA pour choisir
+                $result = $candidates[0];
+                echo "        => " . $result['title'] . " (seul résultat)\n";
+                poster_log('AI verify OK | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ') single result');
                 $fixed++;
                 try {
                     $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
@@ -330,7 +336,32 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
                        ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
                 } catch (PDOException $e) { /* ignore */ }
             } else {
-                echo "        => no match\n";
+                // Plusieurs candidats → pass 2 IA pour choisir le bon
+                echo "        => " . count($candidates) . " candidates, asking AI...\n";
+                poster_log('AI pick | ' . $fileName . ' ' . count($candidates) . ' candidates: ' . implode(', ', array_map(fn($c) => $c['title'] . '(' . $c['id'] . ')', array_slice($candidates, 0, 5))));
+                $picked = askAIPickBest($fileName, $candidates, $aiBin);
+                if ($picked !== null) {
+                    $result = $candidates[$picked];
+                    echo "        => AI picked: " . $result['title'] . " (id=" . $result['id'] . ")\n";
+                    poster_log('AI picked | ' . $fileName . ' → ' . $result['title'] . ' (id=' . $result['id'] . ') idx=' . $picked);
+                    $fixed++;
+                    try {
+                        $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
+                                      ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
+                           ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
+                    } catch (PDOException $e) { /* ignore */ }
+                } else {
+                    // Fallback : prendre le premier candidat
+                    $result = $candidates[0];
+                    echo "        => AI pick failed, using first: " . $result['title'] . "\n";
+                    poster_log('AI pick FAIL | ' . $fileName . ' fallback to first: ' . $result['title'] . ' (id=' . $result['id'] . ')');
+                    $fixed++;
+                    try {
+                        $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 0)
+                                      ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, updated_at = datetime('now')")
+                           ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
+                    } catch (PDOException $e) { /* ignore */ }
+                }
             }
 
             usleep(250000);
@@ -491,11 +522,95 @@ function searchTMDB(string $title, ?int $year, string $apiKey, $ctx): ?array
 }
 
 /**
- * Verify existing matches in a movies folder.
- * Sends {filename, matched_tmdb_title} pairs to AI, asks if they're correct.
- * Fixes bad matches by re-searching TMDB with AI-suggested titles.
- * @return int Number of files checked
+ * Search TMDB and return ALL candidates (up to 8) for AI disambiguation.
+ * @return array[] Array of {id, title, year, type, overview, poster}
  */
+function searchTMDBCandidates(string $title, ?int $year, string $apiKey, $ctx): array
+{
+    $candidates = [];
+    $seenIds = [];
+    $encoded = urlencode($title);
+    $urls = [
+        "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+        "https://api.themoviedb.org/3/search/tv?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+        "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+    ];
+    if ($year) {
+        $urls[] = "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query=" . urlencode($title . ' ' . $year) . "&language=fr&page=1";
+    }
+    foreach ($urls as $searchUrl) {
+        $resp = @file_get_contents($searchUrl, false, $ctx);
+        $data = $resp ? json_decode($resp, true) : null;
+        if (!$data || empty($data['results'])) continue;
+        foreach ($data['results'] as $r) {
+            if (empty($r['poster_path']) || isset($seenIds[$r['id']])) continue;
+            $seenIds[$r['id']] = true;
+            $candidates[] = [
+                'id' => $r['id'],
+                'title' => $r['title'] ?? $r['name'] ?? '?',
+                'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
+                'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
+                'overview' => substr($r['overview'] ?? '', 0, 150),
+                'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
+            ];
+            if (count($candidates) >= 15) break 2;
+        }
+        usleep(250000);
+    }
+    return $candidates;
+}
+
+/**
+ * Ask AI to pick the best TMDB candidate for a filename.
+ * Uses a temp file for the prompt (no shell injection risk).
+ * @param string $fileName Original filename/folder name
+ * @param array $candidates TMDB search results
+ * @param string $aiBin Path to claude binary
+ * @return int|null Selected candidate index (0-based) or null
+ */
+function askAIPickBest(string $fileName, array $candidates, string $aiBin): ?int
+{
+    $compact = array_map(fn($c, $i) => [
+        'idx' => $i,
+        'title' => $c['title'],
+        'year' => $c['year'],
+        'type' => $c['type'],
+        'overview' => $c['overview'],
+    ], $candidates, array_keys($candidates));
+
+    $candidateList = json_encode($compact, JSON_UNESCAPED_UNICODE);
+
+    $prompt = <<<PROMPT
+Fichier/dossier : "$fileName"
+
+Voici les résultats TMDB. Choisis celui qui correspond le mieux au contenu du fichier.
+Retourne UNIQUEMENT le JSON : {"idx": N} où N est l'index du bon résultat.
+Si aucun ne correspond, retourne {"idx": -1}.
+
+Candidats :
+$candidateList
+PROMPT;
+
+    $tmpFile = tempnam(sys_get_temp_dir(), 'ai_pick_');
+    file_put_contents($tmpFile, $prompt);
+    $cmd = escapeshellarg($aiBin) . ' -p --model haiku --output-format json < ' . escapeshellarg($tmpFile) . ' 2>/dev/null';
+    $output = shell_exec($cmd);
+    @unlink($tmpFile);
+
+    if (!$output) return null;
+    $envelope = json_decode($output, true);
+    if (!$envelope || !isset($envelope['result'])) return null;
+
+    $text = $envelope['result'];
+    $text = preg_replace('/^```(?:json)?\s*/s', '', $text);
+    $text = preg_replace('/\s*```$/s', '', $text);
+    $parsed = json_decode(trim($text), true);
+    if (!is_array($parsed) || !isset($parsed['idx'])) return null;
+
+    $idx = (int)$parsed['idx'];
+    return ($idx >= 0 && $idx < count($candidates)) ? $idx : null;
+}
+
 /**
  * Ask AI to verify {filename, tmdb_title} pairs.
  * Returns array of {file, tmdb_title, correct, suggested_title, year} or null.
