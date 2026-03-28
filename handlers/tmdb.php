@@ -145,8 +145,12 @@ if (isset($_GET['posters'])) {
                 $posterCount[$row['poster_url']] = ($posterCount[$row['poster_url']] ?? 0) + 1;
                 $posterHitCount++;
             } elseif ((int)($row['verified'] ?? 0) === -1) {
+                // poster_url NULL + verified=-1 → user requested AI recheck
                 $cached[$f] = ['pending_ai' => true];
                 $pendingCount++;
+            } else {
+                // poster_url NULL + verified=0 → regex a raté, re-tenter
+                $uncached[] = $f;
             }
         } else {
             $uncached[] = $f;
