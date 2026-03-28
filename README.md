@@ -62,6 +62,20 @@ Open `http://localhost:8080/share` -- done. See [Installation](#installation) fo
 
 ![Folder Sharing](https://i.postimg.cc/HLNk9fBn/image.png)
 
+## Contributing
+
+ShareBox works, but there's room to improve. If you're into PHP, ffmpeg, or browser video -- here's where help would be useful:
+
+**Known issue -- Remux mode has A/V desync.** The remux path (H.264 MKV → MP4 without re-encoding video) produces audio drift on files with DTS/AC3 audio. It's disabled by default (`STREAM_REMUX_ENABLED = false`). Transcode works fine but costs more CPU. If you've dealt with ffmpeg `aresample` / PTS alignment, this is the one to look at -- see `handlers/stream_remux.php`.
+
+**Other areas where PRs are welcome:**
+- Feature toggles -- ability to disable streaming, subtitles, or the dashboard from `config.php`
+- Extract hardcoded values (CRF, quality presets, timeouts) into configuration
+- HLS improvements -- seek within an existing HLS session instead of restarting ffmpeg
+- WebVTT subtitle styling (font size, position, colors)
+
+No CONTRIBUTING.md, no issue templates. Just open a PR or an issue, keep it simple.
+
 ## Installation
 
 ### Docker (recommended)
