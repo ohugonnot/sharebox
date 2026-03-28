@@ -137,6 +137,38 @@ PHP extensions needed: `pdo_sqlite`, `session`, `json` (usually enabled by defau
 
 ## Quick Start
 
+### Docker (recommended)
+
+```bash
+git clone https://github.com/ohugonnot/sharebox.git
+cd sharebox
+```
+
+Edit `docker-compose.yml` and set your media path:
+
+```yaml
+volumes:
+  - /path/to/your/media:/media:ro   # <-- your files here
+environment:
+  - SHAREBOX_ADMIN_USER=admin
+  - SHAREBOX_ADMIN_PASS=changeme
+```
+
+```bash
+docker compose up -d
+```
+
+Open `http://localhost:8080/share` -- done.
+
+| Variable | Default | Description |
+|---|---|---|
+| `SHAREBOX_ADMIN_USER` | `admin` | Admin panel username |
+| `SHAREBOX_ADMIN_PASS` | `sharebox` | Admin panel password |
+| `SHAREBOX_MEDIA_DIR` | `/media/` | Path inside the container (match your volume mount) |
+| `SHAREBOX_STREAM_MAX_CONCURRENT` | `4` | Max simultaneous ffmpeg processes |
+| `SHAREBOX_STREAM_REMUX_ENABLED` | `false` | Enable remux mode for H.264 MKV |
+| `SHAREBOX_BANDWIDTH_QUOTA_TB` | `100` | Monthly bandwidth quota in TB |
+
 ### One-line installer (Debian/Ubuntu)
 
 ```bash
@@ -330,6 +362,12 @@ sharebox/
 │   └── active_torrents.php     # rtorrent SCGI XML-RPC interface
 ├── cron/
 │   └── record_netspeed.php     # 1-min cron → net_speed table, 7-day purge
+├── Dockerfile              # Docker image (Alpine + nginx + php-fpm + ffmpeg)
+├── docker-compose.yml      # Docker Compose for quick start
+├── docker/
+│   ├── entrypoint.sh       # Container init (config gen, htpasswd, services)
+│   ├── nginx.conf          # Full nginx config for Docker
+│   └── php-fpm.conf        # PHP-FPM pool config for Docker
 ├── favicon.svg             # App icon
 ├── nginx.conf.example      # Nginx configuration template
 ├── .htaccess               # Apache rewrite rules
