@@ -97,11 +97,43 @@ if ($mode === '--pending') {
         exit(1);
     }
     // Find ALL unverified entries with a poster (across all shared folders)
-    $rows = $db->query("SELECT path, poster_url, title FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
+    $rows = $db->query("SELECT path, poster_url, title, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
+
+    // Auto-verify duplicates: if >3 entries in the same dir share the same tmdb_id,
+    // it's clearly episodes of the same show — no need to ask AI
+    $byDirTmdb = []; // dir => tmdb_id => [paths]
+    foreach ($rows as $row) {
+        $dir = dirname($row['path']);
+        $tid = $row['tmdb_id'] ?? 0;
+        $byDirTmdb[$dir][$tid][] = $row['path'];
+    }
+    $autoVerified = 0;
+    $skipPaths = [];
+    foreach ($byDirTmdb as $dir => $tmdbGroups) {
+        foreach ($tmdbGroups as $tid => $paths) {
+            if (count($paths) > 3) {
+                // All clearly the same show — auto-verify without AI
+                foreach ($paths as $p) {
+                    try {
+                        $db->prepare("UPDATE folder_posters SET verified = 1 WHERE path = :p")->execute([':p' => $p]);
+                        $autoVerified++;
+                        $skipPaths[$p] = true;
+                    } catch (PDOException $e) { /* ignore */ }
+                }
+            }
+        }
+    }
+    if ($autoVerified > 0) {
+        echo "Auto-verified $autoVerified duplicate entries (same show, >3 in same dir).\n";
+    }
+
+    // Remove auto-verified from the list before sending to AI
+    $rows = array_filter($rows, fn($r) => !isset($skipPaths[$r['path']]));
+
     if (empty($rows)) {
         echo "All matches look correct.\n";
     } else {
-        verifyEntries($rows, $db, $AI_BIN, $TMDB_API_KEY);
+        verifyEntries(array_values($rows), $db, $AI_BIN, $TMDB_API_KEY);
     }
 } else {
     $path = realpath($mode);
