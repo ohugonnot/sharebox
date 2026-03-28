@@ -381,10 +381,11 @@ if (isset($_GET['posters'])) {
         $stmtNull = $db->prepare("SELECT COUNT(*) FROM folder_posters WHERE path LIKE :prefix AND poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)");
         $stmtNull->execute([':prefix' => $resolvedPath . '/%']);
         $nullCount = (int)$stmtNull->fetchColumn();
-        if ($nullCount > 0 && is_executable('/usr/local/bin/claude')) {
+        if ($nullCount > 0) {
             poster_log('AI trigger | ' . $nullCount . ' NULL entries → launching --pending-path ' . basename($resolvedPath));
             $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
-            $cmd = '/usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath) . ' > /dev/null 2>&1 &';
+            // sudo -u copain pour avoir accès à claude CLI + credentials
+            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath) . ' > /dev/null 2>&1 &';
             @pclose(@popen($cmd, 'r'));
         }
     }
