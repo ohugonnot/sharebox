@@ -49,10 +49,11 @@ if [ "${SHAREBOX_AUTO_SHARE:-}" = "yes" ]; then
         $c = $db->query("SELECT COUNT(*) FROM links")->fetchColumn();
         if ($c == 0) {
             $db->prepare("INSERT INTO links (token, path, type, name) VALUES (?, ?, ?, ?)")
-               ->execute(["browse", "'$MEDIA_DIR'", "directory", "ShareBox"]);
+               ->execute(["browse", "'"$MEDIA_DIR"'", "directory", "ShareBox"]);
             echo "Auto-share: /dl/browse\n";
         }
     ' 2>/dev/null || true
+    chown -R www-data:www-data /data
 fi
 
 # ── Cron (bandwidth history) ─────────────────────────────────────────────────
