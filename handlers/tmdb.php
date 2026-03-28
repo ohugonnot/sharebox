@@ -454,5 +454,26 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
+// ── Reload all posters in current directory ──
+if (isset($_GET['tmdb_reload']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    try {
+        // Supprimer toutes les entrées sauf __none__ (choix humain) pour ce dossier
+        $stmt = $db->prepare("DELETE FROM folder_posters WHERE path LIKE :prefix AND poster_url != '__none__'");
+        $stmt->execute([':prefix' => $resolvedPath . '/%']);
+        $deleted = $stmt->rowCount();
+        // Supprimer aussi l'entrée du dossier lui-même (pour re-fetch le parent)
+        $stmt2 = $db->prepare("DELETE FROM folder_posters WHERE path = :p AND poster_url != '__none__'");
+        $stmt2->execute([':p' => $resolvedPath]);
+        $deleted += $stmt2->rowCount();
+        poster_log('RELOAD all | ' . basename($resolvedPath) . ' | deleted=' . $deleted . ' entries');
+        echo json_encode(['success' => true, 'deleted' => $deleted]);
+    } catch (PDOException $e) {
+        poster_log('RELOAD error | ' . basename($resolvedPath) . ' → ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['error' => 'db error']);
+    }
+    exit;
+}
+
 echo json_encode(['error' => 'unknown tmdb action']);
 exit;
