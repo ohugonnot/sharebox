@@ -37,6 +37,24 @@ if [ -n "$MEDIA_GID" ] && [ "$MEDIA_GID" != "0" ] && [ "$MEDIA_GID" != "82" ]; t
     addgroup www-data mediagroup 2>/dev/null || true
 fi
 
+# ── Auto-share : créer un lien public vers /media si la DB est vide ────────
+# Pratique pour les démos — le dossier est partagé dès le premier lancement
+if [ ! -f /data/share.db ]; then
+    SHAREBOX_AUTO_SHARE="yes"
+fi
+if [ "${SHAREBOX_AUTO_SHARE:-}" = "yes" ]; then
+    php -r '
+        require "/app/db.php";
+        $db = get_db();
+        $c = $db->query("SELECT COUNT(*) FROM links")->fetchColumn();
+        if ($c == 0) {
+            $db->prepare("INSERT INTO links (token, path, type, name) VALUES (?, ?, ?, ?)")
+               ->execute(["browse", "'$MEDIA_DIR'", "directory", "ShareBox"]);
+            echo "Auto-share: /dl/browse\n";
+        }
+    ' 2>/dev/null || true
+fi
+
 # ── Cron (bandwidth history) ─────────────────────────────────────────────────
 echo "* * * * * php /app/cron/record_netspeed.php" > /etc/crontabs/www-data
 crond -b -l 8
