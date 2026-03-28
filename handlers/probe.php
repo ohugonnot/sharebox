@@ -23,7 +23,7 @@ if (!$probeFp) {
     exit;
 }
 
-$cmd = 'timeout 10 ffprobe -v error -show_entries format=duration,format_name -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
+$cmd = 'timeout ' . PROBE_TIMEOUT . ' ffprobe -v error -show_entries format=duration,format_name -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
     . escapeshellarg($resolvedPath) . ' 2>/dev/null';
 $output = shell_exec($cmd);
 $data = json_decode($output, true);
@@ -82,7 +82,7 @@ if ($firstTextSub) {
         $subCached->execute([':p' => $resolvedPath, ':t' => $s['index'], ':m' => $mtime]);
         if (!$subCached->fetch()) {
             $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
-            $bgCmd = 'timeout 120 ffmpeg -i ' . escapeshellarg($resolvedPath)
+            $bgCmd = 'timeout ' . SUBTITLE_EXTRACT_TIMEOUT . ' ffmpeg -i ' . escapeshellarg($resolvedPath)
                 . ' -map 0:s:' . $s['index'] . ' -f webvtt pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
             $dbPath = DB_PATH;
             // Extraction + cache en background via un script inline

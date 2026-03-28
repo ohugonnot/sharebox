@@ -1,7 +1,7 @@
 <?php
 $trackIdx = max(0, (int)$_GET['subtitle']);
 // Borne haute : évite de lancer ffmpeg sur des tracks inexistantes (anti-DoS)
-if ($trackIdx > 99) { http_response_code(400); exit; }
+if ($trackIdx > SUBTITLE_TRACK_MAX) { http_response_code(400); exit; }
 header('Content-Type: text/vtt; charset=utf-8');
 header('Cache-Control: no-store');
 $mtime = filemtime($resolvedPath);
@@ -20,7 +20,7 @@ if ($row = $cached->fetch()) {
 stream_log('SUBTITLE extract | track=' . $trackIdx . ' | ' . basename($resolvedPath));
 $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
 ob_start();
-$cmd = 'timeout 120 ffmpeg -i ' . escapeshellarg($resolvedPath)
+$cmd = 'timeout ' . SUBTITLE_EXTRACT_TIMEOUT . ' ffmpeg -i ' . escapeshellarg($resolvedPath)
     . ' -map 0:s:' . $trackIdx . ' -f webvtt pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
 passthru($cmd);
 $vtt = ob_get_clean();

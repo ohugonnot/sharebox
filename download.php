@@ -58,16 +58,16 @@ if ($link['password_hash'] !== null) {
     } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
         $attemptsKey = 'share_attempts_' . $token;
         $attempts = (int)($_SESSION[$attemptsKey] ?? 0);
-        if ($attempts >= 10) {
+        if ($attempts >= AUTH_MAX_ATTEMPTS) {
             stream_log('AUTH brute-force | token=' . $token . ' | attempts=' . $attempts);
-            sleep(3);
+            sleep(AUTH_LOCKOUT_SLEEP);
             afficher_formulaire_mdp($link['name'], 'Trop de tentatives. Réessayez plus tard.');
             exit;
         }
         if (!password_verify($_POST['password'], $link['password_hash'])) {
             stream_log('AUTH fail | token=' . $token . ' | attempt=' . ($attempts + 1));
             $_SESSION[$attemptsKey] = $attempts + 1;
-            sleep(1);
+            sleep(AUTH_FAIL_SLEEP);
             afficher_formulaire_mdp($link['name'], 'Mot de passe incorrect.');
             exit;
         }
@@ -633,7 +633,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$fileNameHtml}</title>
     <link rel="stylesheet" href="/share/player.css?v={$cssMtime}">
@@ -652,7 +652,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         <div class="player-video-wrap">
             <{$tag} id="player" {$controlsAttr} autoplay playsinline webkit-playsinline preload="metadata"></{$tag}>
             <div class="player-hint" id="hint"><span class="player-hint-text">Chargement...</span></div>
-            <div id="video-click-area" style="position:absolute;inset:0;z-index:6;cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent;user-select:none"></div>
+            <div id="video-click-area" style="position:absolute;top:0;right:0;bottom:0;left:0;z-index:6;cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent;user-select:none"></div>
             <div id="play-icon-overlay" class="play-icon-overlay"></div>
             <div id="vol-osd"></div>
         </div>
