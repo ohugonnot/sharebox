@@ -313,5 +313,27 @@ if (isset($_GET['folder_type_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
+// ── Request AI recheck for a file/folder poster ──
+if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    $name = $input['name'] ?? '';
+
+    if (!$name) { http_response_code(400); echo json_encode(['error' => 'missing name']); exit; }
+
+    $fullPath = $resolvedPath . '/' . $name;
+    if (!is_dir($fullPath) && !is_file($fullPath)) { http_response_code(404); echo json_encode(['error' => 'not found']); exit; }
+
+    try {
+        // Reset verified + clear poster so AI cron re-processes it
+        $db->prepare("UPDATE folder_posters SET verified = 0, poster_url = NULL WHERE path = :p AND poster_url != '__none__'")
+           ->execute([':p' => $fullPath]);
+        echo json_encode(['success' => true]);
+    } catch (PDOException $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'db error']);
+    }
+    exit;
+}
+
 echo json_encode(['error' => 'unknown tmdb action']);
 exit;

@@ -182,7 +182,7 @@ if (is_dir($resolvedPath)) {
     }
 
     // TMDB poster endpoints (search, batch, set)
-    if (isset($_GET['posters']) || isset($_GET['tmdb_search']) || isset($_GET['tmdb_set']) || isset($_GET['folder_type_set'])) {
+    if (isset($_GET['posters']) || isset($_GET['tmdb_search']) || isset($_GET['tmdb_set']) || isset($_GET['folder_type_set']) || isset($_GET['ai_recheck'])) {
         require __DIR__ . '/handlers/tmdb.php';
     }
 
@@ -1082,35 +1082,29 @@ function toggleCardMenu(btn, folderName) {
     item1.onclick = function(e) { e.preventDefault(); e.stopPropagation(); menu.remove(); btn.dataset.menuOpen = ''; openPosterPicker(folderName); };
     menu.appendChild(item1);
 
-    // Item 2: Type série/films (only for folder cards, not file cards)
     var card = btn.closest('.grid-card');
+
+    // Item 2: Folder type toggle (only for folder cards)
     if (card && card.dataset.type === 'folder') {
         var currentType = card.dataset.folderType || 'series';
         var item2 = document.createElement('div');
         item2.className = 'grid-card-menu-item';
         var nextType = currentType === 'movies' ? 'series' : 'movies';
+        // Icon: film strip
         var svg2 = document.createElementNS('http://www.w3.org/2000/svg','svg');
         svg2.setAttribute('viewBox','0 0 24 24'); svg2.setAttribute('fill','none');
         svg2.setAttribute('stroke','currentColor'); svg2.setAttribute('stroke-width','2');
-        if (currentType === 'movies') {
-            var r2 = document.createElementNS('http://www.w3.org/2000/svg','rect');
-            r2.setAttribute('x','2'); r2.setAttribute('y','7'); r2.setAttribute('width','20'); r2.setAttribute('height','15'); r2.setAttribute('rx','2');
-            var pl2 = document.createElementNS('http://www.w3.org/2000/svg','polyline');
-            pl2.setAttribute('points','17 2 12 7 7 2');
-            svg2.appendChild(r2); svg2.appendChild(pl2);
-        } else {
-            var r2 = document.createElementNS('http://www.w3.org/2000/svg','rect');
-            r2.setAttribute('x','2'); r2.setAttribute('y','2'); r2.setAttribute('width','20'); r2.setAttribute('height','20'); r2.setAttribute('rx','2.18');
-            svg2.appendChild(r2);
-            [['7','2','7','22'],['17','2','17','22'],['2','12','22','12'],['2','7','7','7'],['2','17','7','17'],['17','7','22','7'],['17','17','22','17']].forEach(function(c){
-                var ln = document.createElementNS('http://www.w3.org/2000/svg','line');
-                ln.setAttribute('x1',c[0]); ln.setAttribute('y1',c[1]); ln.setAttribute('x2',c[2]); ln.setAttribute('y2',c[3]);
-                svg2.appendChild(ln);
-            });
-        }
+        var r2 = document.createElementNS('http://www.w3.org/2000/svg','rect');
+        r2.setAttribute('x','2'); r2.setAttribute('y','2'); r2.setAttribute('width','20'); r2.setAttribute('height','20'); r2.setAttribute('rx','2.18');
+        svg2.appendChild(r2);
+        [['7','2','7','22'],['17','2','17','22'],['2','12','22','12']].forEach(function(c){
+            var ln = document.createElementNS('http://www.w3.org/2000/svg','line');
+            ln.setAttribute('x1',c[0]); ln.setAttribute('y1',c[1]); ln.setAttribute('x2',c[2]); ln.setAttribute('y2',c[3]);
+            svg2.appendChild(ln);
+        });
         item2.appendChild(svg2);
         var span2 = document.createElement('span');
-        span2.textContent = currentType === 'movies' ? 'Type : Films \u2192 S\u00e9rie' : 'Type : S\u00e9rie \u2192 Films';
+        span2.textContent = currentType === 'movies' ? 'Contenu : Films (changer)' : 'Contenu : S\u00e9ries (changer)';
         item2.appendChild(span2);
         item2.onclick = function(e) {
             e.preventDefault(); e.stopPropagation();
@@ -1120,7 +1114,31 @@ function toggleCardMenu(btn, folderName) {
         menu.appendChild(item2);
     }
 
-    btn.closest('.grid-card').appendChild(menu);
+    // Item 3: AI recheck (request AI to re-verify this poster)
+    if (card && card.classList.contains('has-poster')) {
+        var item3 = document.createElement('div');
+        item3.className = 'grid-card-menu-item';
+        var svg3 = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        svg3.setAttribute('viewBox','0 0 24 24'); svg3.setAttribute('fill','none');
+        svg3.setAttribute('stroke','currentColor'); svg3.setAttribute('stroke-width','2');
+        var path3 = document.createElementNS('http://www.w3.org/2000/svg','path');
+        path3.setAttribute('d','M21 2v6h-6');
+        var path3b = document.createElementNS('http://www.w3.org/2000/svg','path');
+        path3b.setAttribute('d','M21 13a9 9 0 11-3-7.7L21 8');
+        svg3.appendChild(path3); svg3.appendChild(path3b);
+        item3.appendChild(svg3);
+        var span3 = document.createElement('span');
+        span3.textContent = 'V\u00e9rifier avec l\u2019IA';
+        item3.appendChild(span3);
+        item3.onclick = function(e) {
+            e.preventDefault(); e.stopPropagation();
+            menu.remove(); btn.dataset.menuOpen = '';
+            requestAIRecheck(folderName);
+        };
+        menu.appendChild(item3);
+    }
+
+    card.appendChild(menu);
 }
 
 function setFolderType(folderName, type, card) {
@@ -1132,6 +1150,23 @@ function setFolderType(folderName, type, card) {
     }).then(function(r){ return r.json(); }).then(function(d){
         if (d.success && card) {
             card.dataset.folderType = type;
+        }
+    }).catch(function(){});
+}
+
+function requestAIRecheck(name) {
+    var url = BASE_URL + '?' + SUB_PATH + 'ai_recheck=1';
+    fetch(url, {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({name: name})
+    }).then(function(r){ return r.json(); }).then(function(d){
+        if (d.success) {
+            var card = document.querySelector('.grid-card[data-folder="'+CSS.escape(name)+'"]');
+            if (card) {
+                var bg = card.querySelector('.grid-card-bg');
+                if (bg) bg.style.opacity = '0.5';
+            }
         }
     }).catch(function(){});
 }
