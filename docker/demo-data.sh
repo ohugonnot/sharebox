@@ -6,12 +6,15 @@ set -e
 
 MEDIA_DIR="${1:-/media}"
 
-# Skip if media dir already has content (real media mounted)
-EXISTING=$(find "$MEDIA_DIR" -maxdepth 1 -not -name '.' -not -name '..' | head -1)
-if [ -n "$EXISTING" ]; then
-    echo "Demo-data: /media/ already has content, skipping."
+# Skip if media dir already has real content (not just Alpine's default cdrom/floppy/usb)
+REAL_CONTENT=$(find "$MEDIA_DIR" -mindepth 1 -maxdepth 1 \
+    -not -name 'cdrom' -not -name 'floppy' -not -name 'usb' | head -1)
+if [ -n "$REAL_CONTENT" ]; then
+    echo "Demo-data: $MEDIA_DIR already has content, skipping."
     exit 0
 fi
+# Clean Alpine defaults
+rm -rf "$MEDIA_DIR/cdrom" "$MEDIA_DIR/floppy" "$MEDIA_DIR/usb" 2>/dev/null || true
 
 echo "Demo-data: creating sample media structure..."
 
