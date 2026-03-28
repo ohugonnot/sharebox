@@ -5,7 +5,7 @@
 require_once __DIR__ . '/dashboard_helpers.php';
 
 if (!defined('RTORRENT_SOCK')) {
-    define('RTORRENT_SOCK', '/var/run/ropixv2/.rtorrent.sock');
+    define('RTORRENT_SOCK', '');
 }
 
 /**
@@ -96,6 +96,9 @@ function xmlrpc_value_to_php(\SimpleXMLElement $v): mixed
  */
 function get_torrents_from_rtorrent(string $sockPath = RTORRENT_SOCK): array
 {
+    if ($sockPath === '') {
+        return ['downloads' => [], 'uploads' => []];
+    }
     try {
         $raw = scgi_call_rt(
             $sockPath,

@@ -308,7 +308,8 @@ function initNetChart(d) {
  * Quota bande passante mensuel
  * ============================================================ */
 
-function fetchQuota() { fetchJSON('/share/api/quota.php', updateQuota); }
+function hasQuota() { return !!id('dash-quota'); }
+function fetchQuota() { if (hasQuota()) fetchJSON('/share/api/quota.php', updateQuota); }
 
 function fmtBytes(b) {
     if (b >= 1024 ** 4) return (b / 1024 ** 4).toFixed(1) + '\u00a0TB';
@@ -369,7 +370,8 @@ function updatePillQuota(pct) {
  * Torrents
  * ============================================================ */
 
-function fetchTorrents() { fetchJSON('/share/api/active_torrents.php', updateTorrents); }
+function hasTorrents() { return !!id('dash-downloads'); }
+function fetchTorrents() { if (hasTorrents()) fetchJSON('/share/api/active_torrents.php', updateTorrents); }
 
 function updateTorrents(d) {
     renderTorrentList('dash-dl-list', d.downloads || [], 'down');
@@ -416,6 +418,7 @@ function renderTorrentList(elId, items, dir) {
  * ============================================================ */
 
 function updateTorrentInterval() {
+    if (!hasTorrents()) return;
     clearInterval(D.torrentTimer);
     const anyOpen = document.querySelector('#dash-downloads[open], #dash-uploads[open]');
     const ms      = anyOpen ? D.torrentIntervalOpen : D.torrentIntervalClosed;
@@ -496,7 +499,7 @@ function updatePillNet(d) {
 function fetchForPills() {
     fetchJSON('/share/api/sysinfo.php', updatePillsFromSysinfo);
     fetchJSON('/share/api/speed.php',   updatePillNet);
-    fetchJSON('/share/api/quota.php',   function(d) { if (!d.error) updatePillQuota(d.pct || 0); });
+    if (hasQuota()) fetchJSON('/share/api/quota.php', function(d) { if (!d.error) updatePillQuota(d.pct || 0); });
 }
 
 /* ============================================================
@@ -508,12 +511,16 @@ function startDashTimers() {
     clearInterval(D.pillTimer);
     fetchSysinfo();
     fetchSpeed();
-    fetchTorrents();
-    fetchQuota();
-    D.sysTimer     = setInterval(fetchSysinfo,   10000);
-    D.speedTimer   = setInterval(fetchSpeed,     10000);
-    D.torrentTimer = setInterval(fetchTorrents,  D.torrentIntervalClosed);
-    D.quotaTimer   = setInterval(fetchQuota,     D.quotaInterval);
+    D.sysTimer   = setInterval(fetchSysinfo, 10000);
+    D.speedTimer = setInterval(fetchSpeed,   10000);
+    if (hasTorrents()) {
+        fetchTorrents();
+        D.torrentTimer = setInterval(fetchTorrents, D.torrentIntervalClosed);
+    }
+    if (hasQuota()) {
+        fetchQuota();
+        D.quotaTimer = setInterval(fetchQuota, D.quotaInterval);
+    }
 }
 
 function stopDashTimers() {
@@ -578,8 +585,8 @@ function stopDashTimers() {
         });
     }
 
-    // Téléchargements et Envois s'ouvrent/ferment ensemble
-    ['dash-downloads', 'dash-uploads'].forEach(function (elId) {
+    // Téléchargements et Envois s'ouvrent/ferment ensemble (si rtorrent actif)
+    if (hasTorrents()) ['dash-downloads', 'dash-uploads'].forEach(function (elId) {
         const el = id(elId);
         if (!el) return;
         el.addEventListener('toggle', function () {
