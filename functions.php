@@ -3,6 +3,30 @@
  * Fonctions pures réutilisables — extraites de download.php et ctrl.php
  */
 
+// ── Tuning constants ────────────────────────────────────────────────────────
+// Adjust these to match your hardware. See CLAUDE.md for rationale.
+
+const PROBE_MAX_CONCURRENT    = 5;              // max parallel ffprobe processes
+const PROBE_TIMEOUT           = 10;             // ffprobe timeout (seconds)
+const SUBTITLE_EXTRACT_TIMEOUT = 120;           // ffmpeg subtitle extraction timeout (seconds)
+const SUBTITLE_TRACK_MAX      = 99;             // max subtitle track index (anti-DoS)
+const KEYFRAME_LOOKUP_TIMEOUT = 5;              // ffprobe keyframe PTS lookup timeout (seconds)
+const STREAM_SLOT_TIMEOUT     = 15;             // max wait for a stream slot (seconds)
+const VMTOUCH_SIZE_LIMIT      = 2 * 1024 * 1024 * 1024; // page-cache warm only files < 2 GB
+const LOG_ROTATION_SIZE       = 5 * 1024 * 1024;        // rotate stream.log at 5 MB
+const LOG_ROTATION_COUNT      = 3;              // keep 3 rotated log files
+const AUTH_MAX_ATTEMPTS       = 10;             // password attempts before lockout
+const AUTH_LOCKOUT_SLEEP      = 3;              // sleep seconds on lockout
+const AUTH_FAIL_SLEEP         = 1;              // sleep seconds per failed attempt
+
+// FFmpeg encoding defaults
+const FFMPEG_CRF              = 23;             // x264 quality (lower = better, 18-28 typical)
+const FFMPEG_PRESET           = 'ultrafast';    // x264 preset (ultrafast→veryslow)
+const FFMPEG_THREADS          = 4;              // x264 thread count (half your cores for 2 concurrent)
+const FFMPEG_AUDIO_BITRATE    = '192k';         // AAC audio bitrate
+const FFMPEG_AUDIO_CHANNELS   = 2;              // stereo downmix
+const FFMPEG_GOP_SIZE_DEFAULT = 25;             // keyframe interval (frames)
+
 /**
  * Acquire a stream slot using flock — limits concurrent ffmpeg processes.
  * Tries non-blocking first, falls back to blocking wait on slot 1.
@@ -19,7 +43,7 @@ function acquireStreamSlot(): array {
     }
     // Tous les slots occupés — attendre slot 1 avec polling + détection déconnexion
     $fp = fopen('/tmp/sharebox_stream_slot_1.lock', 'w');
-    $deadline = microtime(true) + 15; // max 15s d'attente
+    $deadline = microtime(true) + STREAM_SLOT_TIMEOUT;
     while (microtime(true) < $deadline) {
         if (flock($fp, LOCK_EX | LOCK_NB)) return [$fp, true];
         if (connection_aborted()) { fclose($fp); exit; }
@@ -41,7 +65,7 @@ function releaseStreamSlot(mixed $fp): void {
  * @return resource|null
  */
 function acquireProbeSlot(): mixed {
-    for ($i = 1; $i <= 5; $i++) {
+    for ($i = 1; $i <= PROBE_MAX_CONCURRENT; $i++) {
         $fp = fopen("/tmp/sharebox_probe_slot_{$i}.lock", 'w');
         if ($fp !== false && flock($fp, LOCK_EX | LOCK_NB)) return $fp;
         if ($fp !== false) fclose($fp);
@@ -173,11 +197,8 @@ function is_path_within(string|false $resolvedPath, string $basePath): bool {
 function stream_log(string $msg): void {
     if (!defined('STREAM_LOG') || !STREAM_LOG) return;
     $logFile = STREAM_LOG;
-    // Rotate : 5 MB max, 3 fichiers
-    if (@filesize($logFile) > 5 * 1024 * 1024) {
-        @unlink($logFile . '.3');
-        @rename($logFile . '.2', $logFile . '.3');
-        @rename($logFile . '.1', $logFile . '.2');
+    if (@filesize($logFile) > LOG_ROTATION_SIZE) {
+        for ($r = LOG_ROTATION_COUNT; $r > 1; $r--) @rename($logFile . '.' . ($r - 1), $logFile . '.' . $r);
         @rename($logFile, $logFile . '.1');
     }
     $line = '[' . date('Y-m-d H:i:s') . '] [' . ($_SERVER['REMOTE_ADDR'] ?? '-') . '] ' . $msg . "\n";
@@ -215,9 +236,10 @@ function buildFfmpegInputArgs(string $filePath, string $seekBefore = ''): string
 /**
  * Construit les arguments encodeur x264+AAC communs.
  */
-function buildFfmpegCodecArgs(int $gopSize = 25): string {
-    return ' -c:v libx264 -preset ultrafast -crf 23 -g ' . $gopSize . ' -threads 4'
-        . ' -c:a aac -ac 2 -b:a 192k -shortest';
+function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT): string {
+    return ' -c:v libx264 -preset ' . FFMPEG_PRESET . ' -crf ' . FFMPEG_CRF
+        . ' -g ' . $gopSize . ' -threads ' . FFMPEG_THREADS
+        . ' -c:a aac -ac ' . FFMPEG_AUDIO_CHANNELS . ' -b:a ' . FFMPEG_AUDIO_BITRATE . ' -shortest';
 }
 
 /**
@@ -273,7 +295,7 @@ function computeEpisodeNav(string $subPath, string $basePath, string $baseUrl): 
  * Warm le fichier dans le page cache si < 2 Go.
  */
 function warmFileCache(string $filePath): void {
-    if (filesize($filePath) < 2 * 1024 * 1024 * 1024) {
+    if (filesize($filePath) < VMTOUCH_SIZE_LIMIT) {
         shell_exec('vmtouch -qt ' . escapeshellarg($filePath) . ' >/dev/null 2>&1 &');
     }
 }

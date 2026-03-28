@@ -4,7 +4,7 @@ $seekSec = max(0.0, (float)($_GET['keyframe'] ?? 0));
 if ($seekSec <= 0.0) { echo json_encode(['pts' => 0.0]); exit; }
 $probeFp = acquireProbeSlot();
 if (!$probeFp) { echo json_encode(['pts' => $seekSec]); exit; }
-$cmd = 'timeout 5 ffprobe -v error -ss ' . escapeshellarg(sprintf('%.3f', $seekSec))
+$cmd = 'timeout ' . KEYFRAME_LOOKUP_TIMEOUT . ' ffprobe -v error -ss ' . escapeshellarg(sprintf('%.3f', $seekSec))
     . ' -select_streams v:0 -skip_frame nokey -show_entries frame=pts_time'
     . ' -frames:v 1 -of csv=p=0 '
     . escapeshellarg($resolvedPath) . ' 2>/dev/null';
