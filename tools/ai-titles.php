@@ -47,6 +47,12 @@ $db = get_db();
 // Resolve AI provider (Claude CLI for now)
 $AI_BIN = trim(shell_exec('which claude') ?? '');
 if (!$AI_BIN) {
+    // Fallback: check common install locations
+    foreach (['/home/copain/.local/bin/claude', '/usr/local/bin/claude'] as $p) {
+        if (is_executable($p)) { $AI_BIN = $p; break; }
+    }
+}
+if (!$AI_BIN) {
     fwrite(STDERR, "Warning: claude CLI not found, will use regex fallback only\n");
 }
 
