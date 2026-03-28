@@ -201,20 +201,20 @@ if (isset($_GET['posters'])) {
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
 
     foreach ($toSearch as $title) {
-        $result = tmdb_search($title, null, $apiKey, $ctx, ['multi', 'tv']);
+        $found = tmdb_search($title, null, $apiKey, $ctx, ['multi', 'tv']);
         $titleResults[$title] = [
-            'posterUrl' => $result['poster'] ?? null,
-            'tmdbId' => $result['id'] ?? null,
-            'tmdbTitle' => $result['title'] ?? null,
-            'tmdbOverview' => $result['overview'] ?? null,
+            'posterUrl' => $found['poster'] ?? null,
+            'tmdbId' => $found['id'] ?? null,
+            'tmdbTitle' => $found['title'] ?? null,
+            'tmdbOverview' => $found['overview'] ?? null,
         ];
-        poster_log('TMDB search | "' . $title . '" → ' . ($result ? $result['title'] . ' (id=' . $result['id'] . ')' : 'NO MATCH'));
+        poster_log('TMDB search | "' . $title . '" → ' . ($found ? $found['title'] . ' (id=' . $found['id'] . ')' : 'NO MATCH'));
         usleep(50000); // rate limit TMDB
     }
 
     // ── Phase 4 : dispatcher les résultats sur tous les dossiers ──
     // Transaction pour éviter les "database is locked" avec le cron AI concurrent
-    $db->beginTransaction();
+    $hasWrites = false;
     foreach ($titleResults as $title => $tr) {
         if (!isset($titleToFolders[$title])) continue;
         $folderList = $titleToFolders[$title];
@@ -223,6 +223,7 @@ if (isset($_GET['posters'])) {
         foreach ($folderList as $folderName) {
             $fullPath = $resolvedPath . '/' . $folderName;
             try {
+                if (!$hasWrites) { $db->beginTransaction(); $hasWrites = true; }
                 $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
                               ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                    ->execute([':p' => $fullPath, ':u' => $tr['posterUrl'], ':i' => $tr['tmdbId'], ':t' => $tr['tmdbTitle'], ':o' => $tr['tmdbOverview']]);
@@ -234,7 +235,7 @@ if (isset($_GET['posters'])) {
         }
     }
 
-    try { $db->commit(); } catch (PDOException $e) { poster_log('DB commit error | ' . $e->getMessage()); }
+    if ($hasWrites) { try { $db->commit(); } catch (PDOException $e) { poster_log('DB commit error | ' . $e->getMessage()); } }
 
     // remaining = titres uniques pas encore cherchés
     $remaining = count($titlesToSearch) - count($toSearch);
@@ -296,20 +297,22 @@ if (isset($_GET['posters'])) {
             $videoResults[$fileName] = tmdb_search($meta['title'], $meta['year'], $apiKey, $ctx, ['multi', 'movie']);
             usleep(50000);
         }
-        $db->beginTransaction();
-        foreach ($videoResults as $fileName => $r) {
-            $fullPath = $resolvedPath . '/' . $fileName;
-            try {
-                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
-              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
-                   ->execute([':p' => $fullPath, ':u' => $r['poster'] ?? null, ':i' => $r['id'] ?? null, ':t' => $r['title'] ?? null, ':o' => $r['overview'] ?? null]);
-            } catch (PDOException $e) { poster_log('DB error video | ' . $fileName . ' → ' . $e->getMessage()); }
-            if ($r) {
-                $result[$fileName] = ['poster' => $r['poster']];
-                if ($r['overview']) $result[$fileName]['overview'] = $r['overview'];
+        if (!empty($videoResults)) {
+            try { $db->beginTransaction(); } catch (PDOException $e) { /* already in transaction */ }
+            foreach ($videoResults as $fileName => $r) {
+                $fullPath = $resolvedPath . '/' . $fileName;
+                try {
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
+                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
+                       ->execute([':p' => $fullPath, ':u' => $r['poster'] ?? null, ':i' => $r['id'] ?? null, ':t' => $r['title'] ?? null, ':o' => $r['overview'] ?? null]);
+                } catch (PDOException $e) { poster_log('DB error video | ' . $fileName . ' → ' . $e->getMessage()); }
+                if ($r) {
+                    $result[$fileName] = ['poster' => $r['poster']];
+                    if ($r['overview']) $result[$fileName]['overview'] = $r['overview'];
+                }
             }
+            try { $db->commit(); } catch (PDOException $e) { poster_log('DB commit error video | ' . $e->getMessage()); }
         }
-        try { $db->commit(); } catch (PDOException $e) { poster_log('DB commit error video | ' . $e->getMessage()); }
 
         $videoRemaining = count($videoUncached) - count($videoToFetch);
     }
