@@ -4,7 +4,9 @@
  * La BDD est créée automatiquement au premier appel
  */
 
-require_once __DIR__ . '/config.php';
+if (file_exists(__DIR__ . '/config.php')) {
+    require_once __DIR__ . '/config.php';
+}
 
 /**
  * Retourne une connexion PDO vers la base SQLite
