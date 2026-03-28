@@ -6,6 +6,11 @@ composer.lock
 /composer
 __pycache__/
 
+# Dev files
+CLAUDE.md
+test_quota.py
+test_router.php
+
 # Test media files
 *.mp4
 *.mov
