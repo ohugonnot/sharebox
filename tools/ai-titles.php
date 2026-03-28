@@ -54,40 +54,37 @@ $runModes = ($arg === '--cron') ? ['--pending', '--verify'] : [$arg];
 
 foreach ($runModes as $mode) {
 
-if ($mode === '--all' || $mode === '--pending') {
+if ($mode === '--pending') {
+    // Find ALL entries with poster_url IS NULL (regex+TMDB failed, needs AI)
+    $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll();
+    if (empty($rows)) {
+        echo "Nothing pending.\n";
+    } else {
+        processPendingEntries($rows, $db, $AI_BIN, $TMDB_API_KEY);
+    }
+} elseif ($mode === '--all') {
+    // Process all movies-tagged folders (full rescan, not just pending)
     $rows = $db->query("SELECT DISTINCT path FROM folder_posters WHERE folder_type = 'movies'")->fetchAll();
     if (empty($rows)) {
         echo "No folders tagged as 'movies' found.\n";
-        exit(0);
-    }
-    $pendingOnly = ($arg === '--pending');
-    $total = 0;
-    foreach ($rows as $row) {
-        if (is_dir($row['path'])) {
-            $total += processFolder($row['path'], $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS, $pendingOnly);
+    } else {
+        foreach ($rows as $row) {
+            if (is_dir($row['path'])) {
+                processFolder($row['path'], $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS, false);
+            }
         }
     }
-    if ($pendingOnly && $total === 0) {
-        echo "Nothing pending.\n";
-    }
-} elseif ($arg === '--verify') {
+} elseif ($mode === '--verify') {
     if (!$AI_BIN) {
         fwrite(STDERR, "Error: --verify requires AI (claude CLI not found)\n");
         exit(1);
     }
-    $rows = $db->query("SELECT DISTINCT path FROM folder_posters WHERE folder_type = 'movies'")->fetchAll();
+    // Find ALL unverified entries with a poster (across all shared folders)
+    $rows = $db->query("SELECT path, poster_url, title FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
     if (empty($rows)) {
-        echo "No folders tagged as 'movies' found.\n";
-        exit(0);
-    }
-    $total = 0;
-    foreach ($rows as $row) {
-        if (is_dir($row['path'])) {
-            $total += verifyFolder($row['path'], $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
-        }
-    }
-    if ($total === 0) {
         echo "All matches look correct.\n";
+    } else {
+        verifyEntries($rows, $db, $AI_BIN, $TMDB_API_KEY);
     }
 } else {
     $path = realpath($mode);
@@ -101,7 +98,160 @@ if ($mode === '--all' || $mode === '--pending') {
 } // end foreach $runModes
 
 /**
- * Process a single movies folder.
+ * Process pending entries (poster_url IS NULL) from any shared folder.
+ * Groups by parent directory, sends batch to AI, retries TMDB.
+ */
+function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiKey): void
+{
+    // Group entries by parent directory
+    $byDir = [];
+    foreach ($rows as $row) {
+        $path = $row['path'];
+        $dir = dirname($path);
+        $name = basename($path);
+        $byDir[$dir][] = $name;
+    }
+
+    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
+
+    foreach ($byDir as $dir => $names) {
+        echo "\n=== " . basename($dir) . " (" . count($names) . " pending) ===\n";
+
+        // Ask AI for clean titles
+        $titles = null;
+        if ($aiBin) {
+            $titles = askAI($names, $aiBin);
+        }
+        if ($titles === null) {
+            if ($aiBin) echo "  AI failed, falling back to regex.\n";
+            $titles = [];
+            foreach ($names as $n) {
+                $meta = extract_title_year($n);
+                $titles[] = ['file' => $n, 'title' => $meta['title'], 'year' => $meta['year'], 'skip' => false];
+            }
+        }
+
+        $found = 0;
+        foreach ($titles as $t) {
+            $name = $t['file'];
+            $fullPath = $dir . '/' . $name;
+
+            if ($t['skip'] ?? false) {
+                echo "  SKIP  " . $name . "\n";
+                try {
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, title) VALUES (:p, '__none__', :t)
+                                  ON CONFLICT(path) DO UPDATE SET poster_url = '__none__', title = :t, updated_at = datetime('now')")
+                       ->execute([':p' => $fullPath, ':t' => $t['title'] ?? '']);
+                } catch (PDOException $e) { /* ignore */ }
+                continue;
+            }
+
+            $title = $t['title'] ?? '';
+            if (!$title) continue;
+
+            $result = searchTMDB($title, $t['year'] ?? null, $apiKey, $ctx);
+            if ($result) {
+                echo "  OK    " . $name . " => " . $result['title'] . "\n";
+                $found++;
+                try {
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
+                                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
+                       ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
+                } catch (PDOException $e) { /* ignore */ }
+            } else {
+                echo "  MISS  " . $name . " (searched: " . $title . ")\n";
+            }
+
+            usleep(250000);
+        }
+
+        echo "  Done: $found found out of " . count($names) . "\n";
+    }
+}
+
+/**
+ * Verify unverified entries across all shared folders.
+ * Sends {name, tmdb_title} pairs to AI, fixes bad matches.
+ */
+function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): void
+{
+    // Group by parent directory
+    $byDir = [];
+    foreach ($rows as $row) {
+        $dir = dirname($row['path']);
+        $byDir[$dir][] = [
+            'file' => basename($row['path']),
+            'tmdb_title' => $row['title'],
+            'path' => $row['path'],
+        ];
+    }
+
+    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
+
+    foreach ($byDir as $dir => $pairs) {
+        echo "\n=== VERIFY " . basename($dir) . " (" . count($pairs) . " matches) ===\n";
+
+        $verdicts = askAIVerify($pairs, $aiBin);
+        if ($verdicts === null) {
+            echo "  AI verify failed, skipping.\n";
+            continue;
+        }
+
+        // Build bad files set
+        $badFiles = [];
+        foreach ($verdicts as $v) {
+            if (!($v['correct'] ?? true)) {
+                $badFiles[$v['file']] = $v;
+            }
+        }
+
+        // Mark non-bad as verified
+        $confirmed = 0;
+        foreach ($pairs as $p) {
+            if (isset($badFiles[$p['file']])) continue;
+            try {
+                $stmt = $db->prepare("UPDATE folder_posters SET verified = 1 WHERE path = :p AND (verified IS NULL OR verified = 0)");
+                $stmt->execute([':p' => $p['path']]);
+                if ($stmt->rowCount() > 0) $confirmed++;
+            } catch (PDOException $e) { /* ignore */ }
+        }
+
+        // Fix bad matches
+        $fixed = 0;
+        foreach ($badFiles as $fileName => $v) {
+            $fullPath = $dir . '/' . $fileName;
+            $betterTitle = $v['suggested_title'] ?? '';
+            $betterYear = $v['year'] ?? null;
+
+            if (!$betterTitle) {
+                echo "  BAD   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ")\n";
+                continue;
+            }
+
+            echo "  FIX   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ") => " . $betterTitle . "\n";
+
+            $result = searchTMDB($betterTitle, $betterYear, $apiKey, $ctx);
+            if ($result) {
+                echo "        => " . $result['title'] . "\n";
+                $fixed++;
+                try {
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
+                                  ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
+                       ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
+                } catch (PDOException $e) { /* ignore */ }
+            } else {
+                echo "        => no match\n";
+            }
+
+            usleep(250000);
+        }
+
+        echo "  Verify done: $confirmed confirmed, " . count($badFiles) . " bad, $fixed fixed\n";
+    }
+}
+
+/**
+ * Process a single movies folder (used by --all mode).
  * @param bool $pendingOnly If true, only process files with poster_url=NULL (regex already tried)
  * @return int Number of files processed
  */
@@ -253,99 +403,6 @@ function searchTMDB(string $title, ?int $year, string $apiKey, $ctx): ?array
  * Fixes bad matches by re-searching TMDB with AI-suggested titles.
  * @return int Number of files checked
  */
-function verifyFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, array $videoExts): int
-{
-    // Find video files with a poster (not __none__, not NULL) that haven't been verified
-    $items = scandir($dirPath);
-    $pairs = []; // [{file, tmdb_title, path}]
-    foreach ($items as $item) {
-        if ($item[0] === '.') continue;
-        if (is_dir($dirPath . '/' . $item)) continue;
-        $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
-        if (!in_array($ext, $videoExts, true)) continue;
-
-        $fullPath = $dirPath . '/' . $item;
-        $stmt = $db->prepare("SELECT poster_url, title, verified FROM folder_posters WHERE path = :p");
-        $stmt->execute([':p' => $fullPath]);
-        $row = $stmt->fetch();
-        // Only verify files that have an auto-matched poster, not yet verified
-        if (!$row || !$row['poster_url'] || $row['poster_url'] === '__none__') continue;
-        if (!$row['title']) continue;
-        if (!empty($row['verified'])) continue; // Already confirmed by AI
-
-        $pairs[] = ['file' => $item, 'tmdb_title' => $row['title'], 'path' => $fullPath];
-    }
-
-    if (empty($pairs)) return 0;
-
-    echo "\n=== VERIFY " . basename($dirPath) . " (" . count($pairs) . " matches) ===\n";
-
-    // Ask AI to verify the matches
-    $verdicts = askAIVerify($pairs, $aiBin);
-    if ($verdicts === null) {
-        echo "  AI verify failed, skipping.\n";
-        return 0;
-    }
-
-    $fixed = 0;
-    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
-
-    // Build set of files flagged as bad by AI (match by basename, tolerant)
-    $badFiles = [];
-    foreach ($verdicts as $v) {
-        if (!($v['correct'] ?? true)) {
-            $badFiles[$v['file']] = $v;
-        }
-    }
-
-    // Mark all non-bad files as verified in one go
-    $confirmed = 0;
-    foreach ($pairs as $p) {
-        if (isset($badFiles[$p['file']])) continue;
-        try {
-            $stmt = $db->prepare("UPDATE folder_posters SET verified = 1 WHERE path = :p AND (verified IS NULL OR verified = 0)");
-            $stmt->execute([':p' => $p['path']]);
-            if ($stmt->rowCount() > 0) $confirmed++;
-        } catch (PDOException $e) { /* ignore */ }
-    }
-
-    // Process bad matches
-    foreach ($badFiles as $fileName => $v) {
-
-        $fileName = $v['file'];
-        $fullPath = $dirPath . '/' . $fileName;
-        $betterTitle = $v['suggested_title'] ?? '';
-        $betterYear = $v['year'] ?? null;
-
-        if (!$betterTitle) {
-            echo "  BAD   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ") — no suggestion\n";
-            continue;
-        }
-
-        echo "  FIX   " . $fileName . " (was: " . ($v['tmdb_title'] ?? '?') . ") => searching: " . $betterTitle . "\n";
-
-        // Re-search TMDB with the AI-suggested title
-        $result = searchTMDB($betterTitle, $betterYear, $apiKey, $ctx);
-        if ($result) {
-            echo "        => " . $result['title'] . "\n";
-            $fixed++;
-            try {
-                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
-              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
-                   ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview']]);
-            } catch (PDOException $e) { /* ignore */ }
-        } else {
-            echo "        => still no match for: " . $betterTitle . "\n";
-        }
-
-        usleep(250000);
-    }
-
-    $bad = count(array_filter($verdicts, fn($v) => !($v['correct'] ?? true)));
-    echo "  Verify done: $confirmed confirmed, $bad bad, $fixed fixed\n";
-    return count($pairs);
-}
-
 /**
  * Ask AI to verify {filename, tmdb_title} pairs.
  * Returns array of {file, tmdb_title, correct, suggested_title, year} or null.
