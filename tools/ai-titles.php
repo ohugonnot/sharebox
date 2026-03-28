@@ -2,22 +2,23 @@
 <?php
 /**
  * AI-powered movie title extraction for TMDB poster matching.
- * Uses Claude CLI (Haiku) to clean up filenames before TMDB search.
  *
- * Usage: php tools/ai-titles.php <folder-path>
- *        php tools/ai-titles.php --all   (process all movies-tagged folders)
+ * Usage: php tools/ai-titles.php <folder-path>   (process one folder with AI)
+ *        php tools/ai-titles.php --all            (AI pass on all movies-tagged folders)
+ *        php tools/ai-titles.php --pending         (cron mode: AI retry where regex failed)
  *
- * Must run as a user that has claude CLI configured (not www-data).
+ * Flow:
+ *   1. ?posters=1 (inline, fast) does regex extract_title_year() + TMDB
+ *   2. Files with no match get poster_url=NULL in DB
+ *   3. This script (cron --pending) finds NULLs, asks AI for better titles, retries TMDB
+ *   4. Respects human choices: __none__ = user said no poster, never overwrite
+ *
+ * AI adapter: currently uses Claude CLI (Haiku). To switch provider,
+ * replace askAI() — same interface: filenames in, {file,title,year,skip}[] out.
  */
 
 require_once __DIR__ . '/../db.php';
 require_once __DIR__ . '/../functions.php';
-
-$CLAUDE_BIN = trim(shell_exec('which claude') ?? '');
-if (!$CLAUDE_BIN) {
-    fwrite(STDERR, "Error: claude CLI not found in PATH\n");
-    exit(1);
-}
 
 $TMDB_API_KEY = defined('TMDB_API_KEY') ? TMDB_API_KEY : '';
 if (!$TMDB_API_KEY) {
@@ -32,21 +33,33 @@ $arg = $argv[1] ?? '';
 if (!$arg || $arg === '--help' || $arg === '-h') {
     echo "Usage: php tools/ai-titles.php <folder-path>\n";
     echo "       php tools/ai-titles.php --all\n";
+    echo "       php tools/ai-titles.php --pending   (cron mode)\n";
     exit(0);
 }
 
 $db = get_db();
 
-if ($arg === '--all') {
+// Resolve AI provider (Claude CLI for now)
+$AI_BIN = trim(shell_exec('which claude') ?? '');
+if (!$AI_BIN) {
+    fwrite(STDERR, "Warning: claude CLI not found, will use regex fallback only\n");
+}
+
+if ($arg === '--all' || $arg === '--pending') {
     $rows = $db->query("SELECT DISTINCT path FROM folder_posters WHERE folder_type = 'movies'")->fetchAll();
     if (empty($rows)) {
         echo "No folders tagged as 'movies' found.\n";
         exit(0);
     }
+    $pendingOnly = ($arg === '--pending');
+    $total = 0;
     foreach ($rows as $row) {
         if (is_dir($row['path'])) {
-            processFolder($row['path'], $db, $CLAUDE_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
+            $total += processFolder($row['path'], $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS, $pendingOnly);
         }
+    }
+    if ($pendingOnly && $total === 0) {
+        echo "Nothing pending.\n";
     }
 } else {
     $path = realpath($arg);
@@ -54,13 +67,16 @@ if ($arg === '--all') {
         fwrite(STDERR, "Error: '$arg' is not a valid directory\n");
         exit(1);
     }
-    processFolder($path, $db, $CLAUDE_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
+    processFolder($path, $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS, false);
 }
 
-function processFolder(string $dirPath, PDO $db, string $claudeBin, string $apiKey, array $videoExts): void
+/**
+ * Process a single movies folder.
+ * @param bool $pendingOnly If true, only process files with poster_url=NULL (regex already tried)
+ * @return int Number of files processed
+ */
+function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, array $videoExts, bool $pendingOnly): int
 {
-    echo "\n=== " . basename($dirPath) . " ===\n";
-
     // List video files
     $items = scandir($dirPath);
     $videoFiles = [];
@@ -73,37 +89,44 @@ function processFolder(string $dirPath, PDO $db, string $claudeBin, string $apiK
         }
     }
 
-    if (empty($videoFiles)) {
-        echo "  No video files found.\n";
-        return;
-    }
+    if (empty($videoFiles)) return 0;
 
-    // Filter out already-cached files (with a poster or __none__)
-    $uncached = [];
+    // Find files that need processing
+    $toProcess = [];
     foreach ($videoFiles as $vf) {
         $fullPath = $dirPath . '/' . $vf;
         $stmt = $db->prepare("SELECT poster_url FROM folder_posters WHERE path = :p");
         $stmt->execute([':p' => $fullPath]);
         $row = $stmt->fetch();
-        if ($row && $row['poster_url']) {
-            continue;
+
+        if ($pendingOnly) {
+            // Only files where regex tried and failed (row exists, poster_url IS NULL)
+            if ($row && $row['poster_url'] === null) {
+                $toProcess[] = $vf;
+            }
+        } else {
+            // All files without a poster (no row, or poster_url IS NULL)
+            // Skip __none__ (human said no) and files with a poster already
+            if (!$row || $row['poster_url'] === null) {
+                $toProcess[] = $vf;
+            }
         }
-        $uncached[] = $vf;
     }
 
-    if (empty($uncached)) {
-        echo "  All " . count($videoFiles) . " files already cached.\n";
-        return;
+    if (empty($toProcess)) return 0;
+
+    echo "\n=== " . basename($dirPath) . " ===\n";
+    echo "  " . count($toProcess) . " files to process\n";
+
+    // Ask AI for clean titles
+    $titles = null;
+    if ($aiBin) {
+        $titles = askAI($toProcess, $aiBin);
     }
-
-    echo "  " . count($uncached) . " files to process (out of " . count($videoFiles) . " total)\n";
-
-    // Batch filenames to Claude Haiku for title extraction
-    $titles = askClaude($uncached, $claudeBin);
     if ($titles === null) {
-        echo "  Claude CLI failed, falling back to regex extraction.\n";
+        if ($aiBin) echo "  AI failed, falling back to regex.\n";
         $titles = [];
-        foreach ($uncached as $vf) {
+        foreach ($toProcess as $vf) {
             $meta = extract_title_year($vf);
             $titles[] = ['file' => $vf, 'title' => $meta['title'], 'year' => $meta['year'], 'skip' => false];
         }
@@ -130,46 +153,15 @@ function processFolder(string $dirPath, PDO $db, string $claudeBin, string $apiK
 
         $title = $t['title'] ?? '';
         $year = $t['year'] ?? null;
-        if (!$title) {
-            echo "  EMPTY " . $fileName . "\n";
-            continue;
-        }
+        if (!$title) continue;
 
-        // Search TMDB
-        $posterUrl = null;
-        $tmdbId = null;
-        $tmdbTitle = null;
-        $tmdbOverview = null;
+        $posterUrl = searchTMDB($title, $year, $apiKey, $ctx);
+        $tmdbId = $posterUrl ? ($posterUrl['id'] ?? null) : null;
+        $tmdbTitle = $posterUrl ? ($posterUrl['title'] ?? null) : null;
+        $tmdbOverview = $posterUrl ? ($posterUrl['overview'] ?? null) : null;
+        $posterUrlStr = $posterUrl ? $posterUrl['poster'] : null;
 
-        $queries = [$title];
-        if ($year) {
-            $queries[] = $title . ' ' . $year;
-        }
-
-        foreach ($queries as $q) {
-            $encoded = urlencode($q);
-            $urls = [
-                "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-                "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-            ];
-            foreach ($urls as $searchUrl) {
-                $resp = @file_get_contents($searchUrl, false, $ctx);
-                $data = $resp ? json_decode($resp, true) : null;
-                if ($data && !empty($data['results'])) {
-                    foreach ($data['results'] as $r) {
-                        if (!empty($r['poster_path'])) {
-                            $posterUrl = 'https://image.tmdb.org/t/p/w300' . $r['poster_path'];
-                            $tmdbId = $r['id'] ?? null;
-                            $tmdbTitle = $r['title'] ?? $r['name'] ?? null;
-                            $tmdbOverview = $r['overview'] ?? null;
-                            break 3;
-                        }
-                    }
-                }
-            }
-        }
-
-        if ($posterUrl) {
+        if ($posterUrlStr) {
             echo "  OK    " . $fileName . " => " . $tmdbTitle . "\n";
             $found++;
         } else {
@@ -178,30 +170,75 @@ function processFolder(string $dirPath, PDO $db, string $claudeBin, string $apiK
 
         try {
             $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)")
-               ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
+               ->execute([':p' => $fullPath, ':u' => $posterUrlStr, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
         } catch (PDOException $e) { /* ignore */ }
 
-        usleep(250000); // 250ms rate limit for TMDB
+        usleep(250000); // 250ms TMDB rate limit
     }
 
-    echo "  Done: $found found, $skipped skipped, " . (count($uncached) - $found - $skipped) . " missed\n";
+    echo "  Done: $found found, $skipped skipped, " . (count($toProcess) - $found - $skipped) . " missed\n";
+    return count($toProcess);
 }
 
 /**
- * Send filenames to Claude Haiku CLI for intelligent title extraction.
- * Batches in groups of 50 to stay within token limits.
- * Returns array of {file, title, year, skip} or null on failure.
+ * Search TMDB for a movie by title (and optional year).
+ * Returns {poster, id, title, overview} or null.
  */
-function askClaude(array $fileNames, string $claudeBin): ?array
+function searchTMDB(string $title, ?int $year, string $apiKey, $ctx): ?array
+{
+    $queries = [$title];
+    if ($year) $queries[] = $title . ' ' . $year;
+
+    foreach ($queries as $q) {
+        $encoded = urlencode($q);
+        $urls = [
+            "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+            "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
+        ];
+        foreach ($urls as $searchUrl) {
+            $resp = @file_get_contents($searchUrl, false, $ctx);
+            $data = $resp ? json_decode($resp, true) : null;
+            if ($data && !empty($data['results'])) {
+                foreach ($data['results'] as $r) {
+                    if (!empty($r['poster_path'])) {
+                        return [
+                            'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
+                            'id' => $r['id'] ?? null,
+                            'title' => $r['title'] ?? $r['name'] ?? null,
+                            'overview' => $r['overview'] ?? null,
+                        ];
+                    }
+                }
+            }
+        }
+    }
+    return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AI ADAPTER — swap this function to change provider
+// Interface: string[] filenames in → {file, title, year, skip}[] out
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Ask AI to extract clean movie titles from filenames.
+ * Current provider: Claude CLI (Haiku).
+ * To switch to API: replace shell_exec with an HTTP call to any LLM API.
+ *
+ * @param string[] $fileNames Raw filenames
+ * @param string $aiBin Path to claude binary
+ * @return array|null Array of {file, title, year, skip} or null on failure
+ */
+function askAI(array $fileNames, string $aiBin): ?array
 {
     $allResults = [];
     $batches = array_chunk($fileNames, 50);
 
     foreach ($batches as $batchIdx => $batch) {
         if (count($batches) > 1) {
-            echo "  Asking Claude (batch " . ($batchIdx + 1) . "/" . count($batches) . ")...\n";
+            echo "  Asking AI (batch " . ($batchIdx + 1) . "/" . count($batches) . ")...\n";
         } else {
-            echo "  Asking Claude...\n";
+            echo "  Asking AI...\n";
         }
 
         $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE);
@@ -225,11 +262,10 @@ Fichiers:
 $fileList
 PROMPT;
 
-        // Write prompt to temp file to avoid shell escaping issues with long content
-        $tmpFile = tempnam(sys_get_temp_dir(), 'claude_prompt_');
+        $tmpFile = tempnam(sys_get_temp_dir(), 'ai_prompt_');
         file_put_contents($tmpFile, $prompt);
 
-        $cmd = escapeshellarg($claudeBin) . ' -p --model haiku --output-format json < ' . escapeshellarg($tmpFile) . ' 2>/dev/null';
+        $cmd = escapeshellarg($aiBin) . ' -p --model haiku --output-format json < ' . escapeshellarg($tmpFile) . ' 2>/dev/null';
         $output = shell_exec($cmd);
         @unlink($tmpFile);
 
@@ -239,13 +275,12 @@ PROMPT;
         if (!$envelope || !isset($envelope['result'])) return null;
 
         $text = $envelope['result'];
-        // Strip markdown code fences if present
         $text = preg_replace('/^```(?:json)?\s*/s', '', $text);
         $text = preg_replace('/\s*```$/s', '', $text);
 
         $parsed = json_decode(trim($text), true);
         if (!is_array($parsed)) {
-            fwrite(STDERR, "  Warning: could not parse Claude response for batch " . ($batchIdx + 1) . "\n");
+            fwrite(STDERR, "  Warning: could not parse AI response for batch " . ($batchIdx + 1) . "\n");
             return null;
         }
 
