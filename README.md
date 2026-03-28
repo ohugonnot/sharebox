@@ -1,13 +1,29 @@
 # ShareBox
 
-**Self-hosted file sharing with built-in video streaming.**
+**A lightweight, self-hosted alternative to Plex and Jellyfin -- focused on sharing and streaming, not library management.**
 
 ![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777BB4?logo=php&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)
 ![Tests](https://github.com/ohugonnot/sharebox/actions/workflows/tests.yml/badge.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
-Share files and folders instantly with human-readable links. Stream videos directly in the browser with on-the-fly transcoding -- no pre-processing required.
+Share files and folders instantly with human-readable links. Stream any video directly in the browser with on-the-fly transcoding -- no pre-processing, no media library, no accounts. Just share a link and play.
+
+### Why not Plex / Jellyfin / Emby?
+
+| | ShareBox | Plex / Jellyfin / Emby |
+|---|---|---|
+| **Purpose** | Share files + stream on demand | Personal media library |
+| **Setup** | 2-minute install, single PHP app | Database, metadata agents, user system |
+| **Dependencies** | PHP + ffmpeg + SQLite | Java/.NET runtime, database server, plugins |
+| **Media library** | None -- just your filesystem | Required (scan, scrape, organize) |
+| **User accounts** | None -- links with optional password | Full user management |
+| **Transcoding** | On-the-fly, zero pre-processing | Pre-transcoding or on-the-fly |
+| **Sharing** | Built-in: link + password + expiry | Requires external sharing plugins |
+| **RAM usage** | ~25 MB per stream (PHP-FPM worker) | 500 MB - 2 GB+ |
+| **Use case** | "Send someone a movie link" | "Browse my library on my TV" |
+
+ShareBox is not a media center. It won't scrape metadata, build a library, or manage watch history. It's for when you want to **share a file or folder with someone** and let them stream it instantly -- nothing more, nothing less.
 
 ![Admin Panel](https://i.postimg.cc/dsFd7Cgz/image.png)
 
