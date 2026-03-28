@@ -1,3 +1,12 @@
+<?php
+function sb_has_vnstat(): bool {
+    static $has = null;
+    if ($has === null) {
+        $has = is_executable('/usr/bin/vnstat') || is_executable('/usr/sbin/vnstat');
+    }
+    return $has;
+}
+?>
 <details class="dash-section" id="dash-section">
     <summary class="dash-summary">
         <span class="dash-chevron">&#9658;</span>
@@ -7,7 +16,9 @@
             <span class="dash-pill" id="dash-pill-ram">RAM &mdash;</span>
             <span class="dash-pill" id="dash-pill-disk">HDD &mdash;</span>
             <span class="dash-pill" id="dash-pill-net">&uarr;&mdash; &darr;&mdash;</span>
+            <?php if (sb_has_vnstat()): ?>
             <span class="dash-pill" id="dash-pill-quota">Quota &mdash;</span>
+            <?php endif; ?>
         </span>
     </summary>
 
@@ -82,7 +93,8 @@
 
         </div><!-- /.dash-grid -->
 
-        <!-- Quota bande passante mensuel -->
+        <!-- Quota bande passante mensuel (affiché uniquement si vnstat est installé) -->
+        <?php if (sb_has_vnstat()): ?>
         <div class="dash-quota-card" id="dash-quota">
             <div class="dash-quota-ring-wrap">
                 <svg class="dash-quota-ring" viewBox="0 0 120 120">
@@ -110,6 +122,7 @@
                 </div>
             </div>
         </div>
+        <?php endif; ?>
 
         <!-- Graphe réseau 7 jours -->
         <details class="dash-subsection" id="dash-net-graph-section" open>
@@ -119,7 +132,11 @@
             </div>
         </details>
 
-        <!-- Torrents -->
+        <!-- Torrents (affiché uniquement si rtorrent est configuré et le socket existe) -->
+        <?php
+        $rtSock = defined('RTORRENT_SOCK') ? RTORRENT_SOCK : '';
+        if ($rtSock !== '' && file_exists($rtSock)):
+        ?>
         <div class="dash-torrents-row">
             <details class="dash-subsection" id="dash-downloads">
                 <summary>&darr; T&eacute;l&eacute;chargements</summary>
@@ -130,6 +147,7 @@
                 <div id="dash-ul-list"><div class="dash-empty">&mdash;</div></div>
             </details>
         </div>
+        <?php endif; ?>
 
     </div><!-- /.dash-body -->
 </details>

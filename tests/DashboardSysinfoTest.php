@@ -117,7 +117,7 @@ class DashboardSysinfoTest extends TestCase
 
     // -------------------------------------------------------------- Diskstats --
 
-    public function testParseDiskstatsForDeviceFindsPrefix(): void
+    public function testParseDiskstatsForDeviceFindsExactMatch(): void
     {
         $diskFile = $this->tmpDir . '/diskstats';
         // Format: major minor name rd_ios rd_merge rd_sectors rd_ticks wr_ios wr_merge wr_sectors wr_ticks ios_in_prog tot_ticks rq_ticks
@@ -127,13 +127,16 @@ class DashboardSysinfoTest extends TestCase
             '   9   0 md0 10  0 200  50  5  0 100  20  0 30  70',
         ]));
 
-        $result = parse_diskstats_for_device('md', $diskFile);
+        $result = parse_diskstats_for_device('md5', $diskFile);
 
         $this->assertNotNull($result);
         $this->assertSame('md5', $result[2]);
         $this->assertSame('8000', $result[5]);  // rd_sectors
         $this->assertSame('4000', $result[9]);  // wr_sectors
         $this->assertSame('1200', $result[12]); // tot_ticks
+
+        // Exact match: 'md' should NOT match 'md5'
+        $this->assertNull(parse_diskstats_for_device('md', $diskFile));
     }
 
     public function testParseDiskstatsForDeviceReturnsNullWhenNotFound(): void

@@ -110,8 +110,8 @@ function parse_net_dev(string $iface, string $netDevPath = '/proc/net/dev'): ?ar
 }
 
 /**
- * Lit la température CPU (package) depuis coretemp hwmon.
- * Cherche le premier hwmon dont name == 'coretemp', retourne temp1 (Package id 0) en °C.
+ * Lit la température CPU (package) depuis hwmon.
+ * Cherche le premier hwmon dont name == 'coretemp' (Intel) ou 'k10temp' (AMD).
  * Retourne null si non disponible.
  */
 function read_cpu_package_temp(string $hwmonBase = '/sys/class/hwmon'): ?float
@@ -119,7 +119,7 @@ function read_cpu_package_temp(string $hwmonBase = '/sys/class/hwmon'): ?float
     $dirs = @glob($hwmonBase . '/hwmon*/name') ?: [];
     foreach ($dirs as $nameFile) {
         $name = trim((string)@file_get_contents($nameFile));
-        if ($name !== 'coretemp') continue;
+        if ($name !== 'coretemp' && $name !== 'k10temp') continue;
         $hwmonDir = dirname($nameFile);
         // temp1 = Package id 0 (température globale du CPU)
         $raw = @file_get_contents($hwmonDir . '/temp1_input');
@@ -131,16 +131,17 @@ function read_cpu_package_temp(string $hwmonBase = '/sys/class/hwmon'): ?float
 }
 
 /**
- * Lit les températures HDD via drivetemp (module kernel) ou /sys/block/sdX/device/hwmon.
- * Retourne un tableau ['sda' => 38.0, 'sdb' => 39.0, ...] ou [] si non disponible.
+ * Lit les températures disques (HDD SATA + NVMe) via hwmon.
+ * Retourne un tableau ['sda' => 38.0, 'nvme0n1' => 42.0, ...] ou [] si non disponible.
  * @return array<string, float>
  */
 function read_hdd_temps(string $sysBlock = '/sys/block'): array
 {
     $temps = [];
+
+    // SATA/SAS drives (via drivetemp kernel module)
     $disks = @glob($sysBlock . '/sd*/device/hwmon/hwmon*/temp1_input') ?: [];
     foreach ($disks as $tempFile) {
-        // Extraire le nom du disque depuis le chemin (/sys/block/sda/...)
         if (preg_match('|/sys/block/(sd[a-z]+)/|', $tempFile, $m)) {
             $raw = @file_get_contents($tempFile);
             if ($raw !== false) {
@@ -148,7 +149,84 @@ function read_hdd_temps(string $sysBlock = '/sys/block'): array
             }
         }
     }
+
+    // NVMe drives — check both common sysfs layouts
+    $nvmePaths = array_merge(
+        @glob($sysBlock . '/nvme*/device/hwmon/hwmon*/temp1_input') ?: [],
+        @glob($sysBlock . '/nvme*/hwmon*/temp1_input') ?: []
+    );
+    foreach ($nvmePaths as $tempFile) {
+        if (preg_match('|/sys/block/(nvme[^/]+)/|', $tempFile, $m)) {
+            if (!isset($temps[$m[1]])) { // avoid duplicates from double glob
+                $raw = @file_get_contents($tempFile);
+                if ($raw !== false) {
+                    $temps[$m[1]] = round((int)trim($raw) / 1000.0, 1);
+                }
+            }
+        }
+    }
+
     return $temps;
+}
+
+/**
+ * Detect the block device backing a filesystem path.
+ * Parses /proc/mounts, resolves symlinks, strips partition suffixes.
+ * Returns ['prefix' => 'md5', 'raid_disks' => 4] for use with parse_diskstats_for_device().
+ * @return array{prefix: string, raid_disks: int}
+ */
+function detect_block_device(string $path, string $mountsPath = '/proc/mounts'): array
+{
+    $fallback = ['prefix' => 'sd', 'raid_disks' => 1];
+
+    $content = @file_get_contents($mountsPath);
+    if ($content === false) return $fallback;
+
+    // Find the longest mount point that is a prefix of $path
+    $bestMount = '';
+    $bestDev   = '';
+    foreach (explode("\n", $content) as $line) {
+        $parts = preg_split('/\s+/', $line);
+        if (count($parts) < 2) continue;
+        $mountPoint = $parts[1];
+        $mLen = strlen($mountPoint);
+        if (strncmp($path, $mountPoint, $mLen) === 0
+            && ($mLen === 1 || strlen($path) === $mLen || $path[$mLen] === '/')
+            && $mLen > strlen($bestMount)) {
+            $bestMount = $mountPoint;
+            $bestDev   = $parts[0];
+        }
+    }
+
+    if ($bestDev === '') return $fallback;
+
+    // Resolve symlinks (/dev/mapper/..., /dev/disk/by-uuid/...)
+    $resolved = @realpath($bestDev) ?: $bestDev;
+    $devName  = basename($resolved);
+
+    // Strip partition suffixes: nvme0n1p1→nvme0n1, md5p1→md5, sda1→sda
+    if (preg_match('/^(nvme\d+n\d+)/', $devName, $m)) {
+        $baseDev = $m[1];
+    } elseif (preg_match('/^(md\d+)/', $devName, $m)) {
+        $baseDev = $m[1];
+    } elseif (preg_match('/^(sd[a-z]+)/', $devName, $m)) {
+        $baseDev = $m[1];
+    } elseif (preg_match('/^(dm-\d+)/', $devName, $m)) {
+        $baseDev = $m[1];
+    } else {
+        $baseDev = $devName;
+    }
+
+    // Read raid_disks if this is an md RAID device
+    $raidDisks = 1;
+    if (preg_match('/^md\d+$/', $baseDev)) {
+        $rd = @file_get_contents("/sys/block/{$baseDev}/md/raid_disks");
+        if ($rd !== false) {
+            $raidDisks = max(1, (int)trim($rd));
+        }
+    }
+
+    return ['prefix' => $baseDev, 'raid_disks' => $raidDisks];
 }
 
 /**
@@ -162,14 +240,14 @@ function read_hdd_temps(string $sysBlock = '/sys/block'): array
  *   [7]=wr_ios [8]=wr_merge [9]=wr_sectors [10]=wr_ticks
  *   [11]=ios_in_prog [12]=tot_ticks(busy ms) [13]=rq_ticks
  */
-function parse_diskstats_for_device(string $prefix, string $diskstatsPath = '/proc/diskstats'): ?array
+function parse_diskstats_for_device(string $device, string $diskstatsPath = '/proc/diskstats'): ?array
 {
     $content = @file_get_contents($diskstatsPath);
     if ($content === false) return null;
     foreach (explode("\n", $content) as $line) {
         $parts = preg_split('/\s+/', trim($line));
         if (count($parts) < 14) continue;
-        if (strncmp($parts[2], $prefix, strlen($prefix)) === 0) {
+        if ($parts[2] === $device) {
             return $parts;
         }
     }

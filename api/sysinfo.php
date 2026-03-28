@@ -9,16 +9,20 @@ require_once __DIR__ . '/dashboard_helpers.php';
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
 
+// --- Auto-detect block device for BASE_PATH ---
+$blockInfo  = detect_block_device(BASE_PATH);
+$diskPrefix = $blockInfo['prefix'];
+
 // --- Première lecture ---
 $cpu_a = parse_cpu_stat();
-$ds_a  = parse_diskstats_for_device('md');
+$ds_a  = parse_diskstats_for_device($diskPrefix);
 
 // --- Fenêtre de mesure 500 ms ---
 usleep(500000);
 
 // --- Deuxième lecture ---
 $cpu_b = parse_cpu_stat();
-$ds_b  = parse_diskstats_for_device('md');
+$ds_b  = parse_diskstats_for_device($diskPrefix);
 
 // CPU
 $cpu   = calc_cpu_pct($cpu_a, $cpu_b);
@@ -36,7 +40,7 @@ $buf_kb   = $mem['Buffers']      ?? 0;
 $cache_kb = ($mem['Cached'] ?? 0) + ($mem['SReclaimable'] ?? 0);
 $prog_kb  = max(0, $total_kb - $avail_kb - $buf_kb - $cache_kb);
 
-// Disk space (BASE_PATH est sur le RAID0 md5)
+// Disk space (auto-detected device for BASE_PATH)
 $disk_total = (float)(disk_total_space(BASE_PATH) ?: 0);
 $disk_free  = (float)(disk_free_space(BASE_PATH) ?: 0);
 $disk_used  = $disk_total - $disk_free;
@@ -60,7 +64,7 @@ if ($ds_a !== null && $ds_b !== null) {
 
     // % de la capacité I/O parallèle réelle : rq_ticks / (fenêtre × nb_disques)
     // rq_ticks peut valoir jusqu'à 500ms × N disques si tous les disques sont saturés
-    $raid_disks   = (int)(@file_get_contents('/sys/block/md5/md/raid_disks') ?: '1');
+    $raid_disks   = $blockInfo['raid_disks'];
     $disk_io_pct  = round(min(100.0, $rq_ms_diff / (500.0 * max(1, $raid_disks)) * 100.0), 1);
 
     $disk_read_mbs  = round(max(0.0, $rd_sec_diff * 512 / 1048576 / 0.5), 2);

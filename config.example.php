@@ -22,5 +22,14 @@ define('DL_BASE_URL', '/dl/');
 // Maximum total size allowed for ZIP downloads (in bytes). Default: 10 Go.
 define('MAX_ZIP_SIZE', 10 * 1024 * 1024 * 1024);
 
-// Monthly bandwidth quota in TB (used by dashboard widget). Default: 100 TB.
+// Monthly bandwidth quota in TB (used by dashboard widget). Requires vnstat.
+// The quota section is hidden automatically if vnstat is not installed.
 // define('BANDWIDTH_QUOTA_TB', 100);
+
+// Maximum network speed in MB/s (dashboard bar scaling). Default: 125 (1 Gbps).
+// Set to 1250 for 10 Gbps, 12 for 100 Mbps, etc.
+// define('NET_MAX_MBS', 125);
+
+// rtorrent SCGI socket path. The torrents dashboard section is shown only if
+// this socket exists on disk. Comment out or set to '' to disable.
+// define('RTORRENT_SOCK', '/var/run/ropixv2/.rtorrent.sock');
