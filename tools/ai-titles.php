@@ -260,7 +260,7 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                 } catch (PDOException $e) { poster_log('DB error MISS | ' . $name . ' → ' . $e->getMessage()); }
             }
 
-            usleep(250000);
+            usleep(50000);
         }
 
         ai_log('AI done | dir=' . basename($dir) . ' found=' . $found . '/' . count($names), false);
@@ -365,7 +365,7 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
                 }
             }
 
-            usleep(250000);
+            usleep(50000);
         }
 
         ai_log('AI verify done | dir=' . basename($dir) . ' confirmed=' . $confirmed . ' bad=' . count($badFiles) . ' fixed=' . $fixed);
@@ -476,7 +476,7 @@ function processFolder(string $dirPath, PDO $db, string $aiBin, string $apiKey, 
                ->execute([':p' => $fullPath, ':u' => $posterUrlStr, ':i' => $tmdbId, ':t' => $tmdbTitle, ':o' => $tmdbOverview]);
         } catch (PDOException $e) { poster_log('DB error folder-write | ' . $fileName . ' → ' . $e->getMessage()); }
 
-        usleep(250000); // 250ms TMDB rate limit
+        usleep(50000); // 250ms TMDB rate limit
     }
 
     ai_log('AI folder done | dir=' . basename($dirPath) . ' found=' . $found . ' skipped=' . $skipped . ' missed=' . (count($toProcess) - $found - $skipped), false);

@@ -80,7 +80,7 @@ if (isset($_GET['posters'])) {
                 }
                 // Fetch season poster from TMDB
                 poster_log('SEASON fetch | ' . $f . ' num=' . $seasonNum . ' parentId=' . $parentTmdbId . (($row ? ' stale_id=' . ($row['tmdb_id'] ?? 'null') : ' no_cache')));
-                usleep(250000); // rate limit TMDB
+                usleep(50000); // rate limit TMDB
                 $seasonUrl = "https://api.themoviedb.org/3/tv/{$parentTmdbId}/season/{$seasonNum}?api_key={$apiKey}&language=fr";
                 $sCtx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
                 $sResp = @file_get_contents($seasonUrl, false, $sCtx);
@@ -209,7 +209,7 @@ if (isset($_GET['posters'])) {
             'tmdbOverview' => $result['overview'] ?? null,
         ];
         poster_log('TMDB search | "' . $title . '" → ' . ($result ? $result['title'] . ' (id=' . $result['id'] . ')' : 'NO MATCH'));
-        usleep(250000); // rate limit TMDB
+        usleep(50000); // rate limit TMDB
     }
 
     // ── Phase 4 : dispatcher les résultats sur tous les dossiers ──
@@ -302,7 +302,7 @@ if (isset($_GET['posters'])) {
                 $result[$fileName] = ['poster' => $r['poster']];
                 if ($r['overview']) $result[$fileName]['overview'] = $r['overview'];
             }
-            usleep(250000);
+            usleep(50000);
         }
 
         $videoRemaining = count($videoUncached) - count($videoToFetch);
