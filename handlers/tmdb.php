@@ -190,5 +190,29 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     exit;
 }
 
+// ── Set folder type (series/movies) ──
+if (isset($_GET['folder_type_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    $folder = $input['folder'] ?? '';
+    $type = $input['folder_type'] ?? 'series';
+
+    if (!$folder) { http_response_code(400); echo json_encode(['error' => 'missing folder']); exit; }
+    if (!in_array($type, ['series', 'movies'], true)) { http_response_code(400); echo json_encode(['error' => 'invalid type']); exit; }
+
+    $fullPath = $resolvedPath . '/' . $folder;
+    if (!is_dir($fullPath)) { http_response_code(404); echo json_encode(['error' => 'folder not found']); exit; }
+
+    try {
+        $db->prepare("INSERT INTO folder_posters (path, folder_type) VALUES (:p, :t)
+                      ON CONFLICT(path) DO UPDATE SET folder_type = :t, updated_at = datetime('now')")
+           ->execute([':p' => $fullPath, ':t' => $type]);
+        echo json_encode(['success' => true, 'folder_type' => $type]);
+    } catch (PDOException $e) {
+        http_response_code(500);
+        echo json_encode(['error' => 'db error']);
+    }
+    exit;
+}
+
 echo json_encode(['error' => 'unknown tmdb action']);
 exit;
