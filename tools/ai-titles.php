@@ -50,13 +50,30 @@ if (!$AI_BIN) {
     fwrite(STDERR, "Warning: claude CLI not found, will use regex fallback only\n");
 }
 
+// --pending-path /some/dir → pending limited to a path prefix (used by background trigger)
+$pendingPath = null;
+if ($arg === '--pending-path') {
+    $pendingPath = realpath($argv[2] ?? '');
+    if (!$pendingPath || !is_dir($pendingPath)) {
+        fwrite(STDERR, "Error: invalid path for --pending-path\n");
+        exit(1);
+    }
+    $arg = '--pending'; // fall through to --pending logic with filter
+}
+
 $runModes = ($arg === '--cron') ? ['--pending', '--verify'] : [$arg];
 
 foreach ($runModes as $mode) {
 
 if ($mode === '--pending') {
     // Find entries with poster_url IS NULL, skip those already tried 3+ times
-    $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
+    if ($pendingPath) {
+        $stmt = $db->prepare("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3) AND path LIKE :prefix");
+        $stmt->execute([':prefix' => $pendingPath . '/%']);
+        $rows = $stmt->fetchAll();
+    } else {
+        $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
+    }
     if (empty($rows)) {
         echo "Nothing pending.\n";
     } else {

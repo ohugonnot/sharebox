@@ -301,7 +301,7 @@ if (isset($_GET['posters'])) {
         $nullCount = (int)$stmtNull->fetchColumn();
         if ($nullCount > 0 && is_executable('/usr/local/bin/claude')) {
             $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
-            $cmd = '/usr/bin/php ' . escapeshellarg($scriptPath) . ' ' . escapeshellarg($resolvedPath) . ' > /dev/null 2>&1 &';
+            $cmd = '/usr/bin/php ' . escapeshellarg($scriptPath) . ' --pending-path ' . escapeshellarg($resolvedPath) . ' > /dev/null 2>&1 &';
             @pclose(@popen($cmd, 'r'));
         }
     }
