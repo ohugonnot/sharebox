@@ -545,9 +545,9 @@ PROMPT;
     $output = shell_exec($cmd);
     @unlink($tmpFile);
 
-    if (!$output) return null;
+    if (!$output) { ai_log('AI RAW | pick → empty output'); return null; }
     $envelope = json_decode($output, true);
-    if (!$envelope || !isset($envelope['result'])) return null;
+    if (!$envelope || !isset($envelope['result'])) { ai_log('AI RAW | pick → no result key: ' . substr($output, 0, 200)); return null; }
 
     $text = $envelope['result'];
     // Extraire {"idx": N} même si l'IA ajoute du texte ou des code fences autour
@@ -555,6 +555,7 @@ PROMPT;
         $idx = (int)$m[1];
         return ($idx >= 0 && $idx < count($candidates)) ? $idx : null;
     }
+    ai_log('AI RAW | pick PARSE FAIL → ' . substr($text, 0, 200));
     return null;
 }
 
@@ -622,15 +623,15 @@ PROMPT;
         $output = shell_exec($cmd);
         @unlink($tmpFile);
 
-        if (!$output) return null;
+        if (!$output) { ai_log('AI RAW | verify batch ' . ($batchIdx + 1) . ' → empty output'); return null; }
 
         $envelope = json_decode($output, true);
-        if (!$envelope || !isset($envelope['result'])) return null;
+        if (!$envelope || !isset($envelope['result'])) { ai_log('AI RAW | verify batch ' . ($batchIdx + 1) . ' → no result key: ' . substr($output, 0, 200)); return null; }
 
         $text = $envelope['result'];
         $parsed = extractJsonArray($text);
         if (!is_array($parsed)) {
-            fwrite(STDERR, "  Warning: could not parse AI verify response\n");
+            ai_log('AI RAW | verify batch ' . ($batchIdx + 1) . ' PARSE FAIL → ' . substr($text, 0, 300));
             return null;
         }
 
@@ -704,15 +705,15 @@ PROMPT;
         $output = shell_exec($cmd);
         @unlink($tmpFile);
 
-        if (!$output) return null;
+        if (!$output) { ai_log('AI RAW | askAI batch ' . ($batchIdx + 1) . ' → empty output'); return null; }
 
         $envelope = json_decode($output, true);
-        if (!$envelope || !isset($envelope['result'])) return null;
+        if (!$envelope || !isset($envelope['result'])) { ai_log('AI RAW | askAI batch ' . ($batchIdx + 1) . ' → no result key: ' . substr($output, 0, 200)); return null; }
 
         $text = $envelope['result'];
         $parsed = extractJsonArray($text);
         if (!is_array($parsed)) {
-            fwrite(STDERR, "  Warning: could not parse AI response for batch " . ($batchIdx + 1) . "\n");
+            ai_log('AI RAW | askAI batch ' . ($batchIdx + 1) . ' PARSE FAIL → ' . substr($text, 0, 300));
             return null;
         }
 
