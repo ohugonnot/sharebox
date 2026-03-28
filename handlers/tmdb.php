@@ -120,9 +120,44 @@ if (isset($_GET['posters'])) {
     $toFetch = array_slice($uncached, 0, 10);
     $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
 
+    // Deduplicate: group folders by extracted title to avoid spamming TMDB
+    // e.g. 170 folders "Black.Clover.E001...", "Black.Clover.E002..." all extract to "Black Clover"
+    // Pre-seed from DB: if a sibling folder with the same title already has a result, reuse it
+    $titleCache = []; // title → {posterUrl, tmdbId, tmdbTitle, tmdbOverview}
+    foreach ($cached as $name => $info) {
+        $siblingMeta = extract_title_year($name);
+        $siblingTitle = $siblingMeta['title'];
+        if (!isset($titleCache[$siblingTitle]) && isset($info['poster'])) {
+            // Look up full data from DB
+            $siblingPath = $resolvedPath . '/' . $name;
+            $stmtSib = $db->prepare("SELECT poster_url, tmdb_id, title, overview FROM folder_posters WHERE path = :p");
+            $stmtSib->execute([':p' => $siblingPath]);
+            $sibRow = $stmtSib->fetch();
+            if ($sibRow && $sibRow['poster_url']) {
+                $titleCache[$siblingTitle] = ['posterUrl' => $sibRow['poster_url'], 'tmdbId' => $sibRow['tmdb_id'], 'tmdbTitle' => $sibRow['title'], 'tmdbOverview' => $sibRow['overview']];
+            }
+        }
+    }
+
     foreach ($toFetch as $folderName) {
         $meta = extract_title_year($folderName);
         $title = $meta['title'];
+
+        // If we already searched this exact title in this batch, reuse the result
+        if (isset($titleCache[$title])) {
+            $fullPath = $resolvedPath . '/' . $folderName;
+            $c = $titleCache[$title];
+            try {
+                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
+                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
+                   ->execute([':p' => $fullPath, ':u' => $c['posterUrl'], ':i' => $c['tmdbId'], ':t' => $c['tmdbTitle'], ':o' => $c['tmdbOverview']]);
+            } catch (PDOException $e) { /* ignore */ }
+            if ($c['posterUrl']) {
+                $result[$folderName] = ['poster' => $c['posterUrl']];
+                if ($c['tmdbOverview']) $result[$folderName]['overview'] = $c['tmdbOverview'];
+            }
+            continue;
+        }
 
         // Construire les variantes de recherche (du plus précis au plus large)
         $queries = [$title];
@@ -166,6 +201,9 @@ if (isset($_GET['posters'])) {
                 }
             }
         }
+
+        // Remember result for dedup within this batch
+        $titleCache[$title] = ['posterUrl' => $posterUrl, 'tmdbId' => $tmdbId, 'tmdbTitle' => $tmdbTitle, 'tmdbOverview' => $tmdbOverview];
 
         // Cache result (even null = "no poster found")
         $fullPath = $resolvedPath . '/' . $folderName;
