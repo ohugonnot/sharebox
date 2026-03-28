@@ -392,6 +392,11 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card-ctx { position:absolute; top:.5rem; right:.5rem; width:26px; height:26px; border-radius:50%; background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.15); display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition:opacity .15s; z-index:5; color:rgba(255,255,255,.8); }
 .grid-card:hover .grid-card-ctx { opacity:1; }
 .grid-card-ctx:hover { background:rgba(0,0,0,.8); border-color:var(--accent); color:var(--accent); }
+.grid-card-menu { position:absolute; top:calc(.5rem + 30px); right:.5rem; background:#1a1a2e; border:1px solid rgba(255,255,255,.15); border-radius:8px; padding:.3rem 0; min-width:160px; z-index:20; box-shadow:0 4px 12px rgba(0,0,0,.5); display:none; }
+.grid-card-menu.open { display:block; }
+.grid-card-menu-item { display:flex; align-items:center; gap:.5rem; padding:.45rem .75rem; color:rgba(255,255,255,.85); font-size:.78rem; cursor:pointer; white-space:nowrap; transition:background .1s; }
+.grid-card-menu-item:hover { background:rgba(255,255,255,.08); }
+.grid-card-menu-item svg { width:14px; height:14px; flex-shrink:0; }
 /* Poster picker modal */
 .poster-modal { position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px); animation:fadeUp .15s ease; }
 .poster-modal-card { background:var(--bg-surface); border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); padding:1.5rem; max-width:720px; width:94%; max-height:85vh; overflow-y:auto; }
@@ -525,6 +530,18 @@ HTML;
             echo '<div class="grid-card-label"><div class="grid-card-title">Retour</div></div>';
             echo '</a>';
         }
+        // Look up folder types for all subfolders
+        $db = get_db();
+        $folderTypes = [];
+        if (!empty($folders)) {
+            $paths = array_map(fn($f) => $dirPath . '/' . $f['name'], $folders);
+            $placeholders = implode(',', array_fill(0, count($paths), '?'));
+            $stmt = $db->prepare("SELECT path, folder_type FROM folder_posters WHERE path IN ($placeholders)");
+            $stmt->execute($paths);
+            foreach ($stmt->fetchAll() as $row) {
+                $folderTypes[$row['path']] = $row['folder_type'] ?? 'series';
+            }
+        }
         foreach ($folders as $idx => $folder) {
             $folderHtml = htmlspecialchars($folder['name']);
             $folderPath = $subPath ? $subPath . '/' . $folder['name'] : $folder['name'];
@@ -533,13 +550,15 @@ HTML;
             $letter = mb_strtoupper(mb_substr($folder['name'], 0, 1));
             $hasVideo = $folder['has_video'] ?? false;
             $dataFolder = $hasVideo ? ' data-folder="' . $folderHtml . '"' : '';
-            echo '<a class="grid-card" href="' . $folderUrl . '" style="background:' . $color . '" data-type="folder" data-name="' . $folderHtml . '"' . $dataFolder . '>';
+            $folderFullPath = $dirPath . '/' . $folder['name'];
+            $folderType = $folderTypes[$folderFullPath] ?? 'series';
+            echo '<a class="grid-card" href="' . $folderUrl . '" style="background:' . $color . '" data-type="folder" data-name="' . $folderHtml . '"' . $dataFolder . ' data-folder-type="' . $folderType . '">';
             echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
             echo '<div class="grid-card-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" opacity=".4"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg></div>';
             if ($hasVideo) {
                 $escapedName = htmlspecialchars(addcslashes($folder['name'], "'\\"), ENT_QUOTES);
                 echo '<div class="grid-card-toggle" onclick="event.preventDefault();event.stopPropagation();togglePoster(this,\'' . $escapedName . '\')" title="Afficher/masquer l\'image"><svg class="eye-on" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></div>';
-                echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();openPosterPicker(\'' . $escapedName . '\')" title="Changer le poster"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
+                echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();toggleCardMenu(this,\'' . $escapedName . '\')" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
             }
             echo '<div class="grid-card-label"><div class="grid-card-title">' . $folderHtml . '</div></div>';
             echo '</a>';
@@ -971,6 +990,100 @@ function selectPoster(folderName, posterUrl, tmdbId, title, overview) {
         }
     }
 }
+
+// ── Card dropdown menu ──
+function toggleCardMenu(btn, folderName) {
+    var old = document.querySelector('.grid-card-menu');
+    if (old) { old.remove(); }
+    if (btn.dataset.menuOpen === '1') { btn.dataset.menuOpen = ''; return; }
+    document.querySelectorAll('.grid-card-ctx').forEach(function(b){ b.dataset.menuOpen = ''; });
+    btn.dataset.menuOpen = '1';
+
+    var menu = document.createElement('div');
+    menu.className = 'grid-card-menu open';
+
+    // Item 1: Changer le poster
+    var item1 = document.createElement('div');
+    item1.className = 'grid-card-menu-item';
+    var svg1 = document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg1.setAttribute('viewBox','0 0 24 24'); svg1.setAttribute('fill','none');
+    svg1.setAttribute('stroke','currentColor'); svg1.setAttribute('stroke-width','2');
+    var rect1 = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    rect1.setAttribute('x','3'); rect1.setAttribute('y','3'); rect1.setAttribute('width','18'); rect1.setAttribute('height','18'); rect1.setAttribute('rx','2');
+    var circle1 = document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circle1.setAttribute('cx','8.5'); circle1.setAttribute('cy','8.5'); circle1.setAttribute('r','1.5');
+    var poly1 = document.createElementNS('http://www.w3.org/2000/svg','polyline');
+    poly1.setAttribute('points','21 15 16 10 5 21');
+    svg1.appendChild(rect1); svg1.appendChild(circle1); svg1.appendChild(poly1);
+    item1.appendChild(svg1);
+    var span1 = document.createElement('span');
+    span1.textContent = 'Changer le poster';
+    item1.appendChild(span1);
+    item1.onclick = function(e) { e.preventDefault(); e.stopPropagation(); menu.remove(); btn.dataset.menuOpen = ''; openPosterPicker(folderName); };
+    menu.appendChild(item1);
+
+    // Item 2: Type série/films (only for folder cards, not file cards)
+    var card = btn.closest('.grid-card');
+    if (card && card.dataset.type === 'folder') {
+        var currentType = card.dataset.folderType || 'series';
+        var item2 = document.createElement('div');
+        item2.className = 'grid-card-menu-item';
+        var nextType = currentType === 'movies' ? 'series' : 'movies';
+        var svg2 = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        svg2.setAttribute('viewBox','0 0 24 24'); svg2.setAttribute('fill','none');
+        svg2.setAttribute('stroke','currentColor'); svg2.setAttribute('stroke-width','2');
+        if (currentType === 'movies') {
+            var r2 = document.createElementNS('http://www.w3.org/2000/svg','rect');
+            r2.setAttribute('x','2'); r2.setAttribute('y','7'); r2.setAttribute('width','20'); r2.setAttribute('height','15'); r2.setAttribute('rx','2');
+            var pl2 = document.createElementNS('http://www.w3.org/2000/svg','polyline');
+            pl2.setAttribute('points','17 2 12 7 7 2');
+            svg2.appendChild(r2); svg2.appendChild(pl2);
+        } else {
+            var r2 = document.createElementNS('http://www.w3.org/2000/svg','rect');
+            r2.setAttribute('x','2'); r2.setAttribute('y','2'); r2.setAttribute('width','20'); r2.setAttribute('height','20'); r2.setAttribute('rx','2.18');
+            svg2.appendChild(r2);
+            [['7','2','7','22'],['17','2','17','22'],['2','12','22','12'],['2','7','7','7'],['2','17','7','17'],['17','7','22','7'],['17','17','22','17']].forEach(function(c){
+                var ln = document.createElementNS('http://www.w3.org/2000/svg','line');
+                ln.setAttribute('x1',c[0]); ln.setAttribute('y1',c[1]); ln.setAttribute('x2',c[2]); ln.setAttribute('y2',c[3]);
+                svg2.appendChild(ln);
+            });
+        }
+        item2.appendChild(svg2);
+        var span2 = document.createElement('span');
+        span2.textContent = currentType === 'movies' ? 'Type : Films \u2192 S\u00e9rie' : 'Type : S\u00e9rie \u2192 Films';
+        item2.appendChild(span2);
+        item2.onclick = function(e) {
+            e.preventDefault(); e.stopPropagation();
+            menu.remove(); btn.dataset.menuOpen = '';
+            setFolderType(folderName, nextType, card);
+        };
+        menu.appendChild(item2);
+    }
+
+    btn.closest('.grid-card').appendChild(menu);
+}
+
+function setFolderType(folderName, type, card) {
+    var url = BASE_URL + '?' + SUB_PATH + 'folder_type_set=1';
+    fetch(url, {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({folder: folderName, folder_type: type})
+    }).then(function(r){ return r.json(); }).then(function(d){
+        if (d.success && card) {
+            card.dataset.folderType = type;
+        }
+    }).catch(function(){});
+}
+
+// Close menu on outside click
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.grid-card-ctx') && !e.target.closest('.grid-card-menu')) {
+        var m = document.querySelector('.grid-card-menu');
+        if (m) m.remove();
+        document.querySelectorAll('.grid-card-ctx').forEach(function(b){ b.dataset.menuOpen = ''; });
+    }
+});
 </script>
 </body>
 </html>
