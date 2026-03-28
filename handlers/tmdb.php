@@ -26,10 +26,10 @@ if (isset($_GET['posters'])) {
         . '|ova|oav|bonus|extras?|special|specials|featurettes?|behind.the.scenes|deleted.scenes'
         . '|interviews?|trailers?|nc|op|ed|ost|soundtrack|subs?|subtitles?|vostfr|vf|multi'
         . '|disc\s*\d|cd\s*\d|dvd|blu-?ray|\d{1,2}$'
-        . '|movies?|films?|s[ée]rie|covers?|images?|photos?|videos?|samples?|nfo'
+        . '|movies?|films?|s(?:é|e)ries?|covers?|images?|photos?|videos?|samples?|nfo'
         . '|wii|wiiu|switch|nds|3ds|cia|gba|n64|snes|nes|psp|ps[1-4]|xbox'
-        . '|bdmv|clipinf|playlist|stream|meta|backup|certificate'
-        . ')/i';
+        . '|bdmv|clipinf|playlist|stream$|meta|backup|certificate'
+        . ')/iu';
     // Sous-ensemble du skipPattern : dossiers de saison (on peut leur trouver un poster TMDB via le parent)
     $seasonPattern = '/(?:^|\b)(?:season|saison|s)[\s._-]*(\d+)/i';
 
