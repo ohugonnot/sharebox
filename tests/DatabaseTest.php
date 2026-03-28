@@ -136,7 +136,7 @@ class DatabaseTest extends TestCase
     {
         $db = get_db();
         $version = (int) $db->query('PRAGMA user_version')->fetchColumn();
-        $this->assertSame(4, $version);
+        $this->assertSame(5, $version);
     }
 
     // ── 5b. folder_posters table exists ──────────────────────────────────

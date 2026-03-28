@@ -119,6 +119,15 @@ function get_db(): PDO {
         $db->query('PRAGMA user_version = 4');
     }
 
+    if ($version < 5) {
+        // v5 : flag verified pour éviter de re-vérifier les matchs AI confirmés
+        $cols = array_column($db->query("PRAGMA table_info(folder_posters)")->fetchAll(), 'name');
+        if (!in_array('verified', $cols, true)) {
+            $db->query("ALTER TABLE folder_posters ADD COLUMN verified INTEGER DEFAULT 0");
+        }
+        $db->query('PRAGMA user_version = 5');
+    }
+
     return $db;
 }
 
