@@ -136,7 +136,7 @@ class DatabaseTest extends TestCase
     {
         $db = get_db();
         $version = (int) $db->query('PRAGMA user_version')->fetchColumn();
-        $this->assertSame(3, $version);
+        $this->assertSame(4, $version);
     }
 
     // ── 5b. folder_posters table exists ──────────────────────────────────
@@ -148,6 +148,26 @@ class DatabaseTest extends TestCase
         $this->assertContains('path', $cols);
         $this->assertContains('poster_url', $cols);
         $this->assertContains('tmdb_id', $cols);
+    }
+
+    // ── 5c. folder_posters has folder_type column ─────────────────────────
+
+    public function testFolderPostersHasFolderTypeColumn(): void
+    {
+        $db = get_db();
+        $cols = $this->getColumnNames($db, 'folder_posters');
+        $this->assertContains('folder_type', $cols);
+    }
+
+    public function testFolderTypeDefaultsToSeries(): void
+    {
+        $db = get_db();
+        $db->prepare("INSERT OR IGNORE INTO folder_posters (path) VALUES (?)")
+           ->execute(['/test/default-type']);
+        $row = $db->prepare("SELECT folder_type FROM folder_posters WHERE path = ?");
+        $row->execute(['/test/default-type']);
+        $value = $row->fetchColumn();
+        $this->assertSame('series', $value);
     }
 
     // ── 6. purge_probe_cache() ──────────────────────────────────────────

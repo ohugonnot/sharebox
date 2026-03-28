@@ -110,6 +110,15 @@ function get_db(): PDO {
         $db->query('PRAGMA user_version = 3');
     }
 
+    if ($version < 4) {
+        // v4 : type de dossier (series ou movies) pour adapter le rendu grille
+        $cols = array_column($db->query("PRAGMA table_info(folder_posters)")->fetchAll(), 'name');
+        if (!in_array('folder_type', $cols, true)) {
+            $db->query("ALTER TABLE folder_posters ADD COLUMN folder_type TEXT DEFAULT 'series'");
+        }
+        $db->query('PRAGMA user_version = 4');
+    }
+
     return $db;
 }
 
