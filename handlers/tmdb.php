@@ -78,7 +78,8 @@ if (isset($_GET['posters'])) {
                     $seasonOverview = $sData['overview'] ?? null;
                 }
                 try {
-                    $db->prepare("INSERT OR REPLACE INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)")
+                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview) VALUES (:p, :u, :i, :t, :o)
+                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, updated_at = datetime('now')")
                        ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $parentTmdbId, ':t' => $seasonTitle, ':o' => $seasonOverview]);
                 } catch (PDOException $e) { /* ignore */ }
                 if ($posterUrl) {
@@ -95,12 +96,28 @@ if (isset($_GET['posters'])) {
     $uncached = [];
     // Track poster URLs to detect duplicates (e.g. 170 episodes with same poster)
     $posterCount = []; // poster_url => count
+
+    // Filter eligible folders first (skip seasons + skipPattern), then batch-query DB
+    $eligibleFolders = [];
     foreach ($folders as $f) {
         if (in_array($f, $seasonFolders, true) || preg_match($skipPattern, $f)) continue;
+        $eligibleFolders[] = $f;
+    }
+
+    $folderDbRows = [];
+    if (!empty($eligibleFolders)) {
+        $folderPaths = array_map(fn($f) => $resolvedPath . '/' . $f, $eligibleFolders);
+        $ph = implode(',', array_fill(0, count($folderPaths), '?'));
+        $stmt = $db->prepare("SELECT path, poster_url, overview FROM folder_posters WHERE path IN ($ph)");
+        $stmt->execute($folderPaths);
+        foreach ($stmt->fetchAll() as $row) {
+            $folderDbRows[$row['path']] = $row;
+        }
+    }
+
+    foreach ($eligibleFolders as $f) {
         $fullPath = $resolvedPath . '/' . $f;
-        $stmt = $db->prepare("SELECT poster_url, overview FROM folder_posters WHERE path = :p");
-        $stmt->execute([':p' => $fullPath]);
-        $row = $stmt->fetch();
+        $row = $folderDbRows[$fullPath] ?? null;
         if ($row) {
             if ($row['poster_url'] === '__none__') {
                 $cached[$f] = ['hidden' => true];
@@ -114,15 +131,6 @@ if (isset($_GET['posters'])) {
         }
     }
 
-    // Filter out duplicate posters (> 3 cards with same image = probably episodes)
-    foreach ($cached as $f => $info) {
-        if (isset($info['poster']) && ($posterCount[$info['poster']] ?? 0) > 3) {
-            unset($cached[$f]);
-        }
-    }
-
-    $result = array_merge($result, $cached);
-
     // ── Phase 2 : extraire titres uniques depuis TOUS les uncached ──
     $titleToFolders = []; // "Black Clover" => ["E001...", "E002...", ...]
     foreach ($uncached as $f) {
@@ -132,6 +140,7 @@ if (isset($_GET['posters'])) {
     }
 
     // Pre-seed from cached siblings: if a title is already resolved in DB, reuse it
+    // Must run BEFORE the duplicate filter so $cached is still intact
     $titleResults = []; // title => {posterUrl, tmdbId, tmdbTitle, tmdbOverview}
     foreach ($cached as $name => $info) {
         if (!isset($info['poster'])) continue;
@@ -146,6 +155,15 @@ if (isset($_GET['posters'])) {
             }
         }
     }
+
+    // Filter out duplicate posters (> 3 cards with same image = probably episodes)
+    foreach ($cached as $f => $info) {
+        if (isset($info['poster']) && ($posterCount[$info['poster']] ?? 0) > 3) {
+            unset($cached[$f]);
+        }
+    }
+
+    $result = array_merge($result, $cached);
 
     // Titles that still need a TMDB search
     $titlesToSearch = array_diff_key($titleToFolders, $titleResults);
