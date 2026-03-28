@@ -985,7 +985,14 @@ function openPosterPicker(folderName) {
     searchInput.className = 'search-box';
     searchInput.style.cssText = 'flex:1;width:auto';
     searchInput.placeholder = 'Rechercher sur TMDB...';
-    searchInput.value = folderName;
+    // Nettoyer le nom pour la recherche : retirer extension, tags techniques, crochets, tirets de release
+    var cleanName = folderName.replace(/\.(mkv|avi|mp4|m4v|mov|wmv|flv|webm|ts|m2ts|mpg|mpeg)$/i, '');
+    cleanName = cleanName.replace(/[\[\(].*?[\]\)]/g, ''); // [Torrent911], (2024), etc.
+    cleanName = cleanName.replace(/\b(MULTI|VOSTFR|VFF|VF2?|FRENCH|TRUEFRENCH|SUBFRENCH|ENGLISH|MULTi)\b.*/i, '');
+    cleanName = cleanName.replace(/\b(BluRay|BDRip|WEB[-.]?DL|WEB[-.]?Rip|HDRip|DVDRip|DVDRIP|HDTV|WEB|Remux|REPACK)\b.*/i, '');
+    cleanName = cleanName.replace(/\b(x264|x265|h264|h265|HEVC|AVC|AAC|AC3|DTS|FLAC|10bit|HDR|HDR10|SDR|2160p|1080p|720p|480p|4K|UHD)\b.*/i, '');
+    cleanName = cleanName.replace(/[-._]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
+    searchInput.value = cleanName || folderName;
     var searchBtn = document.createElement('button');
     searchBtn.className = 'btn-zip';
     searchBtn.style.cssText = 'padding:.3rem .7rem;font-size:.78rem';
