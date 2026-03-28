@@ -58,16 +58,30 @@ if (!$AI_BIN) {
 
 // --pending-path /some/dir → pending limited to a path prefix (used by background trigger)
 $pendingPath = null;
+$verifyPath = null;
 if ($arg === '--pending-path') {
     $pendingPath = realpath($argv[2] ?? '');
     if (!$pendingPath || !is_dir($pendingPath)) {
         fwrite(STDERR, "Error: invalid path for --pending-path\n");
         exit(1);
     }
-    $arg = '--pending'; // fall through to --pending logic with filter
+    $verifyPath = $pendingPath; // verify same path after pending
+    $arg = '--pending+verify'; // run both scoped to this path
+}
+if ($arg === '--verify-path') {
+    $verifyPath = realpath($argv[2] ?? '');
+    if (!$verifyPath || !is_dir($verifyPath)) {
+        fwrite(STDERR, "Error: invalid path for --verify-path\n");
+        exit(1);
+    }
+    $arg = '--verify';
 }
 
-$runModes = ($arg === '--cron') ? ['--pending', '--verify'] : [$arg];
+$runModes = match($arg) {
+    '--cron' => ['--pending', '--verify'],
+    '--pending+verify' => ['--pending', '--verify'],
+    default => [$arg],
+};
 
 foreach ($runModes as $mode) {
 
@@ -103,9 +117,15 @@ if ($mode === '--pending') {
         fwrite(STDERR, "Error: --verify requires AI (claude CLI not found)\n");
         exit(1);
     }
-    // Find ALL unverified entries with a poster (across all shared folders)
-    $rows = $db->query("SELECT path, poster_url, title, tmdb_id, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
-    ai_log('AI --verify start | unverified=' . count($rows));
+    // Find unverified entries with a poster (scoped to path if --verify-path or --pending-path)
+    if ($verifyPath) {
+        $stmtV = $db->prepare("SELECT path, poster_url, title, tmdb_id, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0) AND path LIKE :prefix");
+        $stmtV->execute([':prefix' => $verifyPath . '/%']);
+        $rows = $stmtV->fetchAll();
+    } else {
+        $rows = $db->query("SELECT path, poster_url, title, tmdb_id, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
+    }
+    ai_log('AI --verify start | unverified=' . count($rows) . ($verifyPath ? ' path=' . basename($verifyPath) : ' (all)'));
 
     // Auto-verify duplicates: if >3 entries in the same dir share the same tmdb_id,
     // it's clearly episodes of the same show — no need to ask AI
