@@ -81,17 +81,19 @@ if ($mime && str_starts_with($mime, 'video/')) {
         file_put_contents($pidFile, $pid);
         touch($hlsDir . '/.active');
 
-        // Cleanup background : attend que ffmpeg termine + 2min d'inactivité
+        // Cleanup background : tient le flock tant que ffmpeg tourne, puis attend 2min d'inactivité
         $slotPath = $slotFp ? stream_get_meta_data($slotFp)['uri'] : '';
         $activeFile = escapeshellarg($hlsDir . '/.active');
-        $cleanupCmd = '('
-            . 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do sleep 5; done; '   // attendre fin ffmpeg
-            . ($slotPath ? 'rm -f ' . escapeshellarg($slotPath) . '; ' : '')       // libérer le slot
-            . 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '  // attendre 2min sans activité
-            . 'rm -rf ' . escapeshellarg($hlsDir)
-            . ') >/dev/null 2>&1 &';
-        exec($cleanupCmd);
+        // flock dans le shell hérite le lock — maintient le slot occupé pendant ffmpeg
+        $cleanupBody = 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do sleep 5; done; '
+            . 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '
+            . 'rm -rf ' . escapeshellarg($hlsDir);
+        $cleanupCmd = $slotPath
+            ? '(flock -x 9; ' . $cleanupBody . ') 9>' . escapeshellarg($slotPath) . ' >/dev/null 2>&1 &'
+            : '(' . $cleanupBody . ') >/dev/null 2>&1 &';
+        // Fermer le FD PHP avant exec — le shell cleanup reprend le lock via flock 9>
         if ($slotFp) fclose($slotFp);
+        exec($cleanupCmd);
     } else {
         // Session existante — marquer activité
         touch($hlsDir . '/.active');

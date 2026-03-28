@@ -1,5 +1,7 @@
 <?php
 $trackIdx = max(0, (int)$_GET['subtitle']);
+// Borne haute : évite de lancer ffmpeg sur des tracks inexistantes (anti-DoS)
+if ($trackIdx > 99) { http_response_code(400); exit; }
 header('Content-Type: text/vtt; charset=utf-8');
 header('Cache-Control: no-store');
 $mtime = filemtime($resolvedPath);

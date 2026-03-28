@@ -80,6 +80,7 @@ function plog(tag, msg, data) {
     }
     function realTime() { return useHLS ? (player.currentTime || 0) : S.offset + (player.currentTime || 0); }
     // Safari iOS : utiliser HLS au lieu de fMP4 (Safari coupe les streams fMP4 sans Range support)
+    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     var isSafari = /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent);
     var useHLS = isIOS || (isSafari && 'ontouchend' in document);
     function buildUrl(mode, audio, startSec) {
@@ -137,7 +138,6 @@ function plog(tag, msg, data) {
     }
 
     // ── Plein écran ───────────────────────────────────────────────────────────
-    var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
     function isFs() { return !!(document.fullscreenElement || document.webkitFullscreenElement || (isIOS && player.webkitDisplayingFullscreen)); }
     function isLandscapeMobile() { return window.innerHeight <= 500 && window.innerWidth > window.innerHeight; }
     function isImmersive() { return isFs() || isLandscapeMobile(); }
