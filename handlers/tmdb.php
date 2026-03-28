@@ -292,7 +292,21 @@ if (isset($_GET['posters'])) {
         $videoRemaining = count($videoUncached) - count($videoToFetch);
     }
 
-    echo json_encode(['posters' => $result, 'remaining' => $remaining + $videoRemaining]);
+    $totalRemaining = $remaining + $videoRemaining;
+
+    // When all regex+TMDB batches are done, trigger AI fallback in background
+    if ($totalRemaining === 0) {
+        $stmtNull = $db->prepare("SELECT COUNT(*) FROM folder_posters WHERE path LIKE :prefix AND poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)");
+        $stmtNull->execute([':prefix' => $resolvedPath . '/%']);
+        $nullCount = (int)$stmtNull->fetchColumn();
+        if ($nullCount > 0 && is_executable('/usr/local/bin/claude')) {
+            $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
+            $cmd = '/usr/bin/php ' . escapeshellarg($scriptPath) . ' ' . escapeshellarg($resolvedPath) . ' > /dev/null 2>&1 &';
+            @pclose(@popen($cmd, 'r'));
+        }
+    }
+
+    echo json_encode(['posters' => $result, 'remaining' => $totalRemaining]);
     exit;
 }
 
