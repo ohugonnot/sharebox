@@ -708,19 +708,29 @@ function askAI(array $fileNames, string $aiBin): ?array
         $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE);
 
         $prompt = <<<PROMPT
-Tu reçois une liste de noms de fichiers vidéo. Pour chaque fichier, extrais le titre propre du film pour une recherche TMDB.
+Tu reçois une liste de noms de fichiers ou dossiers vidéo provenant de torrents.
+Pour chaque entrée, extrais le titre propre du film ou de la série pour une recherche TMDB.
 
-Retourne UNIQUEMENT un JSON array (sans markdown, sans code fences), avec pour chaque fichier:
-{"file": "nom original", "title": "titre propre du film", "year": 1999, "skip": false}
+Retourne UNIQUEMENT un JSON array (sans markdown, sans code fences), avec pour chaque entrée:
+{"file": "nom original", "title": "titre propre", "year": 1999, "skip": false}
 
-Règles:
-- Retire les tags site ([Torrent911.com], [YGG], etc.)
-- Retire les tags techniques (DVDRIP, x264, FRENCH, BluRay, etc.)
-- Retire la numérotation (01 - , 02. , etc.)
-- Retire les noms de studio en préfixe (Walt Disney - , Pixar - , etc.)
-- skip=true pour les bonus, making-of, extras, bandes-annonces, featurettes, samples
-- year=null si pas d'année détectable
-- Le titre doit être en français si le nom original est en français
+Règles d'extraction:
+- Retire les tags techniques : codec (x264, HEVC, AVC), résolution (1080p, 2160p, 4K), source (BluRay, WEB-DL, DVDRip), audio (AAC, DTS, FLAC, AC3), HDR, 10bit, etc.
+- Retire les tags de release : groupe (-AMB3R, -QTZ, RCVR), REMUX, REPACK, REMASTERED
+- Retire les tags site entre crochets : [Torrent911.com], [YGG], etc.
+- Retire les tags langue : MULTI, VFF, VF, VOSTFR, FRENCH, MULTi, SUBFRENCH, TRUEFRENCH
+- Retire la numérotation de classement en début : "N° 057 - ", "01 - ", etc.
+- Retire les noms de studio en préfixe : "Walt Disney - ", "Pixar - ", etc.
+- Retire les extensions de fichier : .mkv, .avi, .mp4, etc.
+- GARDE les noms de collections : INTEGRALE, COLLECTION → extrais le titre de la série/collection
+- GARDE les noms de saisons : "Season 1", "Saison 02", "S01" → extrais le titre de la série
+- TRADUIS le titre en français quand c'est un film/série connu (ex: "Despicable Me" → "Moi, moche et méchant", "The Walking Dead" reste "The Walking Dead")
+- year = année du film si détectable dans le nom, null sinon
+
+Cas particuliers pour skip:
+- skip=true UNIQUEMENT pour : bonus, making-of, featurettes, bandes-annonces, samples, fichiers NFO
+- skip=false pour : courts-métrages, OVA, films, collections, intégrales, saisons, épisodes
+- En cas de doute, skip=false (mieux vaut chercher que rater)
 
 Fichiers:
 $fileList
