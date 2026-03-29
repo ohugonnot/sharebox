@@ -318,9 +318,9 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $db->prepare("INSERT INTO folder_posters (path) VALUES (:p) ON CONFLICT(path) DO UPDATE SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, ai_attempts = 0, updated_at = datetime('now')")
                ->execute([':p' => $fullPath]);
         } else {
-            poster_log('SET poster | ' . $folder . ' → ' . ($title ?: '?') . ' (id=' . $tmdbId . ') ' . ($posterUrl === '__none__' ? '__none__' : 'poster') . ' verified=1');
-            $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
-              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 1, updated_at = datetime('now')")
+            poster_log('SET poster | ' . $folder . ' → ' . ($title ?: '?') . ' (id=' . $tmdbId . ') ' . ($posterUrl === '__none__' ? '__none__' : 'poster') . ' verified=100');
+            $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 100)
+              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 100, updated_at = datetime('now')")
                ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $title, ':o' => $overview]);
         }
         echo json_encode(['success' => true]);
