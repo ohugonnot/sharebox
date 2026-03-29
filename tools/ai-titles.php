@@ -175,6 +175,26 @@ if ($mode === '--pending') {
 
 } // end foreach $runModes
 
+// ── Re-check loop: if new NULLs appeared while we were working, run again ──
+if ($arg === '--cron' || $arg === '--pending+verify') {
+    $maxRetries = 3; // safety cap
+    for ($retry = 0; $retry < $maxRetries; $retry++) {
+        $newNulls = $db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchColumn();
+        if ((int)$newNulls === 0) break;
+        ai_log('RE-CHECK | ' . $newNulls . ' new NULL entries found, running again (retry ' . ($retry + 1) . ')');
+        // Re-run pending
+        $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
+        processPendingEntries($rows, $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
+        // Re-run verify on new entries
+        if ($AI_BIN) {
+            $vRows = $db->query("SELECT path, poster_url, title, tmdb_id, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
+            if (!empty($vRows)) {
+                verifyEntries($vRows, $db, $AI_BIN, $TMDB_API_KEY);
+            }
+        }
+    }
+}
+
 /**
  * Log to stdout with timestamp (for ai-titles.log) and to poster.log.
  * Ensures ai-titles.log is parseable with same format as other logs.
