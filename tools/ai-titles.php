@@ -290,6 +290,7 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
             } else {
                 $aiFound = 0;
                 foreach ($titles as $t) {
+                    if (!is_array($t) || !isset($t['file'])) continue;
                     $name = $t['file'];
                     $fullPath = $dir . '/' . $name;
 
