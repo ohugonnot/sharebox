@@ -906,7 +906,8 @@ function reloadAllPosters() {
                 if (!d.posters) return;
                 Object.keys(d.posters).forEach(function(name){
                     var info = d.posters[name];
-                    var card = document.querySelector('.grid-card[data-folder="'+CSS.escape(name)+'"]');
+                    var card = null;
+                    cards.forEach(function(c){ if (c.getAttribute('data-folder') === name) card = c; });
                     if (!card) return;
                     // Dossier masqué → œil barré
                     if (info.hidden) {

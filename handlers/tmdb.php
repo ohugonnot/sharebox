@@ -157,13 +157,6 @@ if (isset($_GET['posters'])) {
     }
     poster_log('POSTERS cache | eligible=' . count($eligibleFolders) . ' cached=' . $posterHitCount . ' hidden=' . $hiddenCount . ' pending_ai=' . $pendingCount . ' uncached=' . count($uncached) . ' seasons=' . count($seasonFolders));
 
-    // Filter out duplicate posters (> 3 cards with same image = probably episodes)
-    foreach ($cached as $f => $info) {
-        if (isset($info['poster']) && ($posterCount[$info['poster']] ?? 0) > 3) {
-            unset($cached[$f]);
-        }
-    }
-
     $result = array_merge($result, $cached);
 
     // ── INSERT all uncached folders as NULL (no TMDB calls, instant) ──
@@ -257,8 +250,14 @@ if (isset($_GET['posters'])) {
         }
     }
 
-    poster_log('POSTERS response | result=' . count($result) . ' pending=' . $nullCount);
-    echo json_encode(['posters' => $result, 'pending' => $nullCount]);
+    $json = json_encode(['posters' => $result, 'pending' => $nullCount], JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($json === false) {
+        poster_log('JSON ERROR | ' . json_last_error_msg());
+        $json = json_encode(['posters' => [], 'pending' => $nullCount]);
+    }
+    poster_log('POSTERS response | result=' . count($result) . ' pending=' . $nullCount . ' json_len=' . strlen($json));
+    header('Content-Length: ' . strlen($json));
+    echo $json;
     exit;
 }
 
