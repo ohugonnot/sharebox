@@ -210,6 +210,39 @@ if ($action !== '') {
                 echo json_encode(['ok' => true, 'status' => 'inactive', 'message' => "rtorrent@{$username} arrêté"]);
                 break;
 
+            case 'tmdb_status':
+                $db = get_db();
+                $total = (int)$db->query("SELECT COUNT(*) FROM folder_posters")->fetchColumn();
+                $matched = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchColumn();
+                $hidden = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url = '__none__'")->fetchColumn();
+                $pending = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NULL AND (verified IS NULL OR verified = 0)")->fetchColumn();
+                $failed = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NULL AND verified = -1")->fetchColumn();
+                $scanning = file_exists(sys_get_temp_dir() . '/sharebox_tmdb_scan.lock');
+                echo json_encode([
+                    'total' => $total, 'matched' => $matched, 'hidden' => $hidden,
+                    'pending' => $pending, 'failed' => $failed, 'scanning' => $scanning,
+                ]);
+                break;
+
+            case 'tmdb_scan':
+                // Launch ai-titles.php --cron in background
+                $lockFile = sys_get_temp_dir() . '/sharebox_tmdb_scan.lock';
+                if (file_exists($lockFile) && (time() - filemtime($lockFile)) < 300) {
+                    echo json_encode(['ok' => false, 'message' => 'Scan déjà en cours']);
+                    break;
+                }
+                touch($lockFile);
+                $script = realpath(__DIR__ . '/tools/ai-titles.php');
+                $logFile = __DIR__ . '/data/ai-titles.log';
+                $cmd = sprintf(
+                    '/usr/bin/php %s --cron >> %s 2>&1 & echo $!',
+                    escapeshellarg($script),
+                    escapeshellarg($logFile)
+                );
+                $pid = trim(shell_exec($cmd));
+                echo json_encode(['ok' => true, 'message' => 'Scan TMDB lancé', 'pid' => $pid]);
+                break;
+
             default:
                 http_response_code(400);
                 echo json_encode(['error' => 'Action inconnue']);
@@ -615,6 +648,24 @@ if ($action !== '') {
     <div class="page-title">Gestion des utilisateurs</div>
     <div class="page-sub">Gérer les utilisateurs<?= $seedboxMode ? ' (rtorrent + ruTorrent + SFTP + ShareBox)' : '' ?></div>
 
+    <div class="card" style="margin-bottom:1.5rem">
+        <div class="card-header">
+            <div class="card-title">TMDB Posters</div>
+            <button class="btn btn-accent" id="tmdb-scan-btn" onclick="launchTmdbScan()">Scan TMDB</button>
+        </div>
+        <div style="padding:1rem 1.4rem">
+            <div id="tmdb-status" style="display:flex;gap:1.5rem;flex-wrap:wrap;font-size:.82rem;color:var(--text-dim)">
+                Chargement...
+            </div>
+            <div id="tmdb-bar-wrap" style="margin-top:.8rem;display:none">
+                <div style="background:var(--bg-input);border-radius:6px;height:6px;overflow:hidden">
+                    <div id="tmdb-bar" style="height:100%;background:var(--accent);border-radius:6px;transition:width .5s;width:0%"></div>
+                </div>
+                <div id="tmdb-bar-label" style="font-size:.72rem;color:var(--text-muted);margin-top:.3rem"></div>
+            </div>
+        </div>
+    </div>
+
     <div class="card">
         <div class="card-header">
             <div class="card-title">Utilisateurs</div>
@@ -881,8 +932,71 @@ async function stopRtorrent(username) {
     loadUsers();
 }
 
+// ── TMDB status & scan ──
+var tmdbPolling = false;
+
+async function loadTmdbStatus() {
+    try {
+        const res = await api('tmdb_status');
+        const el = document.getElementById('tmdb-status');
+        const barWrap = document.getElementById('tmdb-bar-wrap');
+        const bar = document.getElementById('tmdb-bar');
+        const barLabel = document.getElementById('tmdb-bar-label');
+        const btn = document.getElementById('tmdb-scan-btn');
+
+        const total = res.total || 0;
+        const matched = res.matched || 0;
+        const pending = res.pending || 0;
+        const failed = res.failed || 0;
+        const hidden = res.hidden || 0;
+        const pct = total > 0 ? Math.round((matched + hidden) / total * 100) : 0;
+
+        el.innerHTML =
+            '<span style="color:var(--green)">' + matched + ' matchés</span>' +
+            '<span>' + hidden + ' masqués</span>' +
+            '<span style="color:var(--accent)">' + pending + ' en attente</span>' +
+            (failed > 0 ? '<span style="color:var(--red)">' + failed + ' échoués</span>' : '') +
+            '<span style="color:var(--text-muted)">' + total + ' total</span>';
+
+        barWrap.style.display = '';
+        bar.style.width = pct + '%';
+        barLabel.textContent = pct + '% couvert';
+
+        if (res.scanning) {
+            btn.textContent = 'Scan en cours...';
+            btn.disabled = true;
+            if (!tmdbPolling) {
+                tmdbPolling = true;
+                setTimeout(function poll() {
+                    loadTmdbStatus().then(function() {
+                        if (document.getElementById('tmdb-scan-btn').disabled) {
+                            setTimeout(poll, 3000);
+                        } else {
+                            tmdbPolling = false;
+                        }
+                    });
+                }, 3000);
+            }
+        } else {
+            btn.textContent = pending > 0 ? 'Scan TMDB (' + pending + ')' : 'Scan TMDB';
+            btn.disabled = pending === 0 && failed === 0;
+        }
+    } catch(e) {}
+}
+
+async function launchTmdbScan() {
+    const btn = document.getElementById('tmdb-scan-btn');
+    btn.textContent = 'Lancement...';
+    btn.disabled = true;
+    const res = await api('tmdb_scan', {});
+    if (res.error) { toast(res.error, false); btn.disabled = false; btn.textContent = 'Scan TMDB'; return; }
+    toast(res.message);
+    setTimeout(loadTmdbStatus, 2000);
+}
+
 // Init
 loadUsers();
+loadTmdbStatus();
 </script>
 </body>
 </html>
