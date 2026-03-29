@@ -184,23 +184,6 @@ if (isset($_GET['posters'])) {
     $typeRow = $stmtType->fetch();
     $isMovies = ($typeRow && ($typeRow['folder_type'] ?? 'series') === 'movies');
 
-    // Auto-detect movies: si pas de sous-dossiers éligibles mais des fichiers vidéo → movies
-    if (!$isMovies && empty($eligibleFolders) && empty($seasonFolders)) {
-        $videoExtsCheck = ['mp4','mkv','avi','m4v','mov','wmv','flv','webm','ts','m2ts','mpg','mpeg'];
-        $hasVideo = false;
-        foreach ($items as $item) {
-            if ($item[0] === '.' || is_dir($resolvedPath . '/' . $item)) continue;
-            if (in_array(strtolower(pathinfo($item, PATHINFO_EXTENSION)), $videoExtsCheck, true)) { $hasVideo = true; break; }
-        }
-        if ($hasVideo) {
-            $isMovies = true;
-            try {
-                $db->prepare("INSERT INTO folder_posters (path, folder_type) VALUES (:p, 'movies') ON CONFLICT(path) DO UPDATE SET folder_type = 'movies'")
-                   ->execute([':p' => $resolvedPath]);
-                poster_log('AUTO-DETECT movies | ' . basename($resolvedPath));
-            } catch (PDOException $e) {}
-        }
-    }
 
     if ($isMovies) {
         $videoExts = ['mp4','mkv','avi','m4v','mov','wmv','flv','webm','ts','m2ts','mpg','mpeg'];
