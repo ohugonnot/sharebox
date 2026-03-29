@@ -134,6 +134,7 @@ if ($arg === '--daemon') {
 // Lock for --cron to prevent parallel runs (crontab + web trigger)
 if ($arg === '--cron' || $arg === '--pending+verify') {
     $cronLock = __DIR__ . '/../data/sharebox_ai_cron.lock';
+    @touch($cronLock); @chmod($cronLock, 0666);
     $cronFp = fopen($cronLock, 'w');
     if (!$cronFp || !flock($cronFp, LOCK_EX | LOCK_NB)) {
         ai_log('CRON skip — already running');
