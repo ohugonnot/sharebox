@@ -91,47 +91,36 @@ if ($arg === '--daemon') {
     while (true) {
         $didWork = false;
 
-        // 1. Pending: NULL entries needing TMDB fetch
-        $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
+        // 1. Pending: regex+TMDB only (no Claude calls — cron handles AI)
+        $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 1)")->fetchAll();
         if (!empty($rows)) {
             $didWork = true;
             $idleLogged = false;
             ai_log('DAEMON pending | ' . count($rows) . ' entries');
-            processPendingEntries($rows, $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
+            processPendingEntries($rows, $db, '', $TMDB_API_KEY, $VIDEO_EXTS); // empty $aiBin = no Claude
         }
 
-        // 2. Verify: unverified entries with posters
-        if ($AI_BIN) {
-            $vRows = $db->query("SELECT path, poster_url, title, tmdb_id, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
-            if (!empty($vRows)) {
-                $didWork = true;
-                $idleLogged = false;
-                // Auto-verify duplicates first
-                $byDirTmdb = [];
-                foreach ($vRows as $row) {
-                    $dir = dirname($row['path']);
-                    $tid = $row['tmdb_id'] ?? 0;
-                    if ($tid === 0) continue;
-                    $byDirTmdb[$dir][$tid][] = $row['path'];
-                }
-                $autoVerified = 0;
-                $skipPaths = [];
-                foreach ($byDirTmdb as $dir => $tmdbGroups) {
-                    foreach ($tmdbGroups as $tid => $paths) {
-                        if (count($paths) > 3) {
-                            foreach ($paths as $p) {
-                                try { $db->prepare("UPDATE folder_posters SET verified = 1 WHERE path = :p")->execute([':p' => $p]); $autoVerified++; $skipPaths[$p] = true; } catch (PDOException $e) {}
-                            }
+        // 2. Auto-verify duplicates only (no Claude verify — cron handles it)
+        $vRows = $db->query("SELECT path, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
+        if (!empty($vRows)) {
+            $byDirTmdb = [];
+            foreach ($vRows as $row) {
+                $dir = dirname($row['path']);
+                $tid = $row['tmdb_id'] ?? 0;
+                if ($tid === 0) continue;
+                $byDirTmdb[$dir][$tid][] = $row['path'];
+            }
+            $autoVerified = 0;
+            foreach ($byDirTmdb as $dir => $tmdbGroups) {
+                foreach ($tmdbGroups as $tid => $paths) {
+                    if (count($paths) > 3) {
+                        foreach ($paths as $p) {
+                            try { $db->prepare("UPDATE folder_posters SET verified = 1 WHERE path = :p")->execute([':p' => $p]); $autoVerified++; } catch (PDOException $e) {}
                         }
                     }
                 }
-                if ($autoVerified > 0) ai_log('DAEMON auto-verify | ' . $autoVerified . ' entries');
-                $vRows = array_filter($vRows, fn($r) => !isset($skipPaths[$r['path']]));
-                if (!empty($vRows)) {
-                    ai_log('DAEMON verify | ' . count($vRows) . ' entries');
-                    verifyEntries(array_values($vRows), $db, $AI_BIN, $TMDB_API_KEY);
-                }
             }
+            if ($autoVerified > 0) { $didWork = true; $idleLogged = false; ai_log('DAEMON auto-verify | ' . $autoVerified . ' entries'); }
         }
 
         if (!$didWork && !$idleLogged) {
@@ -139,6 +128,16 @@ if ($arg === '--daemon') {
             $idleLogged = true;
         }
         sleep(10);
+    }
+}
+
+// Lock for --cron to prevent parallel runs (crontab + web trigger)
+if ($arg === '--cron' || $arg === '--pending+verify') {
+    $cronLock = __DIR__ . '/../data/sharebox_ai_cron.lock';
+    $cronFp = fopen($cronLock, 'w');
+    if (!$cronFp || !flock($cronFp, LOCK_EX | LOCK_NB)) {
+        ai_log('CRON skip — already running');
+        exit(0);
     }
 }
 
@@ -257,13 +256,34 @@ function ai_log(string $msg, bool $toPosterLog = true): void {
 function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiKey, array $videoExts): void
 {
     // Group entries by parent directory
+    // $dbPath: lookup original DB path by dir+name to avoid NFC/NFD mismatch on writes
     $byDir = [];
+    $dbPath = []; // "dir\0name" => original path from DB
     foreach ($rows as $row) {
         $path = $row['path'];
         $dir = dirname($path);
         $name = basename($path);
         $byDir[$dir][] = $name;
+        $dbPath[$dir . "\0" . $name] = $path;
     }
+    // Resolve DB path: AI may return filename in NFC while DB has NFD
+    // NFC→NFD for common accented chars (é→e+combining, à→a+combining, etc.)
+    $nfcToNfd = function(string $s): string {
+        return str_replace(
+            ["\xc3\xa9","\xc3\xa8","\xc3\xa0","\xc3\xb4","\xc3\xae","\xc3\xbc","\xc3\xa7","\xc3\x89","\xc3\x88","\xc3\x80"],
+            ["e\xcc\x81","e\xcc\x80","a\xcc\x80","o\xcc\x82","i\xcc\x82","u\xcc\x88","c\xcc\xa7","E\xcc\x81","E\xcc\x80","A\xcc\x80"],
+            $s
+        );
+    };
+    $resolveDbPath = function(string $dir, string $name) use (&$dbPath, $nfcToNfd): string {
+        $key = $dir . "\0" . $name;
+        if (isset($dbPath[$key])) return $dbPath[$key];
+        // Try with NFC→NFD conversion
+        $nfdName = $nfcToNfd($name);
+        $key2 = $dir . "\0" . $nfdName;
+        if (isset($dbPath[$key2])) return $dbPath[$key2];
+        return $dir . '/' . $name;
+    };
 
     // Filter: only keep directories that contain at least one video file or subfolder
     foreach ($byDir as $dir => $names) {
@@ -283,7 +303,7 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
             foreach ($names as $n) {
                 try {
                     $db->prepare("UPDATE folder_posters SET ai_attempts = 3 WHERE path = :p")
-                       ->execute([':p' => $dir . '/' . $n]);
+                       ->execute([':p' => $resolveDbPath($dir, $n)]);
                 } catch (PDOException $e) { /* ignore */ }
             }
             unset($byDir[$dir]);
@@ -315,7 +335,7 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
             usleep(50000);
 
             foreach ($files as $f) {
-                $fullPath = $dir . '/' . $f['name'];
+                $fullPath = $resolveDbPath($dir, $f['name']);
                 if ($result) {
                     $found++;
                     try {
@@ -342,7 +362,7 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                 foreach ($remaining as $n) {
                     try {
                         $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
-                           ->execute([':p' => $dir . '/' . $n]);
+                           ->execute([':p' => $resolveDbPath($dir, $n)]);
                     } catch (PDOException $e) {}
                 }
             } else {
@@ -364,7 +384,7 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                     try {
                         $db->prepare("INSERT INTO folder_posters (path, poster_url, title) VALUES (:p, '__none__', :t)
                                       ON CONFLICT(path) DO UPDATE SET poster_url = '__none__', title = :t, updated_at = datetime('now')")
-                           ->execute([':p' => $dir . '/' . $t['file'], ':t' => $t['title'] ?? '']);
+                           ->execute([':p' => $resolveDbPath($dir, $t['file']), ':t' => $t['title'] ?? '']);
                     } catch (PDOException $e) {}
                 }
 
@@ -376,14 +396,16 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                     usleep(50000);
 
                     foreach ($files as $t) {
-                        $fullPath = $dir . '/' . $t['file'];
+                        $fullPath = $resolveDbPath($dir, $t['file']);
+                        ai_log('[DB-WRITE] file="' . $t['file'] . '" resolved=' . strlen($fullPath) . 'b match=' . ($fullPath !== $dir . '/' . $t['file'] ? 'RESOLVED' : 'direct'), false);
                         if ($result) {
                             $aiFound++;
                             try {
-                                $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 0, :y, :mt)
-                                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
-                                   ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
-                            } catch (PDOException $e) {}
+                                $stmt = $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 0, :y, :mt)
+                                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')");
+                                $stmt->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
+                                ai_log('[DB-WRITE] rows=' . $stmt->rowCount(), false);
+                            } catch (PDOException $e) { ai_log('[DB-WRITE] ERROR: ' . $e->getMessage(), false); }
                         } else {
                             try {
                                 $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
@@ -402,7 +424,7 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
             foreach ($remaining as $n) {
                 try {
                     $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
-                       ->execute([':p' => $dir . '/' . $n]);
+                       ->execute([':p' => $resolveDbPath($dir, $n)]);
                 } catch (PDOException $e) {}
             }
         }
@@ -497,13 +519,22 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
             usleep(50000);
         }
 
-        // Batch pick: one AI call per batch of 20 files needing a pick
+        // Pick best TMDB candidate for each bad match
         if (!empty($toPick) && $aiBin) {
-            $pickBatches = array_chunk($toPick, 20);
+            // Try batch first, fallback to individual picks
             $picks = [];
-            foreach ($pickBatches as $bi => $pickBatch) {
-                ai_log('AI batch-pick | ' . count($pickBatch) . ' files' . (count($pickBatches) > 1 ? ' batch ' . ($bi + 1) . '/' . count($pickBatches) : ''));
-                $picks = array_merge($picks, askAIBatchPick($pickBatch, $aiBin));
+            if (count($toPick) > 1) {
+                $pickBatches = array_chunk($toPick, 20);
+                foreach ($pickBatches as $bi => $pickBatch) {
+                    ai_log('AI batch-pick | ' . count($pickBatch) . ' files');
+                    $picks = array_merge($picks, askAIBatchPick($pickBatch, $aiBin));
+                }
+            }
+            // Fill in nulls with individual picks (batch failed or single item)
+            foreach ($toPick as $i => $item) {
+                if (!isset($picks[$i]) || $picks[$i] === null) {
+                    $picks[$i] = askAIPickBest($item['file'], $item['candidates'], $aiBin);
+                }
             }
             foreach ($toPick as $i => $item) {
                 $pickedIdx = $picks[$i] ?? null;
@@ -695,7 +726,7 @@ function askAIBatchPick(array $items, string $aiBin): array
         $batch[] = ['file' => $item['file'], 'candidates' => $compact];
     }
 
-    $batchJson = json_encode($batch, JSON_UNESCAPED_UNICODE);
+    $batchJson = json_encode($batch, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 
     $prompt = <<<PROMPT
 Pour chaque fichier/dossier, choisis le résultat TMDB qui correspond le mieux parmi les candidats.
@@ -717,6 +748,7 @@ PROMPT;
     if (!$output) { ai_log('AI RAW | batch-pick → empty output'); return array_fill(0, count($items), null); }
     $envelope = json_decode($output, true);
     if (!$envelope || !isset($envelope['result'])) { ai_log('AI RAW | batch-pick → no result key'); return array_fill(0, count($items), null); }
+    ai_log('[CLAUDE-OK] batch-pick → ' . substr($envelope['result'], 0, 200), false);
 
     $parsed = extractJsonArray($envelope['result']);
     if (!is_array($parsed)) { ai_log('AI RAW | batch-pick PARSE FAIL → ' . substr($envelope['result'], 0, 300)); return array_fill(0, count($items), null); }
@@ -762,14 +794,15 @@ PROMPT;
 
     $tmpFile = tempnam(sys_get_temp_dir(), 'ai_pick_');
     file_put_contents($tmpFile, $prompt);
+    ai_log('[CLAUDE] pick-best "' . $fileName . '" prompt_len=' . strlen($prompt) . ' file_len=' . filesize($tmpFile), false);
     $cmd = escapeshellarg($aiBin) . ' -p --model haiku --output-format json < ' . escapeshellarg($tmpFile) . ' 2>/dev/null';
-    ai_log('[CLAUDE] pick-best "' . $fileName . '"', false);
     $output = shell_exec($cmd);
     @unlink($tmpFile);
 
     if (!$output) { ai_log('AI RAW | pick → empty output'); return null; }
     $envelope = json_decode($output, true);
     if (!$envelope || !isset($envelope['result'])) { ai_log('AI RAW | pick → no result key: ' . substr($output, 0, 200)); return null; }
+    ai_log('[CLAUDE-OK] pick → ' . substr($envelope['result'], 0, 200), false);
 
     $text = $envelope['result'];
     // Extraire {"idx": N} même si l'IA ajoute du texte ou des code fences autour
@@ -801,7 +834,7 @@ function askAIVerify(array $pairs, string $aiBin): ?array
     foreach ($batches as $batchIdx => $batch) {
         ai_log('AI verifying' . (count($batches) > 1 ? ' batch ' . ($batchIdx + 1) . '/' . count($batches) : '') . '...', false);
 
-        $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE);
+        $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 
         $prompt = <<<PROMPT
 Tu reçois des paires {nom de fichier/dossier, titre TMDB, année, type, résumé}.
@@ -850,6 +883,7 @@ PROMPT;
 
         $envelope = json_decode($output, true);
         if (!$envelope || !isset($envelope['result'])) { ai_log('AI RAW | verify batch ' . ($batchIdx + 1) . ' → no result key: ' . substr($output, 0, 200)); return null; }
+        ai_log('[CLAUDE-OK] verify batch ' . ($batchIdx + 1) . ' → ' . substr($envelope['result'], 0, 200), false);
 
         $text = $envelope['result'];
         $parsed = extractJsonArray($text);
@@ -890,7 +924,7 @@ function askAI(array $fileNames, string $aiBin): ?array
             ai_log('AI asking...', false);
         }
 
-        $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE);
+        $fileList = json_encode($batch, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 
         $prompt = <<<PROMPT
 Tu reçois une liste de noms de fichiers ou dossiers vidéo provenant de torrents.
@@ -933,6 +967,7 @@ PROMPT;
 
         $envelope = json_decode($output, true);
         if (!$envelope || !isset($envelope['result'])) { ai_log('AI RAW | askAI batch ' . ($batchIdx + 1) . ' → no result key: ' . substr($output, 0, 200)); return null; }
+        ai_log('[CLAUDE-OK] askAI batch ' . ($batchIdx + 1) . ' → ' . substr($envelope['result'], 0, 200), false);
 
         $text = $envelope['result'];
         $parsed = extractJsonArray($text);
