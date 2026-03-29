@@ -970,6 +970,7 @@ function reloadAllPosters() {
                         card.appendChild(ov);
                     }
                 });
+                fetchPosters.pending = d.pending > 0;
                 if (d.pending > 0) {
                     fetchPosters.polls = (fetchPosters.polls || 0) + 1;
                     setTimeout(fetchPosters, fetchPosters.polls <= 3 ? 5000 : 30000);
@@ -978,6 +979,10 @@ function reloadAllPosters() {
             .catch(function(){});
     }
     fetchPosters();
+    // Re-poll when tab becomes visible (mobile browsers throttle background timers)
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden && fetchPosters.pending) fetchPosters();
+    });
 })();
 
 // ── Poster picker modal ──
