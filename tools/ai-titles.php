@@ -92,7 +92,7 @@ if ($arg === '--daemon') {
         $didWork = false;
 
         // 1. Pending: regex+TMDB only (no Claude calls — cron handles AI)
-        $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 1)")->fetchAll();
+        $rows = $db->query("SELECT rowid, path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 1)")->fetchAll();
         if (!empty($rows)) {
             $didWork = true;
             $idleLogged = false;
@@ -152,11 +152,11 @@ foreach ($runModes as $mode) {
 if ($mode === '--pending') {
     // Find entries with poster_url IS NULL, skip those already tried 3+ times
     if ($pendingPath) {
-        $stmt = $db->prepare("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3) AND path LIKE :prefix");
+        $stmt = $db->prepare("SELECT rowid, path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3) AND path LIKE :prefix");
         $stmt->execute([':prefix' => $pendingPath . '/%']);
         $rows = $stmt->fetchAll();
     } else {
-        $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
+        $rows = $db->query("SELECT rowid, path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
     }
     ai_log('AI --pending start | entries=' . count($rows) . ($pendingPath ? ' path=' . basename($pendingPath) : ' (all)'));
     if (empty($rows)) {
@@ -255,34 +255,27 @@ function ai_log(string $msg, bool $toPosterLog = true): void {
  */
 function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiKey, array $videoExts): void
 {
-    // Group entries by parent directory
-    // $dbPath: lookup original DB path by dir+name to avoid NFC/NFD mismatch on writes
+    // Group entries by parent directory, keep rowid for DB writes (avoids NFC/NFD path mismatch)
     $byDir = [];
-    $dbPath = []; // "dir\0name" => original path from DB
+    $rowIds = [];  // dir+name => rowid
     foreach ($rows as $row) {
         $path = $row['path'];
         $dir = dirname($path);
         $name = basename($path);
         $byDir[$dir][] = $name;
-        $dbPath[$dir . "\0" . $name] = $path;
+        $rowIds[$dir . chr(0) . $name] = (int)$row['rowid'];
     }
-    // Resolve DB path: AI may return filename in NFC while DB has NFD
-    // NFC→NFD for common accented chars (é→e+combining, à→a+combining, etc.)
-    $nfcToNfd = function(string $s): string {
-        return str_replace(
-            ["\xc3\xa9","\xc3\xa8","\xc3\xa0","\xc3\xb4","\xc3\xae","\xc3\xbc","\xc3\xa7","\xc3\x89","\xc3\x88","\xc3\x80"],
-            ["e\xcc\x81","e\xcc\x80","a\xcc\x80","o\xcc\x82","i\xcc\x82","u\xcc\x88","c\xcc\xa7","E\xcc\x81","E\xcc\x80","A\xcc\x80"],
-            $s
-        );
-    };
-    $resolveDbPath = function(string $dir, string $name) use (&$dbPath, $nfcToNfd): string {
-        $key = $dir . "\0" . $name;
-        if (isset($dbPath[$key])) return $dbPath[$key];
-        // Try with NFC→NFD conversion
-        $nfdName = $nfcToNfd($name);
-        $key2 = $dir . "\0" . $nfdName;
-        if (isset($dbPath[$key2])) return $dbPath[$key2];
-        return $dir . '/' . $name;
+    // Get rowid for a file, with fuzzy fallback for NFC/NFD mismatch
+    $getRowId = function(string $dir, string $name) use (&$rowIds): ?int {
+        $key = $dir . chr(0) . $name;
+        if (isset($rowIds[$key])) return $rowIds[$key];
+        $stripped = preg_replace('/[\x80-\xFF]+/', '', $name);
+        foreach ($rowIds as $k => $id) {
+            if (!str_starts_with($k, $dir . chr(0))) continue;
+            $dbName = substr($k, strlen($dir) + 1);
+            if (preg_replace('/[\x80-\xFF]+/', '', $dbName) === $stripped) return $id;
+        }
+        return null;
     };
 
     // Filter: only keep directories that contain at least one video file or subfolder
@@ -302,8 +295,8 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
             // No media content — mark these entries as given up
             foreach ($names as $n) {
                 try {
-                    $db->prepare("UPDATE folder_posters SET ai_attempts = 3 WHERE path = :p")
-                       ->execute([':p' => $resolveDbPath($dir, $n)]);
+                    $db->prepare("UPDATE folder_posters SET ai_attempts = 3 WHERE rowid = :id")
+                       ->execute([':id' => $getRowId($dir, $n)]);
                 } catch (PDOException $e) { /* ignore */ }
             }
             unset($byDir[$dir]);
@@ -335,13 +328,12 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
             usleep(50000);
 
             foreach ($files as $f) {
-                $fullPath = $resolveDbPath($dir, $f['name']);
-                if ($result) {
+                $rowId = $getRowId($dir, $f['name']);
+                if ($result && $rowId) {
                     $found++;
                     try {
-                        $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 0, :y, :mt)
-                                      ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
-                           ->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
+                        $db->prepare("UPDATE folder_posters SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now') WHERE rowid = :id")
+                           ->execute([':id' => $rowId, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
                     } catch (PDOException $e) {}
                 } else {
                     $remaining[] = $f['name'];
@@ -361,8 +353,8 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                 // Increment ai_attempts for remaining so we don't retry forever
                 foreach ($remaining as $n) {
                     try {
-                        $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
-                           ->execute([':p' => $resolveDbPath($dir, $n)]);
+                        $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE rowid = :id")
+                           ->execute([':id' => $getRowId($dir, $n)]);
                     } catch (PDOException $e) {}
                 }
             } else {
@@ -380,12 +372,12 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
 
                 // Handle skips
                 foreach ($aiSkips as $t) {
+                    $rowId = $getRowId($dir, $t['file']);
                     ai_log('AI SKIP | ' . $t['file']);
-                    try {
-                        $db->prepare("INSERT INTO folder_posters (path, poster_url, title) VALUES (:p, '__none__', :t)
-                                      ON CONFLICT(path) DO UPDATE SET poster_url = '__none__', title = :t, updated_at = datetime('now')")
-                           ->execute([':p' => $resolveDbPath($dir, $t['file']), ':t' => $t['title'] ?? '']);
-                    } catch (PDOException $e) {}
+                    if ($rowId) {
+                        try { $db->prepare("UPDATE folder_posters SET poster_url = '__none__', title = :t, updated_at = datetime('now') WHERE rowid = :id")
+                                 ->execute([':id' => $rowId, ':t' => $t['title'] ?? '']); } catch (PDOException $e) {}
+                    }
                 }
 
                 // Search TMDB once per unique title, apply to all files
@@ -396,21 +388,20 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
                     usleep(50000);
 
                     foreach ($files as $t) {
-                        $fullPath = $resolveDbPath($dir, $t['file']);
-                        ai_log('[DB-WRITE] file="' . $t['file'] . '" resolved=' . strlen($fullPath) . 'b match=' . ($fullPath !== $dir . '/' . $t['file'] ? 'RESOLVED' : 'direct'), false);
-                        if ($result) {
+                        $rowId = $getRowId($dir, $t['file']);
+                        if ($result && $rowId) {
                             $aiFound++;
                             try {
-                                $stmt = $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, 0, :y, :mt)
-                                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')");
-                                $stmt->execute([':p' => $fullPath, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
-                                ai_log('[DB-WRITE] rows=' . $stmt->rowCount(), false);
-                            } catch (PDOException $e) { ai_log('[DB-WRITE] ERROR: ' . $e->getMessage(), false); }
-                        } else {
-                            try {
-                                $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
-                                   ->execute([':p' => $fullPath]);
+                                $db->prepare("UPDATE folder_posters SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now') WHERE rowid = :id")
+                                   ->execute([':id' => $rowId, ':u' => $result['poster'], ':i' => $result['id'], ':t' => $result['title'], ':o' => $result['overview'], ':y' => $result['year'] ?? null, ':mt' => $result['type'] ?? null]);
                             } catch (PDOException $e) {}
+                        } else {
+                            if ($rowId) {
+                                try {
+                                    $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE rowid = :id")
+                                       ->execute([':id' => $rowId]);
+                                } catch (PDOException $e) {}
+                            }
                         }
                     }
                     if ($result) {
@@ -423,8 +414,8 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
             // Pas d'IA dispo — increment attempts pour ne pas boucler
             foreach ($remaining as $n) {
                 try {
-                    $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE path = :p")
-                       ->execute([':p' => $resolveDbPath($dir, $n)]);
+                    $db->prepare("UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts, 0) + 1 WHERE rowid = :id")
+                       ->execute([':id' => $getRowId($dir, $n)]);
                 } catch (PDOException $e) {}
             }
         }
