@@ -314,6 +314,16 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
             poster_log('SET reset | ' . $folder . ' → clearing poster for re-fetch');
             $db->prepare("INSERT INTO folder_posters (path) VALUES (:p) ON CONFLICT(path) DO UPDATE SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, ai_attempts = 0, updated_at = datetime('now')")
                ->execute([':p' => $fullPath]);
+            // Trigger worker to re-fetch
+            $lockFile = sys_get_temp_dir() . '/sharebox_ai_worker.lock';
+            $lockFp = @fopen($lockFile, 'w');
+            if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
+                $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
+                $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --cron >> /srv/share/data/ai-titles.log 2>&1 &';
+                @pclose(@popen($cmd, 'r'));
+                poster_log('BG trigger | re-fetch after toggle reset');
+            }
+            if ($lockFp) fclose($lockFp);
         } else {
             poster_log('SET poster | ' . $folder . ' → ' . ($title ?: '?') . ' (id=' . $tmdbId . ') ' . ($posterUrl === '__none__' ? '__none__' : 'poster') . ' verified=1');
             $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
