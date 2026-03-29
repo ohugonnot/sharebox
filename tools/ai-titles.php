@@ -772,7 +772,7 @@ function askAIPickBest(string $fileName, array $candidates, string $aiBin): ?int
         'overview' => $c['overview'],
     ], $candidates, array_keys($candidates));
 
-    $candidateList = json_encode($compact, JSON_UNESCAPED_UNICODE);
+    $candidateList = json_encode($compact, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 
     $prompt = <<<PROMPT
 Fichier/dossier torrent : "$fileName"
