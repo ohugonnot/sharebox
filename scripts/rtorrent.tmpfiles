@@ -1,0 +1,3 @@
+# /etc/tmpfiles.d/rtorrent.conf
+# Persists /var/run/rtorrent across reboots (tmpfs)
+d /var/run/rtorrent 0775 root seedbox - -

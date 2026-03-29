@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . "/auth_check.php";
 /**
  * API quota — Bandwidth usage from vnstat (monthly)
  * Returns JSON with current month rx/tx in bytes, quota info.

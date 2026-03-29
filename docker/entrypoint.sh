@@ -27,12 +27,19 @@ if [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
     echo "define('TMDB_API_KEY', '${SHAREBOX_TMDB_API_KEY}');" >> /app/config.php
 fi
 
-# ── Generate htpasswd ────────────────────────────────────────────────────────
-htpasswd -cb /etc/sharebox.htpasswd "$ADMIN_USER" "$ADMIN_PASS" 2>/dev/null
-
 # ── Permissions ──────────────────────────────────────────────────────────────
 mkdir -p /data /run/nginx
 chown www-data:www-data /data
+
+# ── Create admin user in DB (PHP session auth) ──────────────────────────────
+export SHAREBOX_ADMIN_USER="$ADMIN_USER"
+export SHAREBOX_ADMIN_PASS="$ADMIN_PASS"
+php -r '
+    require "/app/db.php";
+    require "/app/auth.php";
+    ensure_admin_exists();
+' 2>/dev/null || true
+chown www-data:www-data /data/share.db 2>/dev/null || true
 
 # Si le dossier média a un GID différent, ajouter www-data à ce groupe
 # Permet de lire les fichiers montés depuis le host (ex: /home/user/media:ro)
@@ -54,7 +61,7 @@ if [ "${SHAREBOX_AUTO_SHARE:-}" = "yes" ]; then
         $c = $db->query("SELECT COUNT(*) FROM links")->fetchColumn();
         if ($c == 0) {
             $db->prepare("INSERT INTO links (token, path, type, name) VALUES (?, ?, ?, ?)")
-               ->execute(["browse", "'"$MEDIA_DIR"'", "directory", "ShareBox"]);
+               ->execute(["browse", "$MEDIA_DIR", "directory", "ShareBox"]);
             echo "Auto-share: /dl/browse\n";
         }
     ' 2>/dev/null || true

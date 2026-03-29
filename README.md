@@ -19,9 +19,9 @@ So I built ShareBox -- a single PHP app with zero dependencies. No library, no a
 
 ## Live Demo
 
-**[Try the demo](https://ds72803.seedhost.eu:8282/dl/browse?view=grid)** -- no install needed. Netflix-style grid with TMDB posters, series, movies, and anime.
+**[Try the demo](https://dn40904.seedhost.eu:8282/dl/browse?view=grid)** -- no install needed. Netflix-style grid with TMDB posters, series, movies, and anime.
 
-[Admin panel](https://ds72803.seedhost.eu:8282/share/) -- `admin` / `demo2026`
+[Admin panel](https://dn40904.seedhost.eu:8282/share/) -- `admin` / `demo2026`
 
 ## How it compares
 

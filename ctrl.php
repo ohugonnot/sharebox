@@ -2,13 +2,21 @@
 /**
  * API JSON pour l'application Share
  * 3 actions : browse (lister fichiers), create (créer un lien), delete (supprimer un lien)
- * Protégée par htpasswd via nginx (accès admin uniquement)
+ * Protégée par authentification PHP
  */
 
+require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/functions.php';
 
 header('Content-Type: application/json; charset=utf-8');
+
+// Auth check for API (skip in CLI/test mode)
+if (PHP_SAPI !== 'cli' && !is_logged_in()) {
+    http_response_code(401);
+    echo json_encode(['error' => 'Non authentifié']);
+    exit;
+}
 
 $action = $_GET['action'] ?? '';
 

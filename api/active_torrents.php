@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . "/auth_check.php";
 /**
  * API active_torrents — Liste des torrents actifs via rtorrent SCGI
  */

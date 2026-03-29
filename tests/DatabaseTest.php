@@ -136,7 +136,7 @@ class DatabaseTest extends TestCase
     {
         $db = get_db();
         $version = (int) $db->query('PRAGMA user_version')->fetchColumn();
-        $this->assertSame(7, $version);
+        $this->assertSame(8, $version);
     }
 
     // ── 5b. folder_posters table exists ──────────────────────────────────
@@ -272,6 +272,7 @@ class DatabaseTest extends TestCase
     private function clearTables(PDO $db): void
     {
         $db->exec("DELETE FROM probe_cache");
+        $db->exec("DELETE FROM subtitle_cache");
         $db->exec("DELETE FROM links");
     }
 }

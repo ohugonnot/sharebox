@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . "/auth_check.php";
 /**
  * API netspeed_history — Historique réseau 7 jours (agrégé par heure)
  */
