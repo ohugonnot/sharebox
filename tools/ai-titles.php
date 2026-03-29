@@ -534,7 +534,7 @@ function verifyEntries(array $rows, PDO $db, string $aiBin, string $apiKey): voi
                 $result = ($pickedIdx !== null && isset($item['candidates'][$pickedIdx]))
                     ? $item['candidates'][$pickedIdx]
                     : $item['candidates'][0]; // fallback to first
-                $verified = ($pickedIdx !== null) ? 1 : 0;
+                $verified = 1; // always accept — fallback or pick, stop retrying
                 ai_log('AI picked | ' . $item['file'] . ' → ' . $result['title'] . ' (id=' . $result['id'] . ')' . ($pickedIdx === null ? ' FALLBACK' : ''));
                 $fixed++;
                 try {
