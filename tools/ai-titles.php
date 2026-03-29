@@ -132,15 +132,22 @@ if ($arg === '--daemon') {
 }
 
 // Lock for --cron to prevent parallel runs (crontab + web trigger)
+$adminLock = sys_get_temp_dir() . '/sharebox_tmdb_scan.lock';
 if ($arg === '--cron' || $arg === '--pending+verify') {
     $cronLock = __DIR__ . '/../data/sharebox_ai_cron.lock';
     @touch($cronLock); @chmod($cronLock, 0666);
     $cronFp = fopen($cronLock, 'w');
     if (!$cronFp || !flock($cronFp, LOCK_EX | LOCK_NB)) {
         ai_log('CRON skip — already running');
+        @unlink($adminLock);
         exit(0);
     }
+    @touch($adminLock);
 }
+// Cleanup admin lock on exit
+register_shutdown_function(function() use ($adminLock) {
+    @unlink($adminLock);
+});
 
 $runModes = match($arg) {
     '--cron' => ['--pending', '--verify'],
