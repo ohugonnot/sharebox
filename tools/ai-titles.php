@@ -146,7 +146,7 @@ foreach ($byDir as $dir => $names) {
             if ($match) {
                 $found++;
                 try {
-                    $db->prepare("UPDATE folder_posters SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 0, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now') WHERE rowid = :id")
+                    $db->prepare("UPDATE folder_posters SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 60, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now') WHERE rowid = :id")
                        ->execute([':id' => $rowId, ':u' => $match['poster'], ':i' => $match['id'], ':t' => $match['title'], ':o' => $match['overview'], ':y' => $match['year'], ':mt' => $match['type']]);
                 } catch (PDOException $e) {}
             } else {
@@ -176,7 +176,7 @@ foreach ($byDir as $dir => $names) {
 }
 
 // Auto-verify: entries in same dir with same tmdb_id (>3 = clearly same show)
-$unverified = $db->query("SELECT path, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
+$unverified = $db->query("SELECT path, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0 OR verified = 60)")->fetchAll();
 $byDirTmdb = [];
 foreach ($unverified as $row) {
     $dir = dirname($row['path']);
@@ -188,7 +188,7 @@ foreach ($byDirTmdb as $dir => $groups) {
     foreach ($groups as $tid => $paths) {
         if (count($paths) > 3) {
             foreach ($paths as $p) {
-                try { $db->prepare("UPDATE folder_posters SET verified = 1 WHERE path = :p")->execute([':p' => $p]); $autoVerified++; } catch (PDOException $e) {}
+                try { $db->prepare("UPDATE folder_posters SET verified = 85 WHERE path = :p")->execute([':p' => $p]); $autoVerified++; } catch (PDOException $e) {}
             }
         }
     }
