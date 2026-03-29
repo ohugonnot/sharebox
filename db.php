@@ -16,7 +16,22 @@ function get_db(): PDO {
     static $db = null;
     if ($db !== null) return $db;
 
-    $db = new PDO('sqlite:' . DB_PATH, null, null, [
+    if (!defined('DB_PATH')) {
+        throw new RuntimeException('DB_PATH not defined — config.php not loaded');
+    }
+
+    // Safety: auto-backup before opening if DB exists and is non-empty
+    $dbFile = DB_PATH;
+    if (file_exists($dbFile) && filesize($dbFile) > 4096) {
+        $backupDir = dirname($dbFile);
+        $backupFile = $backupDir . '/share.db.bak';
+        // Keep one rolling backup, refresh every 6 hours
+        if (!file_exists($backupFile) || (time() - filemtime($backupFile)) > 21600) {
+            @copy($dbFile, $backupFile);
+        }
+    }
+
+    $db = new PDO('sqlite:' . $dbFile, null, null, [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);

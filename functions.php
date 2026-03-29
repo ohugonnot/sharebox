@@ -160,12 +160,22 @@ function extract_title_year(string $name): array {
     if (preg_match('/\b((?:19|20)\d{2})\b/', $clean, $m)) {
         $year = (int)$m[1];
     }
+    // Remove season/saison markers before cutting to tech tags (they pollute TMDB search)
+    $clean = preg_replace('/\b(saison|season)\s*\d+[^a-z]*/i', ' ', $clean);
+    // Remove common non-title words that confuse TMDB
+    $clean = preg_replace('/\b(int[eé]grale|collection|custom|restored|remast(?:er)?ed|pack|films?\s+\d+\s+a\s+\d+|oav|mini\s+film)\b/i', ' ', $clean);
+    // Remove site tags like "Torrent911.com"
+    $clean = preg_replace('/\b\w+\.(com|org|net|eu|io)\b/i', '', $clean);
+    // Remove "HD Remasted" pattern
+    $clean = preg_replace('/\bHD\s+Remast\w*/i', '', $clean);
     // Couper au premier tag technique
     $title = preg_replace('/\b(multi|vff|vfq|truefrench|french|english|vostfr|subfrench|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|hdtv|dvdrip|hdrip|x264|x265|h264|h265|hevc|avc|xvid|divx|avi|mpeg|mpg|10bit|remux|2160p|1080p|720p|480p|uhd|4k|hdr|hdr10|dts|truehd|atmos|aac|ac3|flac|ddp?\d|proper|repack|internal|extended|unrated|directors?-?cut|complete|s\d{2}e?\d{0,2}|e\d{2,4})\b.*/i', '', $clean);
     // Si on a coupé à l'année, la retirer du titre aussi
     if ($year) {
         $title = preg_replace('/\b' . $year . '\b/', '', $title);
     }
+    // Clean trailing junk: dashes, numbers, stray words
+    $title = preg_replace('/\s*-\s*$/', '', $title);
     $title = preg_replace('/\s{2,}/', ' ', trim($title));
     // Fallback : le nom brut nettoyé
     if ($title === '') $title = trim($clean);
