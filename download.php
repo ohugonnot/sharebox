@@ -863,30 +863,18 @@ function togglePoster(btn, folderName) {
         updateEyeIcon(btn, false);
         selectPoster(folderName, '__none__', 0, '', '');
     } else {
-        // Supprimer le __none__ en base puis re-fetch TMDB
+        // Reset __none__ to NULL — daemon will re-fetch poster
         var url = BASE_URL + '?' + SUB_PATH + 'tmdb_set=1';
         fetch(url, {
             method: 'POST', credentials: 'same-origin',
             headers: {'Content-Type':'application/json'},
             body: JSON.stringify({folder: folderName, poster_url: null, tmdb_id: 0, title: '', overview: ''})
         }).then(function(){
-            // Re-fetch les posters (TMDB va re-chercher celui-ci)
-            return fetch(BASE_URL + '?' + SUB_PATH + 'posters=1', {credentials:'same-origin'});
-        }).then(function(r){ return r.json(); }).then(function(d){
-            if (!d.posters || !d.posters[folderName]) return;
-            var info = d.posters[folderName];
-            var poster = typeof info === 'string' ? info : info.poster;
-            var overview = typeof info === 'object' ? info.overview : null;
-            if (bg) { bg.style.backgroundImage = 'url(' + poster + ')'; }
-            card.classList.add('has-poster');
             updateEyeIcon(btn, true);
-            if (overview) {
-                var ov = document.createElement('div');
-                ov.className = 'grid-card-overview';
-                var ovT = document.createElement('div'); ovT.className = 'grid-card-overview-title'; ovT.textContent = folderName;
-                var ovX = document.createElement('div'); ovX.className = 'grid-card-overview-text'; ovX.textContent = overview;
-                ov.appendChild(ovT); ov.appendChild(ovX); card.appendChild(ov);
-            }
+            // Start polling — daemon will fill the poster in ~10s
+            fetchPosters.polls = 0;
+            fetchPosters.pending = true;
+            setTimeout(fetchPosters, 5000);
         }).catch(function(){});
     }
 }
