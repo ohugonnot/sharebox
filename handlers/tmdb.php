@@ -310,8 +310,10 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     try {
         if (!$posterUrl) {
-            poster_log('SET delete | ' . $folder . ' → clearing DB entry for re-fetch');
-            $db->prepare("DELETE FROM folder_posters WHERE path = :p")->execute([':p' => $fullPath]);
+            // Reset poster to NULL for re-fetch, keep folder_type
+            poster_log('SET reset | ' . $folder . ' → clearing poster for re-fetch');
+            $db->prepare("INSERT INTO folder_posters (path) VALUES (:p) ON CONFLICT(path) DO UPDATE SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, ai_attempts = 0, updated_at = datetime('now')")
+               ->execute([':p' => $fullPath]);
         } else {
             poster_log('SET poster | ' . $folder . ' → ' . ($title ?: '?') . ' (id=' . $tmdbId . ') ' . ($posterUrl === '__none__' ? '__none__' : 'poster') . ' verified=1');
             $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, verified) VALUES (:p, :u, :i, :t, :o, 1)
