@@ -1,0 +1,3 @@
+# /etc/sudoers.d/sharebox
+# Allows www-data (PHP) to manage seedbox users and rtorrent services
+www-data ALL=(root) NOPASSWD: /usr/local/bin/seedbox-adduser, /usr/local/bin/seedbox-deluser, /usr/bin/htpasswd, /usr/bin/systemctl start rtorrent@*, /usr/bin/systemctl stop rtorrent@*, /usr/bin/systemctl restart rtorrent@*, /usr/bin/systemctl status rtorrent@*, /usr/bin/systemctl is-active rtorrent@*

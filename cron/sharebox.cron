@@ -1,0 +1,13 @@
+# ShareBox cron jobs
+# Install: cp /var/www/sharebox/cron/sharebox.cron /etc/cron.d/sharebox
+# Or: sharebox-install-crons (auto)
+
+# Network speed recording (dashboard graph)
+* * * * * www-data php /var/www/sharebox/cron/record_netspeed.php
+
+
+# Cleanup stale HLS temp directories (older than 2h)
+*/15 * * * * www-data find /tmp -maxdepth 1 -name "hls_*" -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
+
+# Purge orphaned probe/subtitle cache entries (daily 4am)
+0 4 * * * www-data php -r "require '/var/www/sharebox/db.php'; purge_probe_cache(get_db());" 2>/dev/null

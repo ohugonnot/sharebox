@@ -289,6 +289,39 @@ function tmdb_build_queries(string $title): array {
 }
 
 /**
+ * Fetch a TMDB API URL with retry on 429/5xx and exponential backoff.
+ * @return array|null Decoded JSON or null on failure
+ */
+function tmdb_fetch(string $url, $ctx, int $maxRetries = 2): ?array {
+    for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
+        $resp = @file_get_contents($url, false, $ctx);
+        $status = 0;
+        if (isset($http_response_header[0]) && preg_match('/\s(\d{3})/', $http_response_header[0], $m)) {
+            $status = (int)$m[1];
+        }
+        if ($resp !== false && $status >= 200 && $status < 400) {
+            return json_decode($resp, true);
+        }
+        if ($attempt < $maxRetries) {
+            if ($status === 429) {
+                // Rate limited — check Retry-After or wait 2s
+                $wait = 2;
+                foreach ($http_response_header ?? [] as $h) {
+                    if (stripos($h, 'retry-after:') === 0) {
+                        $wait = min(5, max(1, (int)trim(substr($h, 12))));
+                    }
+                }
+                usleep($wait * 1000000);
+            } else {
+                // Network error or 5xx — exponential backoff
+                usleep(500000 * ($attempt + 1));
+            }
+        }
+    }
+    return null;
+}
+
+/**
  * Cherche un titre sur TMDB et retourne le premier résultat avec un poster.
  * @param string[] $endpoints Ex: ['multi', 'tv'] ou ['multi', 'tv', 'movie']
  * @return array{poster: string, id: int, title: string, overview: string}|null
@@ -300,10 +333,7 @@ function tmdb_search(string $title, ?int $year, string $apiKey, $ctx, array $end
         $encoded = urlencode($q);
         foreach ($endpoints as $ep) {
             $url = "https://api.themoviedb.org/3/search/{$ep}?api_key={$apiKey}&query={$encoded}&language=fr&page=1";
-            $resp = @file_get_contents($url, false, $ctx);
-            // Retry 1x si échec réseau (timeout, connexion refusée)
-            if ($resp === false) { usleep(500000); $resp = @file_get_contents($url, false, $ctx); }
-            $data = $resp ? json_decode($resp, true) : null;
+            $data = tmdb_fetch($url, $ctx);
             if ($data && !empty($data['results'])) {
                 foreach ($data['results'] as $r) {
                     if (!empty($r['poster_path'])) {
@@ -340,9 +370,7 @@ function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx,
         $urls[] = "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query=" . urlencode($title . ' ' . $year) . "&language=fr&page=1";
     }
     foreach ($urls as $searchUrl) {
-        $resp = @file_get_contents($searchUrl, false, $ctx);
-        if ($resp === false) { usleep(500000); $resp = @file_get_contents($searchUrl, false, $ctx); }
-        $data = $resp ? json_decode($resp, true) : null;
+        $data = tmdb_fetch($searchUrl, $ctx);
         if (!$data || empty($data['results'])) continue;
         foreach ($data['results'] as $r) {
             if (empty($r['poster_path']) || isset($seenIds[$r['id']])) continue;

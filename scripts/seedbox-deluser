@@ -1,0 +1,62 @@
+#!/bin/bash
+# Seedbox - Delete User Script
+
+set -e
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+if [ "$EUID" -ne 0 ]; then
+    echo "Ce script doit être lancé en root."
+    exit 1
+fi
+
+if [ -z "$1" ]; then
+    echo "Usage: seedbox-deluser <username> [--delete-data]"
+    exit 1
+fi
+
+USERNAME="$1"
+DELETE_DATA="$2"
+
+if ! id "$USERNAME" &>/dev/null; then
+    echo "Error: User '$USERNAME' does not exist."
+    exit 1
+fi
+
+echo "=== Removing seedbox user: $USERNAME ==="
+
+# Stop and disable rtorrent
+echo "[1/5] Stopping rtorrent..."
+systemctl stop "rtorrent@${USERNAME}.service" 2>/dev/null || true
+systemctl disable "rtorrent@${USERNAME}.service" 2>/dev/null || true
+rm -f "/etc/systemd/system/rtorrent@${USERNAME}.service"
+systemctl daemon-reload
+
+# Remove ruTorrent config + profile
+echo "[2/5] Removing ruTorrent config..."
+rm -rf "/var/www/rutorrent/conf/users/${USERNAME}"
+rm -rf "/var/www/rutorrent/share/users/${USERNAME}"
+rm -f "/var/log/rutorrent/${USERNAME}.log"
+
+# Remove from htpasswd
+echo "[3/5] Removing from nginx auth..."
+htpasswd -D /etc/nginx/.htpasswd "$USERNAME" 2>/dev/null || true
+
+# Remove socket
+echo "[4/5] Cleaning up..."
+rm -f "/var/run/rtorrent/${USERNAME}.sock"
+
+# Remove system user and optionally data
+echo "[5/5] Removing system user..."
+if [ "$DELETE_DATA" = "--delete-data" ]; then
+    echo "WARNING: Deleting all user data!"
+    userdel "$USERNAME" 2>/dev/null || true
+    rm -rf "/home/storage/users/${USERNAME}"
+else
+    userdel "$USERNAME" 2>/dev/null || true
+    echo "User data preserved at /home/storage/users/${USERNAME}"
+    echo "Use --delete-data to remove it."
+fi
+
+echo ""
+echo "=== User $USERNAME removed ==="

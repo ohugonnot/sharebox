@@ -76,7 +76,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 7; // bump when adding migrations
+    $targetVersion = 8; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -148,6 +148,20 @@ function get_db(): PDO {
             $db->query("ALTER TABLE folder_posters ADD COLUMN tmdb_type TEXT");
         }
         $db->query('PRAGMA user_version = 7');
+    }
+
+    if ($version < 8) {
+        // v8 : table users pour l'authentification PHP
+        $db->query("
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'admin',
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        ");
+        $db->query('PRAGMA user_version = 8');
     }
 
     if ($version < $targetVersion) {

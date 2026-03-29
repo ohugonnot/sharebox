@@ -1,0 +1,182 @@
+#!/bin/bash
+# Seedbox - Add User Script
+# Creates a complete seedbox user: system account, rtorrent, ruTorrent, ShareBox, SFTP
+
+set -e
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+if [ "$EUID" -ne 0 ]; then
+    echo "Ce script doit être lancé en root."
+    exit 1
+fi
+
+if [ -z "$1" ] || [ -z "$2" ]; then
+    echo "Usage: seedbox-adduser <username> <password>"
+    exit 1
+fi
+
+USERNAME="$1"
+PASSWORD="$2"
+STORAGE_BASE="/home/storage/users"
+USER_DIR="${STORAGE_BASE}/${USERNAME}"
+RTORRENT_SOCK="/var/run/rtorrent/${USERNAME}.sock"
+PORT_BASE=49152
+
+# Check if user already exists
+if id "$USERNAME" &>/dev/null; then
+    echo "Error: User '$USERNAME' already exists."
+    exit 1
+fi
+
+echo "=== Creating seedbox user: $USERNAME ==="
+
+# 1. Create system user (no login shell, in seedbox + www-data groups)
+echo "[1/7] Creating system user..."
+useradd -m -d "$USER_DIR" -s /bin/false -G seedbox,www-data "$USERNAME"
+echo "${USERNAME}:${PASSWORD}" | chpasswd
+
+# 2. Create directory structure
+echo "[2/7] Creating directory structure..."
+mkdir -p "${USER_DIR}/downloads"
+mkdir -p "${USER_DIR}/watch"
+mkdir -p "${USER_DIR}/share"
+mkdir -p "${USER_DIR}/.rtorrent.session"
+
+# SFTP chroot requires root ownership of the chroot dir
+chown root:root "$USER_DIR"
+chmod 755 "$USER_DIR"
+
+# User owns subdirectories
+chown "${USERNAME}:${USERNAME}" "${USER_DIR}/downloads"
+chown "${USERNAME}:${USERNAME}" "${USER_DIR}/watch"
+chown "${USERNAME}:${USERNAME}" "${USER_DIR}/share"
+chown "${USERNAME}:${USERNAME}" "${USER_DIR}/.rtorrent.session"
+
+# 3. Configure rtorrent
+echo "[3/7] Configuring rtorrent..."
+
+# Generate random peer port in range 49152-65535
+PEER_PORT=$((RANDOM % 16383 + PORT_BASE))
+
+cat > "${USER_DIR}/.rtorrent.rc" << RTRC
+# rtorrent config for ${USERNAME}
+
+system.daemon.set = true
+
+directory.default.set = ${USER_DIR}/downloads
+session.path.set = ${USER_DIR}/.rtorrent.session
+
+schedule2 = watch_directory, 5, 5, "load.start=${USER_DIR}/watch/*.torrent"
+
+network.port_range.set = ${PEER_PORT}-${PEER_PORT}
+network.port_random.set = no
+
+network.scgi.open_local = ${RTORRENT_SOCK}
+schedule2 = chmod_scgi_socket, 0, 0, "execute2=chmod,770,${RTORRENT_SOCK}"
+
+throttle.global_down.max_rate.set_kb = 0
+throttle.global_up.max_rate.set_kb = 0
+throttle.max_uploads.set = 100
+throttle.max_uploads.global.set = 250
+
+network.max_open_files.set = 600
+network.max_open_sockets.set = 300
+network.http.max_open.set = 50
+network.send_buffer.size.set = 4M
+network.receive_buffer.size.set = 4M
+pieces.memory.max.set = 2048M
+pieces.hash.on_completion.set = yes
+
+dht.mode.set = auto
+dht.port.set = ${PEER_PORT}
+protocol.pex.set = yes
+trackers.use_udp.set = yes
+
+encoding.add = UTF-8
+
+log.open_file = "rtorrent_log", ${USER_DIR}/downloads/.rtorrent.log
+log.add_output = "warn", "rtorrent_log"
+RTRC
+
+chown "${USERNAME}:${USERNAME}" "${USER_DIR}/.rtorrent.rc"
+touch "${USER_DIR}/downloads/.rtorrent.log"
+chown "${USERNAME}:${USERNAME}" "${USER_DIR}/downloads/.rtorrent.log"
+
+# 4. Create systemd service for rtorrent
+echo "[4/7] Creating systemd service..."
+cat > "/etc/systemd/system/rtorrent@${USERNAME}.service" << SVC
+[Unit]
+Description=rTorrent for ${USERNAME}
+After=network.target
+
+[Service]
+Type=simple
+User=${USERNAME}
+Group=${USERNAME}
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStartPre=/bin/bash -c 'rm -f ${RTORRENT_SOCK}'
+ExecStart=/usr/local/bin/rtorrent -n -o import=${USER_DIR}/.rtorrent.rc
+ExecStartPost=+/bin/bash -c 'sleep 1 && chown ${USERNAME}:www-data ${RTORRENT_SOCK} && chmod 770 ${RTORRENT_SOCK}'
+ExecStop=/bin/bash -c 'kill -s INT \$MAINPID'
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+SVC
+
+systemctl daemon-reload
+systemctl enable "rtorrent@${USERNAME}.service"
+systemctl start "rtorrent@${USERNAME}.service"
+
+# 5. Configure ruTorrent user
+echo "[5/7] Configuring ruTorrent..."
+mkdir -p "/var/www/rutorrent/conf/users/${USERNAME}"
+cat > "/var/www/rutorrent/conf/users/${USERNAME}/config.php" << RUCONF
+<?php
+\$scgi_port = 0;
+\$scgi_host = "unix://${RTORRENT_SOCK}";
+\$topDirectory = "${USER_DIR}/";
+\$log_file = "/var/log/rutorrent/${USERNAME}.log";
+RUCONF
+
+touch "/var/log/rutorrent/${USERNAME}.log"
+chown www-data:www-data "/var/log/rutorrent/${USERNAME}.log"
+
+# ruTorrent user profile directories
+mkdir -p "/var/www/rutorrent/share/users/${USERNAME}/torrents"
+mkdir -p "/var/www/rutorrent/share/users/${USERNAME}/settings"
+chown -R "${USERNAME}:www-data" "/var/www/rutorrent/share/users/${USERNAME}"
+chmod -R 770 "/var/www/rutorrent/share/users/${USERNAME}"
+
+# 6. Add to nginx htpasswd (ruTorrent) + ShareBox htpasswd
+echo "[6/7] Adding to auth files..."
+htpasswd -b /etc/nginx/.htpasswd "$USERNAME" "$PASSWORD"
+
+# 7. Wait and verify
+echo "[7/7] Verifying..."
+sleep 3
+if systemctl is-active --quiet "rtorrent@${USERNAME}.service"; then
+    echo ""
+    echo "=== User $USERNAME created successfully ==="
+    echo ""
+    echo "  ruTorrent:  https://dn40904.seedhost.eu/"
+    echo "  ShareBox:   https://dn40904.seedhost.eu/share/"
+    echo "  Login:      $USERNAME / $PASSWORD"
+    echo "  SFTP:       sftp://${USERNAME}@dn40904.seedhost.eu"
+    echo "  Peer port:  ${PEER_PORT}"
+    echo "  Directories:"
+    echo "    Downloads: ${USER_DIR}/downloads"
+    echo "    Watch:     ${USER_DIR}/watch"
+    echo "    Share:     ${USER_DIR}/share"
+    echo ""
+    echo "  rtorrent service: systemctl status rtorrent@${USERNAME}"
+    echo ""
+else
+    echo ""
+    echo "WARNING: rtorrent failed to start. Check: journalctl -u rtorrent@${USERNAME}"
+    echo "User created but rtorrent needs manual fix."
+    echo ""
+fi

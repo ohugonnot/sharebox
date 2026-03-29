@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . "/auth_check.php";
 /**
  * API sysinfo — CPU, RAM, Disk, Disk I/O
  * Retourne JSON, mesure en temps réel sur une fenêtre de 500ms.

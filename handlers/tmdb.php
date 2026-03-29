@@ -46,7 +46,7 @@ if (isset($_GET['posters'])) {
     $stmtTypeEarly->execute([':p' => $resolvedPath]);
     $typeRowEarly = $stmtTypeEarly->fetch();
     $isMoviesEarly = ($typeRowEarly && ($typeRowEarly['folder_type'] ?? 'series') === 'movies');
-    if (empty($folders) && !$isMoviesEarly) { echo json_encode(['posters' => [], 'remaining' => 0]); exit; }
+    if (empty($folders) && !$isMoviesEarly) { echo json_encode(['posters' => [], 'pending' => 0]); exit; }
 
     // ── Season subfolders : poster via parent tmdb_id + /tv/{id}/season/{n} ──
     // Le dossier parent (= $resolvedPath) doit avoir un tmdb_id en cache
@@ -242,7 +242,7 @@ if (isset($_GET['posters'])) {
             flock($lockFp, LOCK_UN);
             fclose($lockFp);
             $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
-            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --daemon >> /srv/share/data/ai-titles.log 2>&1 &';
+            $cmd = '/usr/bin/php ' . escapeshellarg($scriptPath) . ' --daemon >> ' . escapeshellarg(__DIR__ . '/../data/ai-titles.log') . ' 2>&1 &';
             @pclose(@popen($cmd, 'r'));
             poster_log('DAEMON started by web request');
         } else {
@@ -385,7 +385,7 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $lockFp = @fopen($lockFile, 'w');
         if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
             flock($lockFp, LOCK_UN); fclose($lockFp);
-            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --cron >> /srv/share/data/ai-titles.log 2>&1 &';
+            $cmd = '/usr/bin/php ' . escapeshellarg($scriptPath) . ' --cron >> ' . escapeshellarg(__DIR__ . '/../data/ai-titles.log') . ' 2>&1 &';
             @pclose(@popen($cmd, 'r'));
             poster_log('AI cron triggered by recheck');
         } else {

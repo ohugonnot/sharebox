@@ -1,10 +1,10 @@
-FROM php:8.2-fpm-alpine
+FROM php:8.3-fpm-alpine
 
 RUN apk add --no-cache \
         nginx \
         ffmpeg \
-        apache2-utils \
         bash \
+        curl \
         sqlite-dev \
     && docker-php-ext-install pdo_sqlite \
     && mkdir -p /data /media /run/nginx

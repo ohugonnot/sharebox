@@ -49,7 +49,7 @@ $db = get_db();
 $AI_BIN = trim(shell_exec('which claude') ?? '');
 if (!$AI_BIN) {
     // Fallback: check common install locations
-    foreach (['/home/copain/.local/bin/claude', '/usr/local/bin/claude'] as $p) {
+    foreach (['/usr/local/bin/claude', '/root/.claude/local/bin/claude'] as $p) {
         if (is_executable($p)) { $AI_BIN = $p; break; }
     }
 }

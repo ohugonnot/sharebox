@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . "/auth_check.php";
 /**
  * API speed — Débit réseau instantané
  * Cache 8s dans /tmp/sb_net_speed.json (diff des compteurs /proc/net/dev).

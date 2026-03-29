@@ -1,7 +1,7 @@
 <?php
 /**
  * Cron 1 min — Enregistre le débit réseau dans net_speed (SQLite).
- * Crontab : * * * * * www-data php /srv/share/cron/record_netspeed.php
+ * Crontab : * * * * * www-data php /var/www/sharebox/cron/record_netspeed.php
  *
  * Calcul : diff des compteurs /proc/net/dev sur 1 seconde -> MB/s.
  */

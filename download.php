@@ -898,18 +898,55 @@ function reloadAllPosters() {
 (function(){
     var cards = document.querySelectorAll('.grid-card[data-folder]');
     if (!cards.length) return;
+
+    // O(1) card lookup by folder name
+    var cardMap = {};
+    cards.forEach(function(c){ cardMap[c.getAttribute('data-folder')] = c; });
+
+    // Lazy loading via IntersectionObserver
+    var observer = window.IntersectionObserver ? new IntersectionObserver(function(entries){
+        entries.forEach(function(e){
+            if (!e.isIntersecting) return;
+            var card = e.target;
+            var url = card.getAttribute('data-poster');
+            if (!url) return;
+            var img = new Image();
+            img.onload = function(){
+                var bg = card.querySelector('.grid-card-bg');
+                if (bg) { bg.style.backgroundImage = 'url(' + url + ')'; }
+                card.classList.add('has-poster');
+                card.removeAttribute('data-poster');
+            };
+            img.src = url;
+            observer.unobserve(card);
+        });
+    }, {rootMargin: '200px'}) : null;
+
+    var MAX_POLLS = 20;
+    var SCHEDULE = [3000,5000,5000,10000,10000,30000,30000,30000];
+    fetchPosters.polls = 0;
+    fetchPosters.inFlight = false;
+    fetchPosters.pending = false;
+    fetchPosters.errors = 0;
+
     function fetchPosters() {
+        if (fetchPosters.inFlight) return;
+        if (fetchPosters.polls >= MAX_POLLS) return;
+        fetchPosters.inFlight = true;
         var url = BASE_URL + '?' + SUB_PATH + 'posters=1';
         fetch(url, {credentials:'same-origin'})
-            .then(function(r){ return r.json(); })
+            .then(function(r){
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
             .then(function(d){
+                fetchPosters.inFlight = false;
+                fetchPosters.errors = 0;
                 if (!d.posters) return;
                 Object.keys(d.posters).forEach(function(name){
                     var info = d.posters[name];
-                    var card = null;
-                    cards.forEach(function(c){ if (c.getAttribute('data-folder') === name) card = c; });
+                    var card = cardMap[name];
                     if (!card) return;
-                    // Dossier masqué → œil barré
                     if (info.hidden) {
                         var toggleBtn = card.querySelector('.grid-card-toggle');
                         if (toggleBtn) {
@@ -919,7 +956,6 @@ function reloadAllPosters() {
                         }
                         return;
                     }
-                    // En attente de vérification IA → badge overlay
                     if (info.pending_ai) {
                         if (!card.querySelector('.grid-card-ai-pending')) {
                             var ai = document.createElement('div');
@@ -937,17 +973,20 @@ function reloadAllPosters() {
                         }
                         return;
                     }
-                    // Si le badge AI pending existait, le retirer (IA a traité)
                     var oldAi = card.querySelector('.grid-card-ai-pending');
                     if (oldAi) oldAi.remove();
-                    var poster = typeof info === 'string' ? info : info.poster;
-                    var overview = typeof info === 'object' ? info.overview : null;
-                    var bg = card.querySelector('.grid-card-bg');
-                    if (bg) {
-                        bg.style.backgroundImage = 'url(' + poster + ')';
-                        card.classList.add('has-poster');
+                    var poster = info.poster;
+                    var overview = info.overview || null;
+                    if (poster) {
+                        if (observer) {
+                            card.setAttribute('data-poster', poster);
+                            observer.observe(card);
+                        } else {
+                            var bg = card.querySelector('.grid-card-bg');
+                            if (bg) { bg.style.backgroundImage = 'url(' + poster + ')'; }
+                            card.classList.add('has-poster');
+                        }
                     }
-                    // Ajouter l'overlay résumé au hover
                     if (overview && !card.querySelector('.grid-card-overview')) {
                         var ov = document.createElement('div');
                         ov.className = 'grid-card-overview';
@@ -963,17 +1002,23 @@ function reloadAllPosters() {
                     }
                 });
                 fetchPosters.pending = d.pending > 0;
-                if (d.pending > 0) {
-                    fetchPosters.polls = (fetchPosters.polls || 0) + 1;
-                    setTimeout(fetchPosters, fetchPosters.polls <= 3 ? 5000 : 30000);
+                if (d.pending > 0 && fetchPosters.polls < MAX_POLLS) {
+                    var delay = SCHEDULE[Math.min(fetchPosters.polls, SCHEDULE.length - 1)];
+                    fetchPosters.polls++;
+                    setTimeout(fetchPosters, delay);
                 }
             })
-            .catch(function(){});
+            .catch(function(e){
+                fetchPosters.inFlight = false;
+                fetchPosters.errors++;
+                if (fetchPosters.errors < 3) {
+                    setTimeout(fetchPosters, 5000 * fetchPosters.errors);
+                }
+            });
     }
     fetchPosters();
-    // Re-poll when tab becomes visible (mobile browsers throttle background timers)
     document.addEventListener('visibilitychange', function() {
-        if (!document.hidden && fetchPosters.pending) fetchPosters();
+        if (!document.hidden && fetchPosters.pending && !fetchPosters.inFlight) fetchPosters();
     });
 })();
 
