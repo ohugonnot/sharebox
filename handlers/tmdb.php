@@ -379,6 +379,18 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
                       verified = CASE WHEN poster_url = '__none__' THEN verified ELSE -1 END,
                       ai_attempts = CASE WHEN poster_url = '__none__' THEN ai_attempts ELSE 0 END")
            ->execute([':p' => $fullPath]);
+        // Launch cron if not already running
+        $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
+        $lockFile = __DIR__ . '/../data/sharebox_ai_cron.lock';
+        $lockFp = @fopen($lockFile, 'w');
+        if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
+            flock($lockFp, LOCK_UN); fclose($lockFp);
+            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --cron >> /srv/share/data/ai-titles.log 2>&1 &';
+            @pclose(@popen($cmd, 'r'));
+            poster_log('AI cron triggered by recheck');
+        } else {
+            if ($lockFp) fclose($lockFp);
+        }
         echo json_encode(['success' => true]);
     } catch (PDOException $e) {
         poster_log('DB error AI recheck | ' . $name . ' → ' . $e->getMessage());
