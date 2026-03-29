@@ -971,7 +971,8 @@ function reloadAllPosters() {
                     }
                 });
                 if (d.pending > 0) {
-                    setTimeout(fetchPosters, 30000);
+                    fetchPosters.polls = (fetchPosters.polls || 0) + 1;
+                    setTimeout(fetchPosters, fetchPosters.polls <= 3 ? 5000 : 30000);
                 }
             })
             .catch(function(){});
