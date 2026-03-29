@@ -232,6 +232,15 @@ function dir_size(string $path): int {
 /**
  * Vérifie qu'un chemin résolu reste dans le répertoire de base autorisé
  */
+/**
+ * Normalize a path to the filesystem encoding (NFD on Linux).
+ * Prevents NFC/NFD duplicates in DB by always using realpath() when possible.
+ */
+function normalize_path(string $path): string {
+    $real = realpath($path);
+    return $real !== false ? $real : $path;
+}
+
 function is_path_within(string|false $resolvedPath, string $basePath): bool {
     if ($resolvedPath === false) return false;
     $base = rtrim($basePath, '/');
