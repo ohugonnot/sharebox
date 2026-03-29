@@ -846,6 +846,9 @@ function setCardSize(val,btn){
 
 // ── Toggle poster on/off ──
 function togglePoster(btn, folderName) {
+    if (btn._toggling) return;
+    btn._toggling = true;
+    setTimeout(function(){ btn._toggling = false; }, 2000);
     var card = btn.closest('.grid-card');
     if (!card) return;
     var bg = card.querySelector('.grid-card-bg');
