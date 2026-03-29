@@ -240,6 +240,23 @@ if (isset($_GET['posters'])) {
     $stmtNull->execute([':prefix' => $resolvedPath . '/%']);
     $nullCount = (int)$stmtNull->fetchColumn();
 
+    // Ensure daemon is running (start if not)
+    if ($nullCount > 0) {
+        $lockFile = sys_get_temp_dir() . '/sharebox_ai_daemon.lock';
+        $lockFp = @fopen($lockFile, 'w');
+        if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
+            // Lock acquired = daemon not running, start it
+            flock($lockFp, LOCK_UN);
+            fclose($lockFp);
+            $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
+            $cmd = 'sudo -u copain /usr/bin/php ' . escapeshellarg($scriptPath) . ' --daemon >> /srv/share/data/ai-titles.log 2>&1 &';
+            @pclose(@popen($cmd, 'r'));
+            poster_log('DAEMON started by web request');
+        } else {
+            if ($lockFp) fclose($lockFp);
+        }
+    }
+
     poster_log('POSTERS response | result=' . count($result) . ' pending=' . $nullCount);
     echo json_encode(['posters' => $result, 'pending' => $nullCount]);
     exit;
