@@ -269,11 +269,12 @@ function processPendingEntries(array $rows, PDO $db, string $aiBin, string $apiK
     $getRowId = function(string $dir, string $name) use (&$rowIds): ?int {
         $key = $dir . chr(0) . $name;
         if (isset($rowIds[$key])) return $rowIds[$key];
-        $stripped = preg_replace('/[\x80-\xFF]+/', '', $name);
+        // Fuzzy: iconv transliterate to match NFC vs NFD
+        $norm = @iconv('UTF-8', 'ASCII//TRANSLIT', $name) ?: $name;
         foreach ($rowIds as $k => $id) {
             if (!str_starts_with($k, $dir . chr(0))) continue;
             $dbName = substr($k, strlen($dir) + 1);
-            if (preg_replace('/[\x80-\xFF]+/', '', $dbName) === $stripped) return $id;
+            if ((@iconv('UTF-8', 'ASCII//TRANSLIT', $dbName) ?: $dbName) === $norm) return $id;
         }
         return null;
     };
