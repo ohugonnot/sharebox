@@ -38,7 +38,8 @@ if (!$arg || $arg === '--help' || $arg === '-h') {
     echo "       php tools/ai-titles.php --all\n";
     echo "       php tools/ai-titles.php --pending   (cron: fix missing)\n";
     echo "       php tools/ai-titles.php --verify    (cron: fix bad matches)\n";
-    echo "       php tools/ai-titles.php --cron      (runs both)\n";
+    echo "       php tools/ai-titles.php --cron      (runs both once)\n";
+    echo "       php tools/ai-titles.php --daemon    (loop: poll DB every 10s)\n";
     exit(0);
 }
 
@@ -75,6 +76,70 @@ if ($arg === '--verify-path') {
         exit(1);
     }
     $arg = '--verify';
+}
+
+// ── Daemon mode: loop forever, poll DB every 10s ──
+if ($arg === '--daemon') {
+    $lockFile = sys_get_temp_dir() . '/sharebox_ai_daemon.lock';
+    $lockFp = fopen($lockFile, 'w');
+    if (!$lockFp || !flock($lockFp, LOCK_EX | LOCK_NB)) {
+        fwrite(STDERR, "Daemon already running\n");
+        exit(1);
+    }
+    ai_log('DAEMON start');
+    $idleLogged = false;
+    while (true) {
+        $didWork = false;
+
+        // 1. Pending: NULL entries needing TMDB fetch
+        $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
+        if (!empty($rows)) {
+            $didWork = true;
+            $idleLogged = false;
+            ai_log('DAEMON pending | ' . count($rows) . ' entries');
+            processPendingEntries($rows, $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
+        }
+
+        // 2. Verify: unverified entries with posters
+        if ($AI_BIN) {
+            $vRows = $db->query("SELECT path, poster_url, title, tmdb_id, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
+            if (!empty($vRows)) {
+                $didWork = true;
+                $idleLogged = false;
+                // Auto-verify duplicates first
+                $byDirTmdb = [];
+                foreach ($vRows as $row) {
+                    $dir = dirname($row['path']);
+                    $tid = $row['tmdb_id'] ?? 0;
+                    if ($tid === 0) continue;
+                    $byDirTmdb[$dir][$tid][] = $row['path'];
+                }
+                $autoVerified = 0;
+                $skipPaths = [];
+                foreach ($byDirTmdb as $dir => $tmdbGroups) {
+                    foreach ($tmdbGroups as $tid => $paths) {
+                        if (count($paths) > 3) {
+                            foreach ($paths as $p) {
+                                try { $db->prepare("UPDATE folder_posters SET verified = 1 WHERE path = :p")->execute([':p' => $p]); $autoVerified++; $skipPaths[$p] = true; } catch (PDOException $e) {}
+                            }
+                        }
+                    }
+                }
+                if ($autoVerified > 0) ai_log('DAEMON auto-verify | ' . $autoVerified . ' entries');
+                $vRows = array_filter($vRows, fn($r) => !isset($skipPaths[$r['path']]));
+                if (!empty($vRows)) {
+                    ai_log('DAEMON verify | ' . count($vRows) . ' entries');
+                    verifyEntries(array_values($vRows), $db, $AI_BIN, $TMDB_API_KEY);
+                }
+            }
+        }
+
+        if (!$didWork && !$idleLogged) {
+            ai_log('DAEMON idle', false);
+            $idleLogged = true;
+        }
+        sleep(10);
+    }
 }
 
 $runModes = match($arg) {
@@ -174,26 +239,6 @@ if ($mode === '--pending') {
 }
 
 } // end foreach $runModes
-
-// ── Re-check loop: if new NULLs appeared while we were working, run again ──
-if ($arg === '--cron' || $arg === '--pending+verify') {
-    $maxRetries = 3; // safety cap
-    for ($retry = 0; $retry < $maxRetries; $retry++) {
-        $newNulls = $db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchColumn();
-        if ((int)$newNulls === 0) break;
-        ai_log('RE-CHECK | ' . $newNulls . ' new NULL entries found, running again (retry ' . ($retry + 1) . ')');
-        // Re-run pending
-        $rows = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)")->fetchAll();
-        processPendingEntries($rows, $db, $AI_BIN, $TMDB_API_KEY, $VIDEO_EXTS);
-        // Re-run verify on new entries
-        if ($AI_BIN) {
-            $vRows = $db->query("SELECT path, poster_url, title, tmdb_id, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0)")->fetchAll();
-            if (!empty($vRows)) {
-                verifyEntries($vRows, $db, $AI_BIN, $TMDB_API_KEY);
-            }
-        }
-    }
-}
 
 /**
  * Log to stdout with timestamp (for ai-titles.log) and to poster.log.
