@@ -112,14 +112,21 @@ function get_stream_mime(string $ext): ?string {
  */
 function dir_has_video(string $path): bool {
     static $videoExts = ['mp4' => 1, 'm4v' => 1, 'mov' => 1, 'webm' => 1, 'mkv' => 1, 'avi' => 1];
-    $it = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::LEAVES_ONLY
-    );
-    foreach ($it as $f) {
-        if ($f->isFile() && isset($videoExts[strtolower($f->getExtension())])) {
-            return true;
+    try {
+        $it = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::LEAVES_ONLY
+        );
+        $it->setMaxDepth(3);
+        foreach ($it as $f) {
+            try {
+                if ($f->isFile() && isset($videoExts[strtolower($f->getExtension())])) {
+                    return true;
+                }
+            } catch (\UnexpectedValueException $e) { continue; }
         }
+    } catch (\UnexpectedValueException $e) {
+        return false;
     }
     return false;
 }
