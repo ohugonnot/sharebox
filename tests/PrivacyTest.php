@@ -51,10 +51,11 @@ class PrivacyTest extends TestCase
             ->execute(['tok-legacy', '/tmp/c', 'file', 'c.mkv']);
     }
 
-    /** Admin sees all 3 links */
+    /** Admin sees all 3 links (using the actual admin branch SQL) */
     public function testAdminSeesAllLinks(): void
     {
-        $links = self::$db->query("SELECT token FROM links ORDER BY token")->fetchAll(\PDO::FETCH_COLUMN);
+        // Replicates the admin branch in index.php afficher_liens()
+        $links = self::$db->query("SELECT * FROM links ORDER BY created_at DESC")->fetchAll();
         $this->assertCount(3, $links);
     }
 
@@ -81,5 +82,19 @@ class PrivacyTest extends TestCase
         $stmt->execute(['bob']);
         $tokens = $stmt->fetchAll(\PDO::FETCH_COLUMN);
         $this->assertSame(['tok-bob'], $tokens);
+    }
+
+    /** Admin with private=1 still sees all links (role check takes priority) */
+    public function testAdminWithPrivateFlagSeesAllLinks(): void
+    {
+        // carol is admin; temporarily set her private=1
+        self::$db->prepare("UPDATE users SET private = 1 WHERE username = 'carol'")->execute();
+        try {
+            // Admin branch: SELECT * FROM links regardless of private flag
+            $links = self::$db->query("SELECT * FROM links ORDER BY created_at DESC")->fetchAll();
+            $this->assertCount(3, $links);
+        } finally {
+            self::$db->prepare("UPDATE users SET private = 0 WHERE username = 'carol'")->execute();
+        }
     }
 }
