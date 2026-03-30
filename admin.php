@@ -441,6 +441,16 @@ if ($action !== '') {
             letter-spacing: -.01em;
         }
 
+        .accordion-toggle { cursor: pointer; user-select: none; }
+        .accordion-toggle:hover .card-title { color: var(--accent); }
+        .accordion-chevron {
+            font-size: .75rem;
+            color: var(--text-secondary);
+            transition: transform .2s;
+            flex-shrink: 0;
+        }
+        .accordion-chevron.open { transform: rotate(180deg); }
+
         /* ── Table ── */
         .user-table {
             width: 100%;
@@ -755,9 +765,9 @@ if ($action !== '') {
 
     <div id="tab-activite" class="tab-panel">
         <div class="card">
-            <div class="card-header">
+            <div class="card-header accordion-toggle" onclick="toggleAccordion('activite-recente')">
                 <div class="card-title">Activité récente</div>
-                <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+                <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center" onclick="event.stopPropagation()">
                     <input type="search" id="activity-search" placeholder="Rechercher un fichier…"
                            oninput="activitySearchDebounce()"
                            style="background:var(--bg-input);border:1px solid var(--border-strong);border-radius:6px;color:var(--text);padding:.3rem .6rem;font-size:.8rem;font-family:inherit;width:180px;outline:none">
@@ -766,28 +776,34 @@ if ($action !== '') {
                         <option value="">Tous les utilisateurs</option>
                     </select>
                 </div>
+                <span id="chevron-activite-recente" class="accordion-chevron">▾</span>
             </div>
-            <div id="activity-wrap" style="padding:.8rem 1.4rem">
-                <div class="empty-msg">Chargement…</div>
+            <div id="accordion-body-activite-recente">
+                <div id="activity-wrap" style="padding:.8rem 1.4rem">
+                    <div class="empty-msg">Chargement…</div>
+                </div>
+                <div id="activity-pagination" class="activity-pager"></div>
             </div>
-            <div id="activity-pagination" class="activity-pager"></div>
         </div>
 
         <div class="card" style="margin-top:1.5rem">
-            <div class="card-header">
+            <div class="card-header accordion-toggle" onclick="toggleAccordion('evenements-systeme')">
                 <div class="card-title">Événements système</div>
-                <select id="events-type-filter" onchange="reloadEvents()"
+                <select id="events-type-filter" onchange="reloadEvents(); event.stopPropagation()"
                         style="background:var(--bg-input);border:1px solid var(--border-strong);border-radius:6px;color:var(--text);padding:.3rem .6rem;font-size:.8rem;font-family:inherit">
                     <option value="">Tous</option>
                     <option value="connexions">Connexions</option>
                     <option value="liens">Liens</option>
                     <option value="admin">Admin</option>
                 </select>
+                <span id="chevron-evenements-systeme" class="accordion-chevron">▾</span>
             </div>
-            <div id="events-wrap" style="padding:.8rem 1.4rem">
-                <div class="empty-msg">Chargement…</div>
+            <div id="accordion-body-evenements-systeme">
+                <div id="events-wrap" style="padding:.8rem 1.4rem">
+                    <div class="empty-msg">Chargement…</div>
+                </div>
+                <div id="events-pagination" class="activity-pager"></div>
             </div>
-            <div id="events-pagination" class="activity-pager"></div>
         </div>
     </div>
 
@@ -1414,6 +1430,27 @@ async function loadEvents() {
     }
 }
 
+// ── Accordéons ──────────────────────────────────────────────────────────────
+function toggleAccordion(id) {
+    const body    = document.getElementById('accordion-body-' + id);
+    const chevron = document.getElementById('chevron-' + id);
+    if (!body) return;
+    const isOpen = body.style.display !== 'none';
+    body.style.display = isOpen ? 'none' : '';
+    chevron.classList.toggle('open', !isOpen);
+    localStorage.setItem('accordion_' + id, isOpen ? '0' : '1');
+}
+
+function initAccordion(id, defaultOpen) {
+    const body    = document.getElementById('accordion-body-' + id);
+    const chevron = document.getElementById('chevron-' + id);
+    if (!body) return;
+    const stored = localStorage.getItem('accordion_' + id);
+    const open   = stored !== null ? stored === '1' : defaultOpen;
+    body.style.display = open ? '' : 'none';
+    chevron.classList.toggle('open', open);
+}
+
 // ── Tabs ────────────────────────────────────────────────────────────────────
 let activityLoaded = false;
 
@@ -1434,6 +1471,8 @@ function switchTab(name) {
 loadUsers();
 loadTmdbStatus();
 <?php endif; ?>
+initAccordion('activite-recente', false);
+initAccordion('evenements-systeme', false);
 </script>
 </body>
 </html>
