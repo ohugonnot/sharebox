@@ -138,6 +138,7 @@ if ($action !== '') {
                     }
                 }
 
+                log_activity('admin_create_user', $_SESSION['sharebox_user'] ?? null, $_SERVER['REMOTE_ADDR'] ?? null, $username);
                 echo json_encode(['ok' => true, 'message' => "Utilisateur '$username' créé"]);
                 break;
 
@@ -179,6 +180,7 @@ if ($action !== '') {
                     }
                 }
 
+                log_activity('admin_edit_user', $_SESSION['sharebox_user'] ?? null, $_SERVER['REMOTE_ADDR'] ?? null, $user['username']);
                 echo json_encode(['ok' => true, 'message' => "Utilisateur '{$user['username']}' mis à jour"]);
                 break;
 
@@ -215,6 +217,7 @@ if ($action !== '') {
                 // Remove from ShareBox DB
                 $db->prepare("DELETE FROM users WHERE id = ?")->execute([$userId]);
 
+                log_activity('admin_delete_user', $_SESSION['sharebox_user'] ?? null, $_SERVER['REMOTE_ADDR'] ?? null, $user['username']);
                 echo json_encode(['ok' => true, 'message' => "Utilisateur '{$user['username']}' supprimé"]);
                 break;
 
