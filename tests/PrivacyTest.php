@@ -84,6 +84,33 @@ class PrivacyTest extends TestCase
         $this->assertSame(['tok-bob'], $tokens);
     }
 
+    /** Private user path restriction: is_path_within validates correctly */
+    public function testPrivateUserPathIsRestricted(): void
+    {
+        require_once __DIR__ . '/../functions.php';
+
+        $base = '/tmp/privtest/';
+        $userRoot = $base . 'bob/';
+
+        // Create directories so realpath() can resolve them (mirrors ctrl.php usage)
+        @mkdir($base . 'alice', 0700, true);
+        @mkdir($base . 'bob/subdir', 0700, true);
+
+        try {
+            // bob cannot access alice's folder
+            $this->assertFalse(is_path_within(realpath($base . 'alice/'), $userRoot));
+            // bob CAN access their own subfolder
+            $this->assertTrue(is_path_within(realpath($base . 'bob/subdir'), $userRoot));
+            // bob cannot escape via ..: realpath resolves to alice/, which is outside bob/
+            $this->assertFalse(is_path_within(realpath($base . 'bob/../alice/'), $userRoot));
+        } finally {
+            @rmdir($base . 'bob/subdir');
+            @rmdir($base . 'bob');
+            @rmdir($base . 'alice');
+            @rmdir($base);
+        }
+    }
+
     /** Admin with private=1 still sees all links (role check takes priority) */
     public function testAdminWithPrivateFlagSeesAllLinks(): void
     {

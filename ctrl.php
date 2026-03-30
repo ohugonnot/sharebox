@@ -18,7 +18,7 @@ if (PHP_SAPI !== 'cli' && !is_logged_in()) {
     exit;
 }
 
-$action = $_GET['action'] ?? '';
+$action = $_GET['cmd'] ?? '';
 
 // Validation CSRF pour les requêtes POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -42,9 +42,17 @@ try {
          */
         case 'browse':
             $relPath = $_GET['path'] ?? '';
-            $fullPath = realpath(BASE_PATH . $relPath);
 
-            if (!is_path_within($fullPath, BASE_PATH)) {
+            // Private users are restricted to their own subfolder
+            $browseBase = BASE_PATH;
+            if (($_SESSION['sharebox_role'] ?? '') !== 'admin'
+                && (int)($_SESSION['sharebox_private'] ?? 0) === 1) {
+                $browseBase = BASE_PATH . ($_SESSION['sharebox_user'] ?? '') . '/';
+            }
+
+            $fullPath = realpath($browseBase . $relPath);
+
+            if (!is_path_within($fullPath, $browseBase)) {
                 http_response_code(403);
                 echo json_encode(['error' => 'Chemin interdit']);
                 exit;
