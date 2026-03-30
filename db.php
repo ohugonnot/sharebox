@@ -94,7 +94,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 13; // bump when adding migrations
+    $targetVersion = 14; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -231,6 +231,22 @@ function get_db(): PDO {
         $db->query("CREATE INDEX IF NOT EXISTS idx_dl_logs_link ON download_logs(link_id)");
         $db->query("CREATE INDEX IF NOT EXISTS idx_dl_logs_ts ON download_logs(downloaded_at DESC)");
         $db->query('PRAGMA user_version = 13');
+    }
+
+    if ($version < 14) {
+        // v14 : logs d'activité système (connexions, liens, actions admin)
+        $db->query("
+            CREATE TABLE IF NOT EXISTS activity_logs (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type  TEXT NOT NULL,
+                username    TEXT,
+                ip          TEXT,
+                details     TEXT,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        ");
+        $db->query("CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity_logs(created_at DESC)");
+        $db->query('PRAGMA user_version = 14');
     }
 
     if ($version < $targetVersion) {

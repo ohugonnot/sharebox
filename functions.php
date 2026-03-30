@@ -534,7 +534,24 @@ function change_password_for_user(PDO $db, string $username, string $currentPwd,
  * Retourne le nombre de liens supprimés.
  */
 function purge_expired_links(PDO $db): int {
-    $stmt = $db->prepare("DELETE FROM links WHERE expires_at IS NOT NULL AND expires_at < datetime('now')");
+    $stmt = $db->prepare("DELETE FROM links WHERE expires_at IS NOT NULL AND expires_at != '' AND expires_at < datetime('now')");
     $stmt->execute();
     return $stmt->rowCount();
+}
+
+/**
+ * Enregistre un événement dans activity_logs.
+ * Silencieux en cas d'erreur.
+ */
+function log_activity(string $event_type, ?string $username, ?string $ip, ?string $details): void
+{
+    try {
+        $db = get_db();
+        $db->prepare(
+            "INSERT INTO activity_logs (event_type, username, ip, details) VALUES (?, ?, ?, ?)"
+        )->execute([$event_type, $username, $ip, $details]);
+        $db->exec("DELETE FROM activity_logs WHERE created_at < datetime('now', '-90 days')");
+    } catch (\Throwable $e) {
+        // Silencieux — les logs ne doivent pas casser l'app
+    }
 }

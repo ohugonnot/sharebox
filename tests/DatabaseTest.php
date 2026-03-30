@@ -136,7 +136,7 @@ class DatabaseTest extends TestCase
     {
         $db = get_db();
         $version = (int) $db->query('PRAGMA user_version')->fetchColumn();
-        $this->assertSame(13, $version);
+        $this->assertSame(14, $version);
     }
 
     public function testUsersTableHasPrivateColumn(): void
