@@ -772,6 +772,23 @@ if ($action !== '') {
             </div>
             <div id="activity-pagination" class="activity-pager"></div>
         </div>
+
+        <div class="card" style="margin-top:1.5rem">
+            <div class="card-header">
+                <div class="card-title">Événements système</div>
+                <select id="events-type-filter" onchange="reloadEvents()"
+                        style="background:var(--bg-input);border:1px solid var(--border-strong);border-radius:6px;color:var(--text);padding:.3rem .6rem;font-size:.8rem;font-family:inherit">
+                    <option value="">Tous</option>
+                    <option value="connexions">Connexions</option>
+                    <option value="liens">Liens</option>
+                    <option value="admin">Admin</option>
+                </select>
+            </div>
+            <div id="events-wrap" style="padding:.8rem 1.4rem">
+                <div class="empty-msg">Chargement…</div>
+            </div>
+            <div id="events-pagination" class="activity-pager"></div>
+        </div>
     </div>
 
     <div id="tab-systeme" class="tab-panel">
@@ -1327,6 +1344,76 @@ async function soumettreChangementMdp() {
     }
 }
 
+// ── Événements système ──────────────────────────────────────────────────────
+let eventsOffset = 0;
+
+function reloadEvents() {
+    eventsOffset = 0;
+    loadEvents();
+}
+
+function eventsPage(dir) {
+    eventsOffset = Math.max(0, eventsOffset + dir * 15);
+    loadEvents();
+}
+
+async function loadEvents() {
+    const wrap  = document.getElementById('events-wrap');
+    const pager = document.getElementById('events-pagination');
+    const typeFilter = document.getElementById('events-type-filter')?.value ?? '';
+    wrap.innerHTML  = '<div class="empty-msg">Chargement…</div>';
+    pager.innerHTML = '';
+    try {
+        const res = await api('activity_events', { type_filter: typeFilter, offset: eventsOffset });
+        if (!res.logs || res.logs.length === 0) {
+            wrap.innerHTML = '<div class="empty-msg">Aucun événement enregistré.</div>';
+            return;
+        }
+
+        const badgeStyle = {
+            login_ok:           'background:#1a3a2a;color:#3ddc84',
+            login_fail:         'background:#3a1a1a;color:#e8453c',
+            link_create:        'background:#1a2a3a;color:#4a9eff',
+            link_delete:        'background:#3a2a1a;color:#f0a030',
+            admin_create_user:  'background:#2a1a3a;color:#c084fc',
+            admin_edit_user:    'background:#2a1a3a;color:#c084fc',
+            admin_delete_user:  'background:#3a1a2a;color:#f472b6',
+        };
+
+        let html = '<table class="user-table"><thead><tr>';
+        html += '<th>Type</th><th class="col-user">Utilisateur</th><th class="col-ip">IP</th><th>Détails</th><th>Date</th>';
+        html += '</tr></thead><tbody>';
+        for (const log of res.logs) {
+            const d  = log.created_at ? new Date(log.created_at + 'Z').toLocaleString('fr-FR') : '-';
+            const bs = badgeStyle[log.event_type] ?? 'background:#222;color:#aaa';
+            html += '<tr>';
+            html += '<td><span style="' + bs + ';font-size:.72rem;padding:.15rem .45rem;border-radius:4px;white-space:nowrap">' + esc(log.event_type) + '</span></td>';
+            html += '<td class="col-user" style="font-size:.8rem">' + esc(log.username ?? '—') + '</td>';
+            html += '<td class="col-ip" style="font-family:monospace;font-size:.78rem">' + esc(log.ip ?? '—') + '</td>';
+            html += '<td style="font-size:.8rem;color:var(--text-dim);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(log.details ?? '') + '">' + esc(log.details ?? '—') + '</td>';
+            html += '<td style="font-size:.78rem;color:var(--text-dim)">' + esc(d) + '</td>';
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+        wrap.innerHTML = html;
+
+        const total = res.total ?? 0;
+        const limit = res.limit ?? 15;
+        const page  = Math.floor(eventsOffset / limit) + 1;
+        const pages = Math.ceil(total / limit);
+        let pagerHtml = '<span style="margin-right:auto">' + total + ' événement' + (total > 1 ? 's' : '') + '</span>';
+        if (pages > 1) {
+            pagerHtml +=
+                '<button class="pager-btn" onclick="eventsPage(-1)"' + (page <= 1 ? ' disabled' : '') + '>← Préc.</button>' +
+                '<span>Page ' + page + ' / ' + pages + '</span>' +
+                '<button class="pager-btn" onclick="eventsPage(1)"' + (page >= pages ? ' disabled' : '') + '>Suiv. →</button>';
+        }
+        pager.innerHTML = pagerHtml;
+    } catch (e) {
+        wrap.innerHTML = '<div class="empty-msg" style="color:var(--red)">Erreur de chargement.</div>';
+    }
+}
+
 // ── Tabs ────────────────────────────────────────────────────────────────────
 let activityLoaded = false;
 
@@ -1338,6 +1425,7 @@ function switchTab(name) {
     if (name === 'activite' && !activityLoaded) {
         activityLoaded = true;
         populateActivityUserFilter().then(() => loadRecentActivity());
+        loadEvents();
     }
 }
 
