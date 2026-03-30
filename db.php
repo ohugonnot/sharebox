@@ -24,13 +24,6 @@ function get_db(): PDO {
     $backupFile = dirname($dbFile) . '/share.db.bak';
     $dbExisted = file_exists($dbFile) && filesize($dbFile) > 0;
 
-    // Safety: auto-backup before opening if DB has data
-    if ($dbExisted && filesize($dbFile) > 4096) {
-        if (!file_exists($backupFile) || (time() - filemtime($backupFile)) > 21600) {
-            @copy($dbFile, $backupFile);
-        }
-    }
-
     // Safety: if DB is empty/missing but backup has data, restore it
     if (!$dbExisted && file_exists($backupFile) && filesize($backupFile) > 4096) {
         @copy($backupFile, $dbFile);
@@ -50,6 +43,16 @@ function get_db(): PDO {
         'PRAGMA busy_timeout=10000',
     ];
     foreach ($statements as $s) $db->query($s);
+
+    // Safety: auto-backup après ouverture (max 1h).
+    // Checkpoint WAL d'abord : sans ça, @copy capture share.db sans share.db-wal
+    // et le backup manque toutes les écritures non encore fusionnées dans le main file.
+    if ($dbExisted && filesize($dbFile) > 4096) {
+        if (!file_exists($backupFile) || (time() - filemtime($backupFile)) > 3600) {
+            $db->exec('PRAGMA wal_checkpoint(PASSIVE)');
+            @copy($dbFile, $backupFile);
+        }
+    }
 
     // Crée les tables si elles n'existent pas
     $db->query("
@@ -97,7 +100,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 8; // bump when adding migrations
+    $targetVersion = 10; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -183,6 +186,24 @@ function get_db(): PDO {
             )
         ");
         $db->query('PRAGMA user_version = 8');
+    }
+
+    if ($version < 9) {
+        // v9 : mode privé par utilisateur
+        $cols = array_column($db->query("PRAGMA table_info(users)")->fetchAll(), 'name');
+        if (!in_array('private', $cols, true)) {
+            $db->query("ALTER TABLE users ADD COLUMN private INTEGER NOT NULL DEFAULT 0");
+        }
+        $db->query('PRAGMA user_version = 9');
+    }
+
+    if ($version < 10) {
+        // v10 : attribution des liens à leur créateur
+        $cols = array_column($db->query("PRAGMA table_info(links)")->fetchAll(), 'name');
+        if (!in_array('created_by', $cols, true)) {
+            $db->query("ALTER TABLE links ADD COLUMN created_by TEXT REFERENCES users(username)");
+        }
+        $db->query('PRAGMA user_version = 10');
     }
 
     if ($version < $targetVersion) {
