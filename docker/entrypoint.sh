@@ -31,6 +31,12 @@ fi
 mkdir -p /data /run/nginx
 chown www-data:www-data /data
 
+# ── Restore DB from backup if missing (e.g. first start after volume wipe) ──
+if [ ! -f /data/share.db ] && [ -f /data/share.db.bak ]; then
+    cp /data/share.db.bak /data/share.db
+    echo "ShareBox DB: restored from backup"
+fi
+
 # ── Create admin user in DB (PHP session auth) ──────────────────────────────
 export SHAREBOX_ADMIN_USER="$ADMIN_USER"
 export SHAREBOX_ADMIN_PASS="$ADMIN_PASS"
