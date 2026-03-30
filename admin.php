@@ -1459,7 +1459,7 @@ function switchTab(name) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('tab-' + name)?.classList.add('active');
     document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`)?.classList.add('active');
-    history.replaceState(null, '', '?tab=' + name);
+    location.hash = name;
     if (name === 'activite' && !activityLoaded) {
         activityLoaded = true;
         populateActivityUserFilter().then(() => loadRecentActivity());
@@ -1468,7 +1468,7 @@ function switchTab(name) {
 }
 
 // Init
-const _urlTab = new URLSearchParams(location.search).get('tab');
+const _urlTab = location.hash.slice(1);
 if (_urlTab && document.getElementById('tab-' + _urlTab)) {
     switchTab(_urlTab);
 }
