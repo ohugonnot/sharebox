@@ -2,6 +2,11 @@
 
 Autonomous scan — match pending, verify existing, fix false positives with confidence scores. No user interaction. Every decision must be taken autonomously using the rules below.
 
+> **Principe fondamental — règles génériques, exemples illustratifs :**
+> Les règles ci-dessous s'appliquent à **tout type de contenu, tout nommage, toute langue**.
+> Les noms cités en exemple (Disney, Naruto, Gundam…) sont uniquement là pour illustrer le raisonnement — ils ne sont pas des cas spéciaux hardcodés.
+> À chaque décision, raisonne sur la **structure et le contenu** du dossier, pas sur des mots-clés figés.
+
 ## Instructions
 
 You are an autonomous TMDB poster matcher for ShareBox. Execute all steps without asking questions. You have full authority to update the database.
@@ -22,8 +27,13 @@ These rules are deterministic — apply them first, no ambiguity:
 
 **Skip immediately with `poster_url='__none__', verified=100`:**
 - Game/ROM directories: folder name contains Nintendo, GameCube, PlayStation, 3DS, Wii, ROM, ISO, MAME, Arcade
-- Multi-title collection: folder name contains `COLLECTION` with a year range like `(2010-2024)`, or `Pack` grouping multiple distinct series (e.g. "Pack Gundam"), or `Intégrale` of a studio (e.g. "Intégrale Disney 95 Animations")
-- Collection of films by a single franchise where individual films have distinct TMDB entries (e.g. "Pokemon Films 1 à 22") → skip the container, not the individual films
+- Container of **multiple unrelated titles** (different franchises, different genres, different authors) — e.g. a studio's complete works, a thematic pack spanning unrelated series, a year-range collection. Signals: large number count in the name, studio/label name prominent, year range. Distinguish from a single-series container (one franchise, one show, one author) which should be searched normally.
+
+**Use a representative poster for mono-franchise containers (verified=70):**
+- A folder whose subfolders all share the **same franchise/universe** → do NOT skip. Look at what's inside: if all subentries point to the same tmdb_id or the same franchise, extract the common name, search TMDB, pick the most iconic result (prefer earliest/original entry), use its poster at **70%**.
+- If the subfolders are heterogeneous (different unrelated franchises, genres, years) → `__none__`.
+- The detection is based on content, not folder name keywords — a folder named anything can qualify.
+- **Only update the parent folder's own row** — never touch child entries. Use `WHERE path = ?` with the exact parent path, never `LIKE '%parent%'` which would cascade to all children and overwrite their individual posters.
 
 **Use parent context instead of standalone search:**
 - If folder name is a bare season/episode code (`S01`, `S02`, `Saison 3`, `Season 4`, `E001`, etc.) with no other title → do NOT search TMDB with that code. Instead:
@@ -39,13 +49,16 @@ Before doing anything, check if the PHP worker is running:
 
 ```bash
 LOCK=/var/www/sharebox/data/sharebox_tmdb_cron.lock
-# Lock exists and is recent (< 15 min) → worker is running
-if [ -f "$LOCK" ] && [ $(( $(date +%s) - $(stat -c %Y "$LOCK") )) -lt 900 ]; then
-  echo "Worker running, waiting..."; sleep 5; # re-check
+if [ -f "$LOCK" ]; then
+  AGE=$(( $(date +%s) - $(stat -c %Y "$LOCK") ))
+  PID=$(cat "$LOCK" 2>/dev/null)
+  if [ "$AGE" -lt 900 ] && kill -0 "$PID" 2>/dev/null; then
+    sleep 10 # worker alive, wait silently
+  fi
 fi
 ```
 
-Repeat until lock is gone or stale. Only proceed once worker has finished — otherwise Phase 2 fixes get overwritten by the worker's checkpoint.
+A lock file with a dead PID is stale — proceed immediately. Only wait if PID is confirmed alive. Repeat until worker done — otherwise Phase 2 fixes get overwritten by the worker's checkpoint.
 
 ### Phase 1: Match pending entries
 
@@ -73,6 +86,12 @@ Repeat until lock is gone or stale. Only proceed once worker has finished — ot
 
 ### Phase 2: Verify existing matches (false positive detection)
 
+**Structural contradiction check (runs regardless of verified score):**
+Before processing the normal queue, query entries where `folder_type='movies'` AND `tmdb_type='tv'` — this is a structural contradiction (a folder of standalone films cannot be a TV series). Re-examine these unconditionally, even if verified=90+:
+- Search TMDB for the correct movie entry (try the folder/filename title with `search/movie`)
+- If a matching movie or collection exists → update `tmdb_type='movie'`, new poster, appropriate confidence
+- If no movie match but the content is clearly compilations/films of a TV universe → use a TMDB collection if it exists, else keep `tmdb_type='movie'` with the best available poster
+
 Query ALL entries where `(verified < 90 OR verified IS NULL OR verified = 0)` and `poster_url IS NOT NULL AND poster_url != '__none__'`.
 
 > The PHP worker sets `verified=60` (raw match) or `verified=70` (bulk auto-verify). All provisional — skill has final authority and sets ≥90%.
@@ -88,7 +107,7 @@ Query ALL entries where `(verified < 90 OR verified IS NULL OR verified = 0)` an
 - Matched title is a short film / music video / special but folder is a long series → wrong, re-search
 - Matched `media_type=movie` but directory has season subfolders → re-search as `tv`
 - Matched TMDB entry is a sequel/spin-off of the obvious title → search explicitly for original, compare episode counts
-- TMDB models sequel as Season N of original series → NOT a false positive, keep tmdb_id
+- **TMDB models sequel as Season N of original series → NOT a false positive, keep tmdb_id, fetch season-specific poster.** Before re-searching, always check the season list of the matched entry (`GET /tv/{tmdb_id}`) — if the sequel title appears as a season name, it's correct.
 - Episode count fits original series (not sequel) → fix to original
 
 **After verification:**
@@ -135,14 +154,37 @@ $db = get_db();
 
 > **Critical**: DB is owned by www-data. Running as root creates WAL frames that www-data's checkpoint won't merge properly — writes appear committed but get silently lost on the next checkpoint. Always use `sudo -u www-data`.
 
+### Critical: SQL string quoting in PHP
+
+**Always use single quotes for SQL string literals.** In SQLite, double-quoted values are treated as column identifiers, not strings — the update silently does nothing (or sets NULL).
+
+```php
+// WRONG — SQLite treats "__none__" as a column name, update silently fails:
+$db->exec("UPDATE folder_posters SET poster_url=\"__none__\" WHERE ...");
+
+// CORRECT — single quotes inside double-quoted PHP string:
+$db->exec("UPDATE folder_posters SET poster_url='__none__' WHERE ...");
+
+// CORRECT — prepared statement (always safe):
+$db->prepare("UPDATE folder_posters SET poster_url=? WHERE path=?")->execute(['__none__', $path]);
+```
+
+**When matching paths with special characters** (spaces, brackets, accents, double spaces): always retrieve the exact path from DB first with a LIKE query before doing exact-match updates, to avoid silent mismatches:
+```php
+$row = $db->query("SELECT path FROM folder_posters WHERE path LIKE '%Disney%Intégrale%'")->fetch();
+// use $row['path'] for the exact UPDATE
+```
+
 ### DB update patterns
 
 ```sql
 -- Match found:
 UPDATE folder_posters SET poster_url=?, tmdb_id=?, title=?, overview=?, tmdb_year=?, tmdb_type=?, verified=SCORE, updated_at=datetime('now') WHERE path=?
 
--- Skip (non-media / collection):
-UPDATE folder_posters SET poster_url='__none__', verified=100, updated_at=datetime('now') WHERE path=?
+-- Skip (automatic — skill decision, re-examinable):
+UPDATE folder_posters SET poster_url='__none__', verified=80, updated_at=datetime('now') WHERE path=?
+-- Skip (human decision via UI — never touch):
+-- poster_url='__none__', verified=100  ← set only by the web interface
 
 -- No match (worker already tried once — skill sets match_attempts=1 to mark as attempted):
 UPDATE folder_posters SET match_attempts = 1 WHERE path=?
@@ -169,8 +211,11 @@ UPDATE folder_posters SET folder_type = 'movies' WHERE path = ?
 - **Always run after the worker, never during.** Check lock file first (Phase 0). The worker does `wal_checkpoint(TRUNCATE)` at the end — running concurrently risks WAL contention between processes (root CLI vs www-data), which can cause writes to appear lost.
 - **Never ask the user anything.** Every ambiguous case has a rule above — apply it.
 - **Never delete data.** Only UPDATE. Use `__none__` for explicit skips.
-- **Respect `__none__`** — if `poster_url = '__none__'`, never overwrite.
-- **Never re-verify `verified >= 90`** — final. Only reprocess `verified = -1`, `verified < 90`, or `verified IS NULL`.
+- **`__none__` source distinction** — two kinds of skip, treated differently:
+  - `poster_url = '__none__'` + `verified = 100` → **human decision**, never touch under any circumstances
+  - `poster_url = '__none__'` + `verified = 80` → **automatic skip** (set by skill or worker), re-examinable if rules evolve or content changes
+  - When the skill sets `__none__`, always use `verified = 80`, never 100. Only the user (via the web interface) sets 100.
+- **Never re-verify `verified >= 90`** — final. Only reprocess `verified = -1`, `verified < 90`, or `verified IS NULL`. **Exception**: `folder_type='movies'` + `tmdb_type='tv'` is a structural contradiction — always re-examine regardless of verified score.
 - **Poster URL format**: `https://image.tmdb.org/t/p/w300/POSTER_PATH`
 - **Rate limit**: 50ms between TMDB API calls
 

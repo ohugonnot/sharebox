@@ -37,6 +37,7 @@
 
 /* Empêche tout débordement horizontal de casser la mise en page mobile */
 html, body { overflow-x: hidden; }
+html { scrollbar-gutter: stable; }
 
 body {
     font-family: var(--font-sans);

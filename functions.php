@@ -182,6 +182,8 @@ function extract_title_year(string $name): array {
     if ($title === '') $title = trim($clean);
     // Un code saison/épisode nu (S01, E03...) n'est pas un titre exploitable
     if (preg_match('/^[SE]\d{1,2}$/i', $title)) $title = '';
+    // Nom de dossier générique sans contexte → pas de titre exploitable
+    if (preg_match('/^(movies?|films?|s[eé]ries?|videos?|specials?|extras?|bonus|ova|oav)$/i', $title)) $title = '';
     return ['title' => $title, 'year' => $year];
 }
 

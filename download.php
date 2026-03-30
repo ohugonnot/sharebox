@@ -1027,8 +1027,18 @@ function reloadAllPosters() {
             });
     }
     fetchPosters();
+    // Safety poll toutes les 30s — capte les nouveaux téléchargements sans recharger la page
+    setInterval(function() {
+        if (!document.hidden && !fetchPosters.inFlight) {
+            fetchPosters.polls = 0;
+            fetchPosters();
+        }
+    }, 30000);
     document.addEventListener('visibilitychange', function() {
-        if (!document.hidden && fetchPosters.pending && !fetchPosters.inFlight) fetchPosters();
+        if (!document.hidden && !fetchPosters.inFlight) {
+            fetchPosters.polls = 0;
+            fetchPosters();
+        }
     });
 })();
 
