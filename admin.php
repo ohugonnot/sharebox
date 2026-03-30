@@ -279,6 +279,31 @@ if ($action !== '') {
                 echo json_encode(['ok' => true, 'deleted' => $deleted]);
                 break;
 
+            case 'recent_activity':
+                $db = get_db();
+                $userFilter = trim($input['user'] ?? '');
+                if ($userFilter !== '') {
+                    $stmt = $db->prepare("
+                        SELECT dl.id, l.name, l.token, l.created_by, dl.ip, dl.downloaded_at
+                        FROM download_logs dl
+                        JOIN links l ON dl.link_id = l.id
+                        WHERE l.created_by = ?
+                        ORDER BY dl.downloaded_at DESC
+                        LIMIT 50
+                    ");
+                    $stmt->execute([$userFilter]);
+                } else {
+                    $stmt = $db->query("
+                        SELECT dl.id, l.name, l.token, l.created_by, dl.ip, dl.downloaded_at
+                        FROM download_logs dl
+                        JOIN links l ON dl.link_id = l.id
+                        ORDER BY dl.downloaded_at DESC
+                        LIMIT 50
+                    ");
+                }
+                echo json_encode(['logs' => $stmt->fetchAll()]);
+                break;
+
             default:
                 http_response_code(400);
                 echo json_encode(['error' => 'Action inconnue']);
@@ -626,6 +651,18 @@ if ($action !== '') {
         <div style="padding:1rem 1.4rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap">
             <button class="btn btn-ghost" id="purge-btn" onclick="purgeExpired()">Purger les liens expirés</button>
             <span id="purge-result" style="font-size:.82rem;color:var(--text-dim)"></span>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:1.5rem">
+        <div class="card-header">
+            <div class="card-title">Activité récente</div>
+            <select id="activity-user-filter" onchange="loadRecentActivity()" style="background:var(--bg-input);border:1px solid var(--border-strong);border-radius:6px;color:var(--text);padding:.3rem .6rem;font-size:.8rem;font-family:inherit">
+                <option value="">Tous les utilisateurs</option>
+            </select>
+        </div>
+        <div id="activity-wrap" style="padding:.8rem 1.4rem">
+            <div class="empty-msg">Chargement...</div>
         </div>
     </div>
 
@@ -1016,9 +1053,53 @@ async function purgeExpired() {
     }
 }
 
+async function loadRecentActivity() {
+    const wrap = document.getElementById('activity-wrap');
+    const userFilter = document.getElementById('activity-user-filter')?.value ?? '';
+    try {
+        const res = await api('recent_activity', { user: userFilter });
+        if (!res.logs || res.logs.length === 0) {
+            wrap.innerHTML = '<div class="empty-msg" style="padding:.8rem 0">Aucune activité enregistrée.</div>';
+            return;
+        }
+        let html = '<table class="user-table"><thead><tr>';
+        html += '<th>Fichier</th><th>Token</th><th>User</th><th>IP</th><th>Date</th>';
+        html += '</tr></thead><tbody>';
+        for (const log of res.logs) {
+            const d = log.downloaded_at ? new Date(log.downloaded_at + 'Z').toLocaleString('fr-FR') : '-';
+            html += '<tr>';
+            html += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + log.name + '">' + log.name + '</td>';
+            html += '<td><a href="/dl/' + log.token + '" target="_blank" style="color:var(--blue);font-size:.8rem">' + log.token + '</a></td>';
+            html += '<td style="font-size:.8rem;color:var(--text-dim)">' + (log.created_by || '—') + '</td>';
+            html += '<td style="font-family:monospace;font-size:.8rem">' + log.ip + '</td>';
+            html += '<td style="font-size:.78rem;color:var(--text-dim)">' + d + '</td>';
+            html += '</tr>';
+        }
+        html += '</tbody></table>';
+        wrap.innerHTML = html;
+    } catch (_) {
+        wrap.innerHTML = '<div class="empty-msg">Erreur de chargement.</div>';
+    }
+}
+
+async function populateActivityUserFilter() {
+    const sel = document.getElementById('activity-user-filter');
+    if (!sel) return;
+    const res = await api('list_users');
+    if (!res.users) return;
+    for (const u of res.users) {
+        const opt = document.createElement('option');
+        opt.value = u.username;
+        opt.textContent = u.username;
+        sel.appendChild(opt);
+    }
+}
+
 // Init
 loadUsers();
 loadTmdbStatus();
+loadRecentActivity();
+populateActivityUserFilter();
 </script>
 </body>
 </html>

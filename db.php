@@ -94,7 +94,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 12; // bump when adding migrations
+    $targetVersion = 13; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -216,6 +216,21 @@ function get_db(): PDO {
             $db->query("ALTER TABLE links ADD COLUMN max_downloads INTEGER DEFAULT NULL");
         }
         $db->query('PRAGMA user_version = 12');
+    }
+
+    if ($version < 13) {
+        // v13 : logs de téléchargement (30 jours de rétention)
+        $db->query("
+            CREATE TABLE IF NOT EXISTS download_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                link_id INTEGER NOT NULL,
+                ip TEXT NOT NULL,
+                downloaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+        ");
+        $db->query("CREATE INDEX IF NOT EXISTS idx_dl_logs_link ON download_logs(link_id)");
+        $db->query("CREATE INDEX IF NOT EXISTS idx_dl_logs_ts ON download_logs(downloaded_at DESC)");
+        $db->query('PRAGMA user_version = 13');
     }
 
     if ($version < $targetVersion) {
