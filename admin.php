@@ -789,6 +789,11 @@ function formatBytes(bytes) {
     return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
 }
 
+function esc(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
 function toast(msg, ok = true) {
     document.querySelectorAll('.toast').forEach(t => t.remove());
     const el = document.createElement('div');
@@ -1068,11 +1073,11 @@ async function loadRecentActivity() {
         for (const log of res.logs) {
             const d = log.downloaded_at ? new Date(log.downloaded_at + 'Z').toLocaleString('fr-FR') : '-';
             html += '<tr>';
-            html += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + log.name + '">' + log.name + '</td>';
-            html += '<td><a href="/dl/' + log.token + '" target="_blank" style="color:var(--blue);font-size:.8rem">' + log.token + '</a></td>';
-            html += '<td style="font-size:.8rem;color:var(--text-dim)">' + (log.created_by || '—') + '</td>';
-            html += '<td style="font-family:monospace;font-size:.8rem">' + log.ip + '</td>';
-            html += '<td style="font-size:.78rem;color:var(--text-dim)">' + d + '</td>';
+            html += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(log.name) + '">' + esc(log.name) + '</td>';
+            html += '<td><a href="/dl/' + esc(log.token) + '" target="_blank" style="color:var(--blue);font-size:.8rem">' + esc(log.token) + '</a></td>';
+            html += '<td style="font-size:.8rem;color:var(--text-dim)">' + (log.created_by ? esc(log.created_by) : '—') + '</td>';
+            html += '<td style="font-family:monospace;font-size:.8rem">' + esc(log.ip) + '</td>';
+            html += '<td style="font-size:.78rem;color:var(--text-dim)">' + esc(d) + '</td>';
             html += '</tr>';
         }
         html += '</tbody></table>';
