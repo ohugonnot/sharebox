@@ -152,6 +152,8 @@ try {
                 ':max_downloads' => $maxDownloads,
             ]);
 
+            log_activity('link_create', $createdBy, $_SERVER['REMOTE_ADDR'] ?? null, $name . ' [' . $token . ']');
+
             echo json_encode([
                 'success' => true,
                 'token' => $token,
@@ -182,11 +184,12 @@ try {
             }
 
             $db = get_db();
+            $fetchLink = $db->prepare("SELECT name, created_by FROM links WHERE id = ?");
+            $fetchLink->execute([$id]);
+            $linkRow = $fetchLink->fetch();
+
             if (($_SESSION['sharebox_role'] ?? '') !== 'admin') {
-                $owner = $db->prepare("SELECT created_by FROM links WHERE id = ?");
-                $owner->execute([$id]);
-                $row = $owner->fetch();
-                if ($row && $row['created_by'] !== null && $row['created_by'] !== ($_SESSION['sharebox_user'] ?? '')) {
+                if ($linkRow && $linkRow['created_by'] !== null && $linkRow['created_by'] !== ($_SESSION['sharebox_user'] ?? '')) {
                     http_response_code(403);
                     echo json_encode(['error' => 'Vous ne pouvez supprimer que vos propres liens']);
                     exit;
@@ -194,6 +197,8 @@ try {
             }
             $stmt = $db->prepare("DELETE FROM links WHERE id = :id");
             $stmt->execute([':id' => $id]);
+
+            log_activity('link_delete', $_SESSION['sharebox_user'] ?? null, $_SERVER['REMOTE_ADDR'] ?? null, $linkRow ? $linkRow['name'] : "id:$id");
 
             echo json_encode(['success' => true]);
             break;
