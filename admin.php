@@ -60,6 +60,27 @@ if ($action !== '') {
                         $u['rtorrent_status'] = null;
                         $u['has_system_user'] = false;
                     }
+
+                    // Quota disque
+                    $u['disk_used'] = null;
+                    if (defined('BASE_PATH')) {
+                        $userDir = rtrim(BASE_PATH, '/') . '/' . $u['username'];
+                        if (is_dir($userDir)) {
+                            $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+                            $proc = proc_open(['/usr/bin/du', '-sb', $userDir], $descriptors, $pipes);
+                            if (is_resource($proc)) {
+                                stream_set_timeout($pipes[1], 5);
+                                $out = fgets($pipes[1]);
+                                fclose($pipes[0]);
+                                fclose($pipes[1]);
+                                fclose($pipes[2]);
+                                proc_close($proc);
+                                if ($out !== false && preg_match('/^(\d+)/', $out, $m)) {
+                                    $u['disk_used'] = (int)$m[1];
+                                }
+                            }
+                        }
+                    }
                 }
                 echo json_encode(['users' => $users, 'seedbox_mode' => $seedboxMode]);
                 break;
@@ -723,6 +744,14 @@ async function api(action, data = null) {
     return r.json();
 }
 
+function formatBytes(bytes) {
+    if (bytes === null || bytes === undefined) return '—';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
 function toast(msg, ok = true) {
     document.querySelectorAll('.toast').forEach(t => t.remove());
     const el = document.createElement('div');
@@ -755,7 +784,7 @@ async function loadUsers() {
     let html = '<table class="user-table"><thead><tr>';
     html += '<th>Utilisateur</th><th>Rôle</th>';
     if (sbMode) html += '<th>rtorrent</th>';
-    html += '<th>Créé le</th><th>Actions</th>';
+    html += '<th>Disque</th><th>Créé le</th><th>Actions</th>';
     html += '</tr></thead><tbody>';
 
     for (const u of res.users) {
@@ -784,6 +813,9 @@ async function loadUsers() {
             }
             html += '<td>' + statusBadge + '</td>';
         }
+
+        const diskStr = formatBytes(u.disk_used);
+        html += '<td style="font-size:.8rem;color:var(--text-dim)">' + diskStr + '</td>';
 
         html += '<td style="font-size:.8rem;color:var(--text-dim)">' + date + '</td>';
         html += '<td><div class="actions">';
