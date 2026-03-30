@@ -705,6 +705,15 @@ if ($action !== '') {
                 <option value="admin">Administrateur</option>
             </select>
         </div>
+        <div class="modal-field">
+            <label style="display:flex;align-items:flex-start;gap:.6rem;cursor:pointer;font-size:.85rem;color:var(--text)">
+                <input type="checkbox" id="create-private" style="margin-top:.2rem;accent-color:var(--accent);width:14px;height:14px;flex-shrink:0;cursor:pointer">
+                <span>
+                    Mode privé
+                    <span style="display:block;font-size:.72rem;color:var(--text-dim);margin-top:.1rem">Ne voit que son propre contenu et ses propres liens</span>
+                </span>
+            </label>
+        </div>
         <div class="modal-actions">
             <button class="btn btn-ghost" onclick="closeModals()">Annuler</button>
             <button class="btn btn-accent" onclick="createUser()">Créer</button>
@@ -731,6 +740,15 @@ if ($action !== '') {
                 <option value="user">Utilisateur</option>
                 <option value="admin">Administrateur</option>
             </select>
+        </div>
+        <div class="modal-field">
+            <label style="display:flex;align-items:flex-start;gap:.6rem;cursor:pointer;font-size:.85rem;color:var(--text)">
+                <input type="checkbox" id="edit-private" style="margin-top:.2rem;accent-color:var(--accent);width:14px;height:14px;flex-shrink:0;cursor:pointer">
+                <span>
+                    Mode privé
+                    <span style="display:block;font-size:.72rem;color:var(--text-dim);margin-top:.1rem">Ne voit que son propre contenu et ses propres liens</span>
+                </span>
+            </label>
         </div>
         <div class="modal-actions">
             <button class="btn btn-ghost" onclick="closeModals()">Annuler</button>
@@ -810,13 +828,14 @@ async function loadUsers() {
         const roleBadge = u.role === 'admin'
             ? '<span class="badge badge-admin">admin</span>'
             : '<span class="badge badge-user">user</span>';
+        const privBadge = u.private ? '<span class="badge" style="background:rgba(240,160,48,.12);color:var(--accent);border:1px solid rgba(240,160,48,.2);font-size:.65rem">privé</span>' : '';
 
         const date = u.created_at ? new Date(u.created_at + 'Z').toLocaleDateString('fr-FR') : '-';
         const uJson = JSON.stringify(u).replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
         html += '<tr>';
         html += '<td class="username-cell">' + u.username + '</td>';
-        html += '<td>' + roleBadge + '</td>';
+        html += '<td>' + roleBadge + (u.private ? ' ' + privBadge : '') + '</td>';
 
         if (sbMode) {
             let statusBadge;
@@ -858,6 +877,7 @@ function openCreateModal() {
     document.getElementById('create-username').value = '';
     document.getElementById('create-password').value = '';
     document.getElementById('create-role').value = 'user';
+    document.getElementById('create-private').checked = false;
     document.getElementById('modal-create').classList.add('open');
     document.getElementById('create-username').focus();
 }
@@ -866,6 +886,7 @@ async function createUser() {
     const username = document.getElementById('create-username').value.trim();
     const password = document.getElementById('create-password').value;
     const role = document.getElementById('create-role').value;
+    const isPrivate = document.getElementById('create-private').checked;
 
     if (!username || !password) { toast('Remplissez tous les champs', false); return; }
 
@@ -873,7 +894,7 @@ async function createUser() {
     btn.textContent = 'Création...';
     btn.disabled = true;
 
-    const res = await api('create_user', { username, password, role });
+    const res = await api('create_user', { username, password, role, private: isPrivate });
 
     btn.textContent = 'Créer';
     btn.disabled = false;
@@ -890,6 +911,7 @@ function openEditModal(user) {
     document.getElementById('edit-username').value = user.username;
     document.getElementById('edit-password').value = '';
     document.getElementById('edit-role').value = user.role;
+    document.getElementById('edit-private').checked = !!user.private;
     document.getElementById('modal-edit').classList.add('open');
 }
 
@@ -897,8 +919,9 @@ async function updateUser() {
     const id = parseInt(document.getElementById('edit-id').value);
     const password = document.getElementById('edit-password').value;
     const role = document.getElementById('edit-role').value;
+    const isPrivate = document.getElementById('edit-private').checked;
 
-    const res = await api('update_user', { id, password, role });
+    const res = await api('update_user', { id, password, role, private: isPrivate });
     if (res.error) { toast(res.error, false); return; }
     toast(res.message);
     closeModals();
