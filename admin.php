@@ -789,7 +789,7 @@ if ($action !== '') {
         <div class="card" style="margin-top:1.5rem">
             <div class="card-header accordion-toggle" onclick="toggleAccordion('evenements-systeme')">
                 <div class="card-title">Événements système</div>
-                <select id="events-type-filter" onchange="reloadEvents(); event.stopPropagation()"
+                <select id="events-type-filter" onchange="reloadEvents()" onclick="event.stopPropagation()"
                         style="background:var(--bg-input);border:1px solid var(--border-strong);border-radius:6px;color:var(--text);padding:.3rem .6rem;font-size:.8rem;font-family:inherit">
                     <option value="">Tous</option>
                     <option value="connexions">Connexions</option>
