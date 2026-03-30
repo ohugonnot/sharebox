@@ -598,6 +598,11 @@ function plog(tag, msg, data) {
     }
 
     // ── Probe → sélecteurs de piste ──────────────────────────────────────────
+    function normLang(l) {
+        var m = {fre:'fra',fr:'fra',en:'eng',jp:'jpn',jap:'jpn',de:'deu',ger:'deu',es:'spa',sp:'spa',it:'ita',pt:'por'};
+        l = (l||'').toLowerCase();
+        return m[l] !== undefined ? m[l] : l;
+    }
     function applyProbe(d) {
         if (!d) return;
         if (d.isMP4) S.isMP4 = true;
@@ -615,14 +620,26 @@ function plog(tag, msg, data) {
                 hint.textContent = 'Changement de piste...'; hint.className = 'player-hint transcoding';
                 saveCfg(); startStream(realTime());
             });
+            if (!savedCfg) {
+                var prefAudio = lsGet('pref_audio', '');
+                if (prefAudio) {
+                    for (var ai = 0; ai < d.audio.length; ai++) {
+                        if (normLang(d.audio[ai].lang) === normLang(prefAudio)) {
+                            S.audioIdx = d.audio[ai].index; sel.value = d.audio[ai].index; break;
+                        }
+                    }
+                }
+            }
             trackBar.append(lbl, sel);
         }
         if (d.videoHeight > 0) {
             S.videoHeight = d.videoHeight;
             var qs = [480, 576, 720, 1080].filter(function(q) { return q <= S.videoHeight; });
             if (qs.length) {
-                if (!savedCfg || savedCfg.quality <= 0 || qs.indexOf(savedCfg.quality) === -1)
-                    S.quality = qs.indexOf(720) !== -1 ? 720 : qs[qs.length - 1];
+                if (!savedCfg || savedCfg.quality <= 0 || qs.indexOf(savedCfg.quality) === -1) {
+                    var prefQ = parseInt(lsGet('pref_quality', '720'), 10);
+                    S.quality = qs.indexOf(prefQ) !== -1 ? prefQ : (qs.indexOf(720) !== -1 ? 720 : qs[qs.length - 1]);
+                }
                 hasControls = true;
                 var lbl3 = document.createElement('label'); lbl3.textContent = 'Qualit\u00E9 :';
                 var sel3 = document.createElement('select'); sel3.className = 'track-select';
@@ -650,6 +667,18 @@ function plog(tag, msg, data) {
             if (!isNaN(savedSubIdx) && savedSubIdx >= 0 && savedSubIdx < d.subtitles.length) {
                 selSub.value = savedSubIdx;
                 Subs.load(savedSubIdx);
+            } else {
+                // player_sub_* n'est écrit que si l'utilisateur a choisi explicitement un sous-titre.
+                // Absent = jamais choisi → appliquer la préférence globale (intentionnellement asymétrique
+                // avec pref_audio qui vérifie !savedCfg, car savedCfg.audio est toujours écrit dès le 1er stream).
+                var prefSubs = lsGet('pref_subs', 'off');
+                if (prefSubs && prefSubs !== 'off') {
+                    for (var si = 0; si < d.subtitles.length; si++) {
+                        if (normLang(d.subtitles[si].lang) === normLang(prefSubs)) {
+                            selSub.value = si; Subs.load(si); break;
+                        }
+                    }
+                }
             }
             selSub.addEventListener('change', function() {
                 var idx = parseInt(selSub.value, 10);
