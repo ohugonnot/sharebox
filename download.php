@@ -167,8 +167,13 @@ if (is_file($resolvedPath)) {
     // Téléchargement direct via nginx
     stream_log('DOWNLOAD | ' . basename($resolvedPath) . ' | size=' . format_taille(filesize($resolvedPath)));
     if (!$subPath) {
-        $stmt = $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id");
-        $stmt->execute([':id' => $link['id']]);
+        $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id")
+           ->execute([':id' => $link['id']]);
+        $db->prepare("INSERT INTO download_logs (link_id, ip) VALUES (?, ?)")
+           ->execute([(int)$link['id'], $_SERVER['REMOTE_ADDR'] ?? '']);
+        if (random_int(1, 100) === 1) {
+            $db->exec("DELETE FROM download_logs WHERE downloaded_at < datetime('now', '-30 days')");
+        }
     }
 
     $encodedPath = XACCEL_PREFIX . str_replace('%2F', '/', rawurlencode($resolvedPath));
@@ -185,8 +190,13 @@ if (is_file($resolvedPath)) {
 if (is_dir($resolvedPath)) {
     stream_log('BROWSE | token=' . $token . ' | ' . ($subPath ?: '(root)') . ' | ' . basename($resolvedPath));
     if (!$subPath) {
-        $stmt = $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id");
-        $stmt->execute([':id' => $link['id']]);
+        $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id")
+           ->execute([':id' => $link['id']]);
+        $db->prepare("INSERT INTO download_logs (link_id, ip) VALUES (?, ?)")
+           ->execute([(int)$link['id'], $_SERVER['REMOTE_ADDR'] ?? '']);
+        if (random_int(1, 100) === 1) {
+            $db->exec("DELETE FROM download_logs WHERE downloaded_at < datetime('now', '-30 days')");
+        }
     }
 
     // TMDB poster endpoints (search, batch, set)
