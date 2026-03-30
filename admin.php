@@ -332,7 +332,7 @@ if ($action !== '') {
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <link rel="stylesheet" href="/share/style.css?v=<?= filemtime(__DIR__ . '/style.css') ?>">
     <meta name="csrf-token" content="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
-    <title>ShareBox — Panneau</title>
+    <title>ShareBox — Admin</title>
     <style>
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -700,7 +700,7 @@ if ($action !== '') {
 <body>
 
 <div class="app">
-    <?php $header_subtitle = 'Panneau'; $header_back = true; include __DIR__ . '/header.php'; ?>
+    <?php $header_subtitle = 'Administration'; $header_back = true; include __DIR__ . '/header.php'; ?>
 
     <nav class="admin-tabs">
         <?php if ($isAdmin): ?>

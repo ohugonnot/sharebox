@@ -1,7 +1,7 @@
 <?php
 /** Shared app header — include after require_once auth.php
  *  $header_subtitle : string  — subtitle text (default: 'Secure file sharing & streaming')
- *  $header_back     : bool    — show '← Fichiers' instead of 'Panneau' link (default: false)
+ *  $header_back     : bool    — show '← Fichiers' instead of 'Admin' link (default: false)
  */
 $header_subtitle ??= 'Secure file sharing & streaming';
 $header_back     ??= false;
@@ -26,7 +26,7 @@ $header_back     ??= false;
         <?php if ($header_back): ?>
             <a href="/share/" style="color:var(--text-secondary);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">← Fichiers</a>
         <?php else: ?>
-            <a href="/share/admin.php" style="color:var(--accent);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid rgba(240,160,48,.2);border-radius:var(--radius-sm)">Panneau</a>
+            <a href="/share/admin.php" style="color:var(--accent);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid rgba(240,160,48,.2);border-radius:var(--radius-sm)">Admin</a>
         <?php endif; ?>
         <span style="color:var(--text-secondary);font-size:.85rem"><?= htmlspecialchars(get_current_user_name() ?? '') ?></span>
         <a href="/share/logout.php" style="color:var(--text-muted);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">Logout</a>
