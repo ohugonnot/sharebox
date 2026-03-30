@@ -1,7 +1,7 @@
 <?php
 /**
- * ShareBox - Admin panel (user management + seedbox control)
- * Requires admin role.
+ * ShareBox — Panneau utilisateur (gestion compte + administration)
+ * Accessible à tous les utilisateurs connectés. Onglets admin réservés aux admins.
  */
 
 require_once __DIR__ . '/auth.php';
@@ -332,7 +332,7 @@ if ($action !== '') {
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <link rel="stylesheet" href="/share/style.css?v=<?= filemtime(__DIR__ . '/style.css') ?>">
     <meta name="csrf-token" content="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
-    <title>ShareBox — Admin</title>
+    <title>ShareBox — Panneau</title>
     <style>
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -700,7 +700,7 @@ if ($action !== '') {
 <body>
 
 <div class="app">
-    <?php $header_subtitle = 'Administration'; $header_back = true; include __DIR__ . '/header.php'; ?>
+    <?php $header_subtitle = 'Panneau'; $header_back = true; include __DIR__ . '/header.php'; ?>
 
     <nav class="admin-tabs">
         <?php if ($isAdmin): ?>
