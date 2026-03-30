@@ -94,7 +94,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 14; // bump when adding migrations
+    $targetVersion = 16; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -247,6 +247,30 @@ function get_db(): PDO {
         ");
         $db->query("CREATE INDEX IF NOT EXISTS idx_activity_ts ON activity_logs(created_at DESC)");
         $db->query('PRAGMA user_version = 14');
+    }
+
+    if ($version < 15) {
+        // v15 : note TMDB (vote_average) pour badge sur les cartes grille
+        $cols = array_column($db->query("PRAGMA table_info(folder_posters)")->fetchAll(), 'name');
+        if (!in_array('tmdb_rating', $cols, true)) {
+            $db->query("ALTER TABLE folder_posters ADD COLUMN tmdb_rating REAL");
+        }
+        $db->query('PRAGMA user_version = 15');
+    }
+
+    if ($version < 16) {
+        // v16 : historique de visionnage par utilisateur
+        $db->query("
+            CREATE TABLE IF NOT EXISTS watch_history (
+                user         TEXT NOT NULL,
+                path         TEXT NOT NULL,
+                watched_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                duration_sec INTEGER,
+                PRIMARY KEY (user, path)
+            )
+        ");
+        $db->query("CREATE INDEX IF NOT EXISTS idx_watch_user ON watch_history(user)");
+        $db->query('PRAGMA user_version = 16');
     }
 
     if ($version < $targetVersion) {
