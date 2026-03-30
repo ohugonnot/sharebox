@@ -857,7 +857,13 @@ async function soumettreChangementMdp() {
             errDiv.textContent = data.error;
             errDiv.style.display = 'block';
         } else {
-            fermerModalCompte();
+            errDiv.style.color = 'var(--green, #3ddc84)';
+            errDiv.textContent = 'Mot de passe modifié.';
+            errDiv.style.display = 'block';
+            setTimeout(() => {
+                fermerModalCompte();
+                errDiv.style.color = 'var(--red, #e8453c)';
+            }, 1200);
         }
     } catch (_) {
         errDiv.textContent = 'Erreur de connexion';
