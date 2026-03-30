@@ -43,7 +43,7 @@ function get_db(): PDO {
     // et le backup manque toutes les écritures non encore fusionnées dans le main file.
     if ($dbExisted && filesize($dbFile) > 4096) {
         if (!file_exists($backupFile) || (time() - filemtime($backupFile)) > 3600) {
-            $db->exec('PRAGMA wal_checkpoint(PASSIVE)');
+            $db->exec('PRAGMA wal_checkpoint(TRUNCATE)');
             @copy($dbFile, $backupFile);
         }
     }
