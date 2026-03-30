@@ -1457,8 +1457,9 @@ let activityLoaded = false;
 function switchTab(name) {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('tab-' + name).classList.add('active');
-    event.currentTarget.classList.add('active');
+    document.getElementById('tab-' + name)?.classList.add('active');
+    document.querySelector(`.tab-btn[onclick="switchTab('${name}')"]`)?.classList.add('active');
+    history.replaceState(null, '', '?tab=' + name);
     if (name === 'activite' && !activityLoaded) {
         activityLoaded = true;
         populateActivityUserFilter().then(() => loadRecentActivity());
@@ -1467,6 +1468,10 @@ function switchTab(name) {
 }
 
 // Init
+const _urlTab = new URLSearchParams(location.search).get('tab');
+if (_urlTab && document.getElementById('tab-' + _urlTab)) {
+    switchTab(_urlTab);
+}
 <?php if ($isAdmin): ?>
 loadUsers();
 loadTmdbStatus();
