@@ -151,9 +151,12 @@ class DatabaseTest extends TestCase
         $db = get_db();
         $db->prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'user')")
            ->execute(['testprivuser', password_hash('pass', PASSWORD_BCRYPT)]);
-        $row = $db->query("SELECT private FROM users WHERE username = 'testprivuser'")->fetch();
-        $this->assertSame(0, (int)$row['private']);
-        $db->prepare("DELETE FROM users WHERE username = ?")->execute(['testprivuser']);
+        try {
+            $row = $db->query("SELECT private FROM users WHERE username = 'testprivuser'")->fetch();
+            $this->assertSame(0, (int)$row['private']);
+        } finally {
+            $db->prepare("DELETE FROM users WHERE username = ?")->execute(['testprivuser']);
+        }
     }
 
     public function testLinksTableHasCreatedByColumn(): void

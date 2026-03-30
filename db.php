@@ -201,7 +201,7 @@ function get_db(): PDO {
         // v10 : attribution des liens à leur créateur
         $cols = array_column($db->query("PRAGMA table_info(links)")->fetchAll(), 'name');
         if (!in_array('created_by', $cols, true)) {
-            $db->query("ALTER TABLE links ADD COLUMN created_by TEXT REFERENCES users(username)");
+            $db->query("ALTER TABLE links ADD COLUMN created_by TEXT"); // soft ref to users.username
         }
         $db->query('PRAGMA user_version = 10');
     }
