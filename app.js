@@ -30,7 +30,7 @@ async function navigateTo(path) {
     currentPath = path;
 
     try {
-        const resp = await fetch('/share/ctrl.php?action=browse&path=' + encodeURIComponent(path));
+        const resp = await fetch('/share/ctrl.php?cmd=browse&path=' + encodeURIComponent(path));
         if (!resp.ok) {
             alert('Erreur HTTP ' + resp.status);
             return;
@@ -314,7 +314,7 @@ async function creerLienSheet(path, password, expiresStr, sheet) {
     }
 
     try {
-        const resp = await fetch('/share/ctrl.php?action=create', {
+        const resp = await fetch('/share/ctrl.php?cmd=create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path, password: password || '', expires, csrf_token: CSRF_TOKEN }),
@@ -388,7 +388,7 @@ async function creerLien(path, password, expiresStr, container) {
     const expires = expiresStr ? parseInt(expiresStr) : null;
 
     try {
-        const resp = await fetch('/share/ctrl.php?action=create', {
+        const resp = await fetch('/share/ctrl.php?cmd=create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path: path, password: password || '', expires: expires, csrf_token: CSRF_TOKEN }),
@@ -469,7 +469,7 @@ async function supprimerLien(id) {
     if (!confirm('Supprimer ce lien de partage ?')) return;
 
     try {
-        const resp = await fetch('/share/ctrl.php?action=delete', {
+        const resp = await fetch('/share/ctrl.php?cmd=delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: id, csrf_token: CSRF_TOKEN }),
@@ -529,7 +529,7 @@ async function envoyerEmail(linkId) {
     if (!email || !email.trim()) return;
 
     try {
-        const resp = await fetch('/share/ctrl.php?action=send_email', {
+        const resp = await fetch('/share/ctrl.php?cmd=send_email', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id: linkId, email: email.trim(), csrf_token: CSRF_TOKEN }),
