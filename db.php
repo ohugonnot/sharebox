@@ -94,7 +94,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 11; // bump when adding migrations
+    $targetVersion = 12; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -207,6 +207,15 @@ function get_db(): PDO {
             $db->query('ALTER TABLE folder_posters RENAME COLUMN ai_attempts TO match_attempts');
         }
         $db->query('PRAGMA user_version = 11');
+    }
+
+    if ($version < 12) {
+        // v12 : limite optionnelle de téléchargements par lien
+        $cols = array_column($db->query("PRAGMA table_info(links)")->fetchAll(), 'name');
+        if (!in_array('max_downloads', $cols, true)) {
+            $db->query("ALTER TABLE links ADD COLUMN max_downloads INTEGER DEFAULT NULL");
+        }
+        $db->query('PRAGMA user_version = 12');
     }
 
     if ($version < $targetVersion) {
