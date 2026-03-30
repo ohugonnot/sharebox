@@ -270,6 +270,7 @@ if ($action !== '') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
+    <link rel="stylesheet" href="/share/style.css?v=<?= filemtime(__DIR__ . '/style.css') ?>">
     <meta name="csrf-token" content="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
     <title>ShareBox — Admin</title>
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
@@ -310,74 +311,6 @@ if ($action !== '') {
                 radial-gradient(ellipse 80% 40% at 50% 0%, rgba(240, 160, 48, .03) 0%, transparent 60%);
             pointer-events: none;
         }
-
-        /* ── Nav ── */
-        .nav {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 1rem 2rem;
-            border-bottom: 1px solid var(--border);
-            background: var(--bg-deep);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .nav-left {
-            display: flex;
-            align-items: center;
-            gap: 1.5rem;
-        }
-
-        .nav-brand {
-            font-size: 1.1rem;
-            font-weight: 700;
-            letter-spacing: -.02em;
-        }
-
-        .nav-brand span { color: var(--accent); }
-
-        .nav-links {
-            display: flex;
-            gap: .5rem;
-        }
-
-        .nav-link {
-            padding: .4rem .8rem;
-            font-size: .78rem;
-            font-weight: 500;
-            color: var(--text-dim);
-            text-decoration: none;
-            border-radius: 6px;
-            transition: all .2s;
-        }
-
-        .nav-link:hover { color: var(--text); background: var(--accent-dim); }
-        .nav-link.active { color: var(--accent); background: var(--accent-dim); }
-
-        .nav-right {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-        .nav-user {
-            font-size: .78rem;
-            color: var(--text-dim);
-        }
-
-        .nav-logout {
-            font-size: .72rem;
-            color: var(--text-muted);
-            text-decoration: none;
-            padding: .3rem .6rem;
-            border: 1px solid var(--border);
-            border-radius: 5px;
-            transition: all .2s;
-        }
-
-        .nav-logout:hover { color: var(--text-dim); border-color: var(--border-strong); }
 
         /* ── Main ── */
         .main {
@@ -637,22 +570,30 @@ if ($action !== '') {
 </head>
 <body>
 
-<nav class="nav">
-    <div class="nav-left">
-        <div class="nav-brand">Share<span>Box</span></div>
-        <div class="nav-links">
-            <a href="/share/" class="nav-link">Fichiers</a>
-            <a href="/share/admin.php" class="nav-link active">Admin</a>
-            <?php if ($seedboxMode): ?><a href="/" class="nav-link" target="_blank">ruTorrent</a><?php endif; ?>
-        </div>
-    </div>
-    <div class="nav-right">
-        <span class="nav-user"><?= htmlspecialchars($_SESSION['sharebox_user'] ?? '') ?></span>
-        <a href="/share/logout.php" class="nav-logout">Logout</a>
-    </div>
-</nav>
-
 <div class="main">
+    <header class="app-header" style="display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;align-items:center;gap:.7rem">
+            <div class="app-logo">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 3h-8v2h5.59L11 12.59 12.41 14 20 6.41V12h2V3z" fill="#0c0e14"/>
+                    <path d="M3 5v16h16v-7h-2v5H5V7h5V5H3z" fill="#0c0e14"/>
+                </svg>
+            </div>
+            <div>
+                <div class="app-title">Share<span style="color:var(--accent)">Box</span></div>
+                <div class="app-subtitle">Administration</div>
+            </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:.8rem">
+            <a href="/share/" style="color:var(--text-secondary);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">← Fichiers</a>
+            <?php if ($seedboxMode): ?>
+                <a href="/" target="_blank" style="color:var(--text-secondary);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">ruTorrent</a>
+            <?php endif; ?>
+            <span style="color:var(--text-secondary);font-size:.85rem"><?= htmlspecialchars($_SESSION['sharebox_user'] ?? '') ?></span>
+            <a href="/share/logout.php" style="color:var(--text-muted);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">Logout</a>
+        </div>
+    </header>
+
     <div class="page-title">Gestion des utilisateurs</div>
     <div class="page-sub">Gérer les utilisateurs<?= $seedboxMode ? ' (rtorrent + ruTorrent + SFTP + ShareBox)' : '' ?></div>
 
