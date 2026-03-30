@@ -261,6 +261,27 @@ try {
             }
             break;
 
+        case 'change_password':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                http_response_code(405);
+                echo json_encode(['error' => 'Méthode POST requise']);
+                exit;
+            }
+            $username = $_SESSION['sharebox_user'] ?? '';
+            if (empty($username)) {
+                http_response_code(401);
+                echo json_encode(['error' => 'Non authentifié']);
+                exit;
+            }
+            echo json_encode(change_password_for_user(
+                get_db(),
+                $username,
+                $input['current_password'] ?? '',
+                $input['new_password'] ?? '',
+                $input['confirm_password'] ?? ''
+            ));
+            break;
+
         default:
             http_response_code(400);
             echo json_encode(['error' => 'Action inconnue']);

@@ -1489,3 +1489,8 @@ body::before {
         justify-content: center;
     }
 }
+
+/* ── Modal changement de mot de passe ─────────────────────────────────────── */
+.modal-compte-label { font-size: .78rem; color: var(--text-dim); margin-bottom: .3rem; margin-top: .8rem; }
+.modal-compte-input { width: 100%; background: var(--bg-input, #0d1018); border: 1px solid var(--border, rgba(255,255,255,.04)); border-radius: 8px; padding: .5rem .75rem; color: var(--text, #d8dce8); font-size: .88rem; outline: none; font-family: inherit; box-sizing: border-box; }
+.modal-compte-input:focus { border-color: var(--accent, #f0a030); }

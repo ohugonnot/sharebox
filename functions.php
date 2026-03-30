@@ -506,3 +506,25 @@ function warmFileCache(string $filePath): void {
         shell_exec('vmtouch -qt ' . escapeshellarg($filePath) . ' >/dev/null 2>&1 &');
     }
 }
+
+/**
+ * Change le mot de passe d'un utilisateur.
+ * Retourne ['ok' => true] ou ['error' => '...'].
+ */
+function change_password_for_user(PDO $db, string $username, string $currentPwd, string $newPwd, string $confirmPwd): array {
+    if (strlen($newPwd) < 4) {
+        return ['error' => 'Nouveau mot de passe : 4 caractères minimum'];
+    }
+    if ($newPwd !== $confirmPwd) {
+        return ['error' => 'La confirmation ne correspond pas'];
+    }
+    $stmt = $db->prepare("SELECT password_hash FROM users WHERE username = ?");
+    $stmt->execute([$username]);
+    $user = $stmt->fetch();
+    if (!$user || !password_verify($currentPwd, $user['password_hash'])) {
+        return ['error' => 'Mot de passe actuel incorrect'];
+    }
+    $db->prepare("UPDATE users SET password_hash = ? WHERE username = ?")
+       ->execute([password_hash($newPwd, PASSWORD_BCRYPT), $username]);
+    return ['ok' => true];
+}
