@@ -30,7 +30,8 @@ if ($action !== '') {
 
     // Actions admin-only
     $adminOnlyActions = ['list_users','create_user','update_user','delete_user',
-                         'list_downloads','start_rtorrent','stop_rtorrent','disk_usage'];
+                         'restart_rtorrent','stop_rtorrent','tmdb_status','tmdb_scan',
+                         'purge_expired','recent_activity'];
     if (in_array($action, $adminOnlyActions, true) && !$isAdmin) {
         http_response_code(403);
         echo json_encode(['error' => 'Accès réservé aux administrateurs.']);
