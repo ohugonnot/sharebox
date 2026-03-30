@@ -29,7 +29,26 @@ if (isset($_GET['fragment']) && $_GET['fragment'] === 'links') {
  */
 function afficher_liens(): void {
     $db = get_db();
-    $links = $db->query("SELECT * FROM links ORDER BY created_at DESC")->fetchAll();
+    $currentUser = $_SESSION['sharebox_user'] ?? '';
+    $currentRole = $_SESSION['sharebox_role'] ?? 'user';
+    $currentPrivate = (int)($_SESSION['sharebox_private'] ?? 0);
+
+    if ($currentRole === 'admin') {
+        $links = $db->query("SELECT * FROM links ORDER BY created_at DESC")->fetchAll();
+    } elseif ($currentPrivate === 1) {
+        $stmt = $db->prepare("SELECT * FROM links WHERE created_by = ? ORDER BY created_at DESC");
+        $stmt->execute([$currentUser]);
+        $links = $stmt->fetchAll();
+    } else {
+        $stmt = $db->prepare("
+            SELECT l.* FROM links l
+            LEFT JOIN users u ON l.created_by = u.username
+            WHERE l.created_by IS NULL OR u.private = 0
+            ORDER BY l.created_at DESC
+        ");
+        $stmt->execute();
+        $links = $stmt->fetchAll();
+    }
 
     if (empty($links)) {
         echo '<div class="empty-msg"><span class="empty-icon">&#x1F517;</span>Aucun lien de partage pour le moment</div>';
