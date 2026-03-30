@@ -821,6 +821,52 @@ function creerElement(tag, className) {
     return el;
 }
 
+// ── Modal changement de mot de passe ────────────────────────────────────────
+function ouvrirModalCompte() {
+    const m = document.getElementById('modal-compte');
+    if (!m) return;
+    m.style.display = 'flex';
+    document.getElementById('mdp-actuel').value = '';
+    document.getElementById('mdp-nouveau').value = '';
+    document.getElementById('mdp-confirm').value = '';
+    document.getElementById('mdp-error').style.display = 'none';
+    document.getElementById('mdp-actuel').focus();
+}
+function fermerModalCompte() {
+    const m = document.getElementById('modal-compte');
+    if (m) m.style.display = 'none';
+}
+async function soumettreChangementMdp() {
+    const btn = document.getElementById('mdp-submit');
+    const errDiv = document.getElementById('mdp-error');
+    btn.disabled = true;
+    errDiv.style.display = 'none';
+    try {
+        const resp = await fetch('/share/ctrl.php?cmd=change_password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                current_password: document.getElementById('mdp-actuel').value,
+                new_password: document.getElementById('mdp-nouveau').value,
+                confirm_password: document.getElementById('mdp-confirm').value,
+                csrf_token: CSRF_TOKEN
+            })
+        });
+        const data = await resp.json();
+        if (data.error) {
+            errDiv.textContent = data.error;
+            errDiv.style.display = 'block';
+        } else {
+            fermerModalCompte();
+        }
+    } catch (_) {
+        errDiv.textContent = 'Erreur de connexion';
+        errDiv.style.display = 'block';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
 // ── Filtre fichiers ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     const filterInput = document.getElementById('file-filter');

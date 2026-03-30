@@ -29,6 +29,23 @@ $header_back     ??= false;
             <a href="/share/admin.php" style="color:var(--accent);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid rgba(240,160,48,.2);border-radius:var(--radius-sm)">Admin</a>
         <?php endif; ?>
         <span style="color:var(--text-secondary);font-size:.85rem"><?= htmlspecialchars(get_current_user_name() ?? '') ?></span>
+        <button onclick="ouvrirModalCompte()" style="color:var(--text-secondary,#8892a4);font-size:.8rem;background:none;border:1px solid var(--border,rgba(255,255,255,.04));border-radius:var(--radius-sm,6px);padding:.3rem .6rem;cursor:pointer">Mon compte</button>
         <a href="/share/logout.php" style="color:var(--text-muted);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">Logout</a>
     </div>
 </header>
+<div id="modal-compte" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center">
+    <div style="background:var(--bg-card,#111420);border:1px solid var(--border-strong,rgba(255,255,255,.08));border-radius:14px;padding:1.5rem;width:100%;max-width:360px;margin:1rem">
+        <div style="font-size:1rem;font-weight:600;margin-bottom:1.2rem">Changer le mot de passe</div>
+        <div class="modal-compte-label">Mot de passe actuel</div>
+        <input type="password" id="mdp-actuel" class="modal-compte-input" autocomplete="current-password">
+        <div class="modal-compte-label">Nouveau mot de passe</div>
+        <input type="password" id="mdp-nouveau" class="modal-compte-input" autocomplete="new-password">
+        <div class="modal-compte-label">Confirmation</div>
+        <input type="password" id="mdp-confirm" class="modal-compte-input" autocomplete="new-password">
+        <div id="mdp-error" style="display:none;color:var(--red,#e8453c);font-size:.82rem;margin-top:.5rem"></div>
+        <div style="display:flex;justify-content:flex-end;gap:.6rem;margin-top:1.2rem">
+            <button onclick="fermerModalCompte()" style="padding:.4rem .8rem;background:transparent;color:var(--text-dim,#5a6078);border:1px solid var(--border-strong,rgba(255,255,255,.08));border-radius:6px;cursor:pointer;font-family:inherit;font-size:.82rem">Annuler</button>
+            <button id="mdp-submit" onclick="soumettreChangementMdp()" style="padding:.4rem .8rem;background:var(--accent,#f0a030);color:#000;border:none;border-radius:6px;cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:600">Enregistrer</button>
+        </div>
+    </div>
+</div>
