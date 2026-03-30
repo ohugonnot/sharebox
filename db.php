@@ -100,7 +100,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 10; // bump when adding migrations
+    $targetVersion = 11; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -204,6 +204,15 @@ function get_db(): PDO {
             $db->query("ALTER TABLE links ADD COLUMN created_by TEXT"); // soft ref to users.username
         }
         $db->query('PRAGMA user_version = 10');
+    }
+
+    if ($version < 11) {
+        // v11 : rename ai_attempts → match_attempts (nom plus précis, pas lié à l'IA)
+        $cols = array_column($db->query('PRAGMA table_info(folder_posters)')->fetchAll(), 'name');
+        if (in_array('ai_attempts', $cols, true) && !in_array('match_attempts', $cols, true)) {
+            $db->query('ALTER TABLE folder_posters RENAME COLUMN ai_attempts TO match_attempts');
+        }
+        $db->query('PRAGMA user_version = 11');
     }
 
     if ($version < $targetVersion) {
