@@ -703,11 +703,15 @@ if ($action !== '') {
     <?php $header_subtitle = 'Administration'; $header_back = true; include __DIR__ . '/header.php'; ?>
 
     <nav class="admin-tabs">
+        <?php if ($isAdmin): ?>
         <button class="tab-btn active" onclick="switchTab('utilisateurs')">Utilisateurs</button>
         <button class="tab-btn" onclick="switchTab('activite')">Activité</button>
         <button class="tab-btn" onclick="switchTab('systeme')">Système</button>
+        <?php endif; ?>
+        <button class="tab-btn <?= $isAdmin ? '' : 'active' ?>" onclick="switchTab('compte')">Mon compte</button>
     </nav>
 
+    <?php if ($isAdmin): ?>
     <div id="tab-utilisateurs" class="tab-panel active">
         <div class="card">
             <div class="card-header">
@@ -766,6 +770,27 @@ if ($action !== '') {
             <div style="padding:1rem 1.4rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap">
                 <button class="btn btn-ghost" id="purge-btn" onclick="purgeExpired()">Purger les liens expirés</button>
                 <span id="purge-result" style="font-size:.82rem;color:var(--text-dim)"></span>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <div id="tab-compte" class="tab-panel <?= $isAdmin ? '' : 'active' ?>">
+        <div class="card" style="max-width:420px">
+            <div class="card-header">
+                <div class="card-title">Mon compte</div>
+            </div>
+            <div style="padding:1.2rem 1.4rem">
+                <div class="modal-compte-label">Mot de passe actuel</div>
+                <input type="password" id="mdp-actuel" class="modal-compte-input" autocomplete="current-password">
+                <div class="modal-compte-label">Nouveau mot de passe</div>
+                <input type="password" id="mdp-nouveau" class="modal-compte-input" autocomplete="new-password">
+                <div class="modal-compte-label">Confirmation</div>
+                <input type="password" id="mdp-confirm" class="modal-compte-input" autocomplete="new-password">
+                <div id="mdp-error" style="display:none;color:var(--red,#e8453c);font-size:.82rem;margin-top:.5rem"></div>
+                <div style="display:flex;justify-content:flex-end;margin-top:1.2rem">
+                    <button id="mdp-submit" onclick="soumettreChangementMdp()" style="padding:.4rem .8rem;background:var(--accent,#f0a030);color:#000;border:none;border-radius:6px;cursor:pointer;font-family:inherit;font-size:.82rem;font-weight:600">Enregistrer</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1229,6 +1254,50 @@ async function populateActivityUserFilter() {
     }
 }
 
+// ── Mon compte ───────────────────────────────────────────────────────────────
+async function soumettreChangementMdp() {
+    const btn = document.getElementById('mdp-submit');
+    const errDiv = document.getElementById('mdp-error');
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    btn.disabled = true;
+    errDiv.style.display = 'none';
+    try {
+        const resp = await fetch('/share/ctrl.php?cmd=change_password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                current_password: document.getElementById('mdp-actuel').value,
+                new_password: document.getElementById('mdp-nouveau').value,
+                confirm_password: document.getElementById('mdp-confirm').value,
+                csrf_token: csrfToken
+            })
+        });
+        const data = await resp.json();
+        if (data.error) {
+            errDiv.textContent = data.error;
+            errDiv.style.color = 'var(--red, #e8453c)';
+            errDiv.style.display = 'block';
+        } else {
+            errDiv.style.color = 'var(--green, #3ddc84)';
+            errDiv.textContent = 'Mot de passe modifié.';
+            errDiv.style.display = 'block';
+            document.getElementById('mdp-actuel').value = '';
+            document.getElementById('mdp-nouveau').value = '';
+            document.getElementById('mdp-confirm').value = '';
+            setTimeout(() => {
+                errDiv.style.display = 'none';
+                errDiv.style.color = 'var(--red, #e8453c)';
+            }, 1800);
+        }
+    } catch (_) {
+        errDiv.textContent = 'Erreur de connexion';
+        errDiv.style.color = 'var(--red, #e8453c)';
+        errDiv.style.display = 'block';
+    } finally {
+        btn.disabled = false;
+    }
+}
+
 // ── Tabs ────────────────────────────────────────────────────────────────────
 let activityLoaded = false;
 
@@ -1244,8 +1313,10 @@ function switchTab(name) {
 }
 
 // Init
+<?php if ($isAdmin): ?>
 loadUsers();
 loadTmdbStatus();
+<?php endif; ?>
 </script>
 </body>
 </html>
