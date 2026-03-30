@@ -4,6 +4,7 @@
  */
 
 require_once __DIR__ . '/auth.php';
+require_once __DIR__ . '/functions.php';
 
 ensure_admin_exists();
 
@@ -36,10 +37,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['sharebox_role'] = $user['role'];
                 $_SESSION['sharebox_private'] = (int)($user['private'] ?? 0);
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                log_activity('login_ok', $user['username'], $ip, null);
                 header('Location: /share/');
                 exit;
             } else {
                 record_failed_attempt($ip);
+                log_activity('login_fail', $username, $ip, null);
                 $error = 'Identifiants incorrects.';
             }
         } else {
