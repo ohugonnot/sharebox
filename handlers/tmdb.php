@@ -26,7 +26,7 @@ if (isset($_GET['posters'])) {
         . '|ova|oav|bonus|extras?|special|specials|featurettes?|behind.the.scenes|deleted.scenes'
         . '|interviews?|trailers?|nc|op|ed|ost|soundtrack|subs?|subtitles?|vostfr|vf|multi'
         . '|disc\s*\d|cd\s*\d|dvd|blu-?ray|\d{1,2}$'
-        . '|movies?|films?|s(?:é|e)ries?|covers?|images?|photos?|videos?|samples?|nfo'
+        . '|covers?|images?|photos?|samples?|nfo'
         . '|wii|wiiu|switch|nds|3ds|cia|gba|n64|snes|nes|psp|ps[1-4]|xbox'
         . '|bdmv|clipinf|playlist|stream$|meta|backup|certificate'
         . ')/iu';
@@ -373,12 +373,14 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     try {
         // Mark as pending AI (verified=-1) so cron re-processes it
-        // INSERT si pas d'entrée, UPDATE si existante (sauf __none__ = choix humain)
+        // INSERT si pas d'entrée, UPDATE si existante
+        // __none__ + verified=100 = choix humain définitif → jamais toucher
+        // __none__ + verified<100 = skip automatique (skill) → réinitialisable
         poster_log('AI recheck | ' . $name . ' → reset to pending (verified=-1, poster=NULL, match_attempts=0)');
         $db->prepare("INSERT INTO folder_posters (path, poster_url, verified, match_attempts) VALUES (:p, NULL, -1, 0)
-                      ON CONFLICT(path) DO UPDATE SET poster_url = CASE WHEN poster_url = '__none__' THEN '__none__' ELSE NULL END,
-                      verified = CASE WHEN poster_url = '__none__' THEN verified ELSE -1 END,
-                      match_attempts = CASE WHEN poster_url = '__none__' THEN match_attempts ELSE 0 END")
+                      ON CONFLICT(path) DO UPDATE SET poster_url = CASE WHEN poster_url = '__none__' AND verified = 100 THEN '__none__' ELSE NULL END,
+                      verified = CASE WHEN poster_url = '__none__' AND verified = 100 THEN verified ELSE -1 END,
+                      match_attempts = CASE WHEN poster_url = '__none__' AND verified = 100 THEN match_attempts ELSE 0 END")
            ->execute([':p' => $fullPath]);
         // Launch cron if not already running
         $scriptPath = realpath(__DIR__ . '/../tools/tmdb-worker.php');
@@ -403,12 +405,13 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 // ── Reload all posters in current directory ──
 if (isset($_GET['tmdb_reload']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        // Supprimer toutes les entrées sauf __none__ (choix humain) pour ce dossier
-        $stmt = $db->prepare("DELETE FROM folder_posters WHERE path LIKE :prefix AND poster_url != '__none__'");
+        // Supprimer toutes les entrées sauf __none__ humain (verified=100) pour ce dossier
+        // __none__ automatique (verified<100) est supprimé aussi pour permettre une re-détection
+        $stmt = $db->prepare("DELETE FROM folder_posters WHERE path LIKE :prefix AND NOT (poster_url = '__none__' AND verified = 100)");
         $stmt->execute([':prefix' => $resolvedPath . '/%']);
         $deleted = $stmt->rowCount();
         // Supprimer aussi l'entrée du dossier lui-même (pour re-fetch le parent)
-        $stmt2 = $db->prepare("DELETE FROM folder_posters WHERE path = :p AND poster_url != '__none__'");
+        $stmt2 = $db->prepare("DELETE FROM folder_posters WHERE path = :p AND NOT (poster_url = '__none__' AND verified = 100)");
         $stmt2->execute([':p' => $resolvedPath]);
         $deleted += $stmt2->rowCount();
         poster_log('RELOAD all | ' . basename($resolvedPath) . ' | deleted=' . $deleted . ' entries');

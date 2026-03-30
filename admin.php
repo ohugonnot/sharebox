@@ -273,7 +273,6 @@ if ($action !== '') {
     <link rel="stylesheet" href="/share/style.css?v=<?= filemtime(__DIR__ . '/style.css') ?>">
     <meta name="csrf-token" content="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
     <title>ShareBox — Admin</title>
-    <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
     <style>
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -288,7 +287,7 @@ if ($action !== '') {
             --accent-glow: rgba(240, 160, 48, .15);
             --text: #d8dce8;
             --text-dim: #5a6078;
-            --text-muted: #3a3f52;
+            --text-muted: #555968;
             --border: rgba(255, 255, 255, .04);
             --border-strong: rgba(255, 255, 255, .08);
             --red: #e8453c;
@@ -297,8 +296,7 @@ if ($action !== '') {
         }
 
         body {
-            font-family: 'Sora', sans-serif;
-            background: var(--bg-void);
+            background: var(--bg-deep);
             color: var(--text);
             min-height: 100vh;
         }
@@ -308,16 +306,15 @@ if ($action !== '') {
             position: fixed;
             inset: 0;
             background:
-                radial-gradient(ellipse 80% 40% at 50% 0%, rgba(240, 160, 48, .03) 0%, transparent 60%);
+                radial-gradient(ellipse 80% 50% at 50% -20%, rgba(240, 160, 48, .03), transparent),
+                linear-gradient(rgba(255,255,255,.015) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,.015) 1px, transparent 1px);
+            background-size: 100% 100%, 48px 48px, 48px 48px;
             pointer-events: none;
+            z-index: 0;
         }
 
         /* ── Main ── */
-        .main {
-            max-width: 960px;
-            margin: 0 auto;
-            padding: 2rem 1.5rem;
-        }
 
         .page-title {
             font-size: 1.4rem;
@@ -570,29 +567,8 @@ if ($action !== '') {
 </head>
 <body>
 
-<div class="main">
-    <header class="app-header" style="display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;align-items:center;gap:.7rem">
-            <div class="app-logo">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path d="M21 3h-8v2h5.59L11 12.59 12.41 14 20 6.41V12h2V3z" fill="#0c0e14"/>
-                    <path d="M3 5v16h16v-7h-2v5H5V7h5V5H3z" fill="#0c0e14"/>
-                </svg>
-            </div>
-            <div>
-                <div class="app-title">Share<span style="color:var(--accent)">Box</span></div>
-                <div class="app-subtitle">Administration</div>
-            </div>
-        </div>
-        <div style="display:flex;align-items:center;gap:.8rem">
-            <a href="/share/" style="color:var(--text-secondary);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">← Fichiers</a>
-            <?php if ($seedboxMode): ?>
-                <a href="/" target="_blank" style="color:var(--text-secondary);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">ruTorrent</a>
-            <?php endif; ?>
-            <span style="color:var(--text-secondary);font-size:.85rem"><?= htmlspecialchars($_SESSION['sharebox_user'] ?? '') ?></span>
-            <a href="/share/logout.php" style="color:var(--text-muted);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">Logout</a>
-        </div>
-    </header>
+<div class="app">
+    <?php $header_subtitle = 'Administration'; $header_back = true; include __DIR__ . '/header.php'; ?>
 
     <div class="page-title">Gestion des utilisateurs</div>
     <div class="page-sub">Gérer les utilisateurs<?= $seedboxMode ? ' (rtorrent + ruTorrent + SFTP + ShareBox)' : '' ?></div>
