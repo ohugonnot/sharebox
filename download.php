@@ -425,9 +425,8 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card-overview-title { font-size:.85rem; font-weight:700; color:var(--accent); margin-bottom:.35rem; line-height:1.25; }
 .grid-card-overview-text { font-size:.74rem; color:#ccc; line-height:1.5; display:-webkit-box; -webkit-line-clamp:8; -webkit-box-orient:vertical; overflow:hidden; }
 .grid-card-confidence { position:absolute; bottom:.4rem; right:.4rem; width:7px; height:7px; border-radius:50%; opacity:.6; z-index:4; }
-.grid-card-toggle { position:absolute; top:.5rem; left:.5rem; width:22px; height:22px; border-radius:50%; background:rgba(0,0,0,.5); border:1px solid rgba(255,255,255,.1); display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition:opacity .15s; z-index:5; color:rgba(255,255,255,.5); }
-.grid-card:hover .grid-card-toggle { opacity:.6; }
-.grid-card-toggle:hover { opacity:1 !important; background:rgba(0,0,0,.7); border-color:rgba(255,255,255,.3); color:#fff; }
+.grid-card-rating { position:absolute; top:.5rem; left:.5rem; background:rgba(0,0,0,.65); backdrop-filter:blur(4px); border-radius:4px; padding:.15rem .4rem; font-size:.7rem; font-weight:700; color:#f0c040; z-index:5; pointer-events:none; letter-spacing:.02em; line-height:1.4; }
+.grid-card-overview-meta { font-size:.72rem; color:rgba(255,255,255,.5); margin-bottom:.28rem; }
 .grid-card-ctx { position:absolute; top:.5rem; right:.5rem; width:26px; height:26px; border-radius:50%; background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.15); display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition:opacity .15s; z-index:5; color:rgba(255,255,255,.8); }
 .grid-card:hover .grid-card-ctx { opacity:1; }
 .grid-card-ctx:hover { background:rgba(0,0,0,.8); border-color:var(--accent); color:var(--accent); }
@@ -604,7 +603,6 @@ HTML;
             echo '<div class="grid-card-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" opacity=".4"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg></div>';
             if ($hasVideo) {
                 $escapedName = htmlspecialchars(addcslashes($folder['name'], "'\\"), ENT_QUOTES);
-                echo '<div class="grid-card-toggle" onclick="event.preventDefault();event.stopPropagation();togglePoster(this,\'' . $escapedName . '\')" title="Afficher/masquer l\'image"><svg class="eye-on" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></div>';
                 echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();toggleCardMenu(this,\'' . $escapedName . '\')" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
             }
             echo '<div class="grid-card-label"><div class="grid-card-title">' . $folderHtml . '</div></div>';
@@ -623,7 +621,6 @@ HTML;
                 echo '<a class="grid-card grid-card-file" href="' . $vfDownloadUrl . '" data-play="' . htmlspecialchars($vfPlayUrl, ENT_QUOTES) . '" style="background:' . $color . '" data-type="file" data-name="' . $vfHtml . '" data-folder="' . $vfHtml . '" data-size="' . $vf['size'] . '">';
                 echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
                 echo '<div class="grid-card-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg></div>';
-                echo '<div class="grid-card-toggle" onclick="event.preventDefault();event.stopPropagation();togglePoster(this,\'' . $escapedVfName . '\')" title="Afficher/masquer l\'image"><svg class="eye-on" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-off" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></div>';
                 echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();toggleCardMenu(this,\'' . $escapedVfName . '\')" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
                 echo '<div class="grid-card-label"><div class="grid-card-title">' . $vfHtml . '</div></div>';
                 echo '</a>';
@@ -863,37 +860,31 @@ function setCardSize(val,btn){
     if(gw) gw.style.setProperty('--card-size',val+'px');
 }
 
-// ── Toggle poster on/off ──
-function togglePoster(btn, folderName) {
-    if (btn._toggling) return;
-    btn._toggling = true;
-    setTimeout(function(){ btn._toggling = false; }, 2000);
-    var card = btn.closest('.grid-card');
-    if (!card) return;
+// ── Toggle poster on/off (appelé depuis le menu contextuel) ──
+function togglePoster(card, folderName) {
+    if (card._toggling) return;
+    card._toggling = true;
+    setTimeout(function(){ card._toggling = false; }, 2000);
     var bg = card.querySelector('.grid-card-bg');
     if (!bg) return;
-    function updateEyeIcon(b, hasPoster) {
-        var on = b.querySelector('.eye-on'), off = b.querySelector('.eye-off');
-        if (on) on.style.display = hasPoster ? '' : 'none';
-        if (off) off.style.display = hasPoster ? 'none' : '';
-    }
     if (card.classList.contains('has-poster')) {
         bg.style.backgroundImage = '';
         card.classList.remove('has-poster');
+        card.dataset.posterHidden = '1';
         var ov = card.querySelector('.grid-card-overview');
         if (ov) ov.remove();
-        updateEyeIcon(btn, false);
+        var rb = card.querySelector('.grid-card-rating');
+        if (rb) rb.remove();
         selectPoster(folderName, '__none__', 0, '', '');
     } else {
-        // Reset __none__ to NULL — daemon will re-fetch poster
+        // Reset __none__ → NULL : le daemon va re-fetcher
         var url = BASE_URL + '?' + SUB_PATH + 'tmdb_set=1';
         fetch(url, {
             method: 'POST', credentials: 'same-origin',
             headers: {'Content-Type':'application/json'},
             body: JSON.stringify({folder: folderName, poster_url: null, tmdb_id: 0, title: '', overview: ''})
         }).then(function(){
-            updateEyeIcon(btn, true);
-            // Start polling — daemon will fill the poster in ~10s
+            delete card.dataset.posterHidden;
             fetchPosters.polls = 0;
             fetchPosters.pending = true;
             setTimeout(fetchPosters, 5000);
@@ -967,12 +958,7 @@ function reloadAllPosters() {
                     var card = cardMap[name];
                     if (!card) return;
                     if (info.hidden) {
-                        var toggleBtn = card.querySelector('.grid-card-toggle');
-                        if (toggleBtn) {
-                            var on = toggleBtn.querySelector('.eye-on'), off = toggleBtn.querySelector('.eye-off');
-                            if (on) on.style.display = 'none';
-                            if (off) off.style.display = '';
-                        }
+                        card.dataset.posterHidden = '1';
                         return;
                     }
                     if (info.pending_ai) {
@@ -996,6 +982,8 @@ function reloadAllPosters() {
                     if (oldAi) oldAi.remove();
                     var poster = info.poster;
                     var overview = info.overview || null;
+                    var year = info.year || null;
+                    var rating = info.rating || 0;
                     if (poster) {
                         if (observer) {
                             card.setAttribute('data-poster', poster);
@@ -1014,6 +1002,16 @@ function reloadAllPosters() {
                             dot.title = conf + '% confidence';
                             if (!dot.parentNode) card.appendChild(dot);
                         }
+                        // Rating badge
+                        if (rating >= 1) {
+                            var oldBadge = card.querySelector('.grid-card-rating');
+                            if (!oldBadge) {
+                                var badge = document.createElement('div');
+                                badge.className = 'grid-card-rating';
+                                badge.textContent = '\u2605 ' + rating.toFixed(1);
+                                card.appendChild(badge);
+                            }
+                        }
                     }
                     if (overview && !card.querySelector('.grid-card-overview')) {
                         var ov = document.createElement('div');
@@ -1021,10 +1019,18 @@ function reloadAllPosters() {
                         var ovTitle = document.createElement('div');
                         ovTitle.className = 'grid-card-overview-title';
                         ovTitle.textContent = name;
+                        if (year) {
+                            var ovMeta = document.createElement('div');
+                            ovMeta.className = 'grid-card-overview-meta';
+                            ovMeta.textContent = year;
+                            ov.appendChild(ovTitle);
+                            ov.appendChild(ovMeta);
+                        } else {
+                            ov.appendChild(ovTitle);
+                        }
                         var ovText = document.createElement('div');
                         ovText.className = 'grid-card-overview-text';
                         ovText.textContent = overview;
-                        ov.appendChild(ovTitle);
                         ov.appendChild(ovText);
                         card.appendChild(ov);
                     }
@@ -1156,7 +1162,7 @@ function renderResults(results, folderName, modal, grid) {
     results.forEach(function(r){
         var item = document.createElement('div');
         item.className = 'poster-modal-item';
-        item.onclick = function(){ selectPoster(folderName, r.poster_w300, r.id, r.title, r.overview); modal.remove(); };
+        item.onclick = function(){ selectPoster(folderName, r.poster_w300, r.id, r.title, r.overview, r.year || null, r.rating || 0); modal.remove(); };
         var img = document.createElement('img');
         img.src = r.poster;
         img.alt = r.title;
@@ -1169,36 +1175,52 @@ function renderResults(results, folderName, modal, grid) {
         grid.appendChild(item);
     });
 }
-function selectPoster(folderName, posterUrl, tmdbId, title, overview) {
+function selectPoster(folderName, posterUrl, tmdbId, title, overview, year, rating) {
     var url = BASE_URL + '?' + SUB_PATH + 'tmdb_set=1';
     fetch(url, {
         method: 'POST',
         credentials: 'same-origin',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({folder: folderName, poster_url: posterUrl, tmdb_id: tmdbId, title: title, overview: overview || ''})
+        body: JSON.stringify({folder: folderName, poster_url: posterUrl, tmdb_id: tmdbId, title: title, overview: overview || '', year: year || null, rating: rating || 0})
     }).catch(function(){});
     var card = document.querySelector('.grid-card[data-folder="'+CSS.escape(folderName)+'"]');
     if (!card) return;
     var bg = card.querySelector('.grid-card-bg');
-    // Supprimer l'ancien overlay
+    // Supprimer l'ancien overlay et badge
     var oldOv = card.querySelector('.grid-card-overview');
     if (oldOv) oldOv.remove();
+    var oldBadge = card.querySelector('.grid-card-rating');
+    if (oldBadge) oldBadge.remove();
     if (posterUrl === '__none__') {
         if (bg) { bg.style.backgroundImage = ''; }
         card.classList.remove('has-poster');
     } else {
         if (bg) { bg.style.backgroundImage = 'url(' + posterUrl + ')'; }
         card.classList.add('has-poster');
+        if (rating >= 1) {
+            var badge = document.createElement('div');
+            badge.className = 'grid-card-rating';
+            badge.textContent = '\u2605 ' + parseFloat(rating).toFixed(1);
+            card.appendChild(badge);
+        }
         if (overview) {
             var ov = document.createElement('div');
             ov.className = 'grid-card-overview';
             var ovTitle = document.createElement('div');
             ovTitle.className = 'grid-card-overview-title';
             ovTitle.textContent = title || folderName;
+            if (year) {
+                var ovMeta = document.createElement('div');
+                ovMeta.className = 'grid-card-overview-meta';
+                ovMeta.textContent = year;
+                ov.appendChild(ovTitle);
+                ov.appendChild(ovMeta);
+            } else {
+                ov.appendChild(ovTitle);
+            }
             var ovText = document.createElement('div');
             ovText.className = 'grid-card-overview-text';
             ovText.textContent = overview;
-            ov.appendChild(ovTitle);
             ov.appendChild(ovText);
             card.appendChild(ov);
         }
@@ -1276,8 +1298,7 @@ function toggleCardMenu(btn, folderName) {
     }
 
     // Item 3: AI recheck — visible avec ou sans poster (sauf si masqué par l'utilisateur)
-    var eyeOff = card ? card.querySelector('.eye-off') : null;
-    var isHidden = eyeOff && eyeOff.style.display !== 'none';
+    var isHidden = card && card.dataset.posterHidden === '1';
     if (card && !isHidden) {
         var item3 = document.createElement('div');
         item3.className = 'grid-card-menu-item';
@@ -1299,6 +1320,42 @@ function toggleCardMenu(btn, folderName) {
             requestAIRecheck(folderName);
         };
         menu.appendChild(item3);
+    }
+
+    // Item 4: Masquer/Réafficher le poster
+    var hasPosterNow = card && card.classList.contains('has-poster');
+    var wasHidden    = card && card.dataset.posterHidden === '1';
+    if (card && (hasPosterNow || wasHidden)) {
+        var item4 = document.createElement('div');
+        item4.className = 'grid-card-menu-item';
+        var svg4 = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        svg4.setAttribute('viewBox','0 0 24 24'); svg4.setAttribute('fill','none');
+        svg4.setAttribute('stroke','currentColor'); svg4.setAttribute('stroke-width','2');
+        if (hasPosterNow) {
+            // eye-off
+            var p4a = document.createElementNS('http://www.w3.org/2000/svg','path');
+            p4a.setAttribute('d','M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24');
+            var p4b = document.createElementNS('http://www.w3.org/2000/svg','line');
+            p4b.setAttribute('x1','1'); p4b.setAttribute('y1','1'); p4b.setAttribute('x2','23'); p4b.setAttribute('y2','23');
+            svg4.appendChild(p4a); svg4.appendChild(p4b);
+        } else {
+            // eye-on
+            var p4a = document.createElementNS('http://www.w3.org/2000/svg','path');
+            p4a.setAttribute('d','M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z');
+            var p4b = document.createElementNS('http://www.w3.org/2000/svg','circle');
+            p4b.setAttribute('cx','12'); p4b.setAttribute('cy','12'); p4b.setAttribute('r','3');
+            svg4.appendChild(p4a); svg4.appendChild(p4b);
+        }
+        item4.appendChild(svg4);
+        var span4 = document.createElement('span');
+        span4.textContent = hasPosterNow ? 'Masquer le poster' : 'R\u00e9afficher le poster';
+        item4.appendChild(span4);
+        item4.onclick = function(e) {
+            e.preventDefault(); e.stopPropagation();
+            menu.remove(); btn.dataset.menuOpen = '';
+            togglePoster(card, folderName);
+        };
+        menu.appendChild(item4);
     }
 
     card.appendChild(menu);
@@ -1473,6 +1530,16 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
         ? '<a class="player-btn player-nav-btn ep-next" href="' . htmlspecialchars($nextFile['url']) . '" title="' . htmlspecialchars($nextFile['name']) . '"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 18h2V6h-2zM6 18l8.5-6L6 6z"/></svg></a>'
         : '';
 
+    // Watch history : disponible uniquement si l'user est connecté
+    if (PHP_SAPI !== 'cli' && session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    $watchUser = $_SESSION['sharebox_user'] ?? null;
+    $watchPath = $watchUser ? ($subPath ? $basePath . '/' . $subPath : $basePath) : null;
+    $watchCsrf = $watchUser ? ($_SESSION['csrf_token'] ?? null) : null;
+    $watchPathJs = $watchPath ? json_encode($watchPath) : 'null';
+    $watchCsrfJs = $watchCsrf ? json_encode($watchCsrf) : 'null';
+
     $remuxEnabled = STREAM_REMUX_ENABLED ? 'true' : 'false';
     $jsMtime = filemtime(__DIR__ . '/player.js');
     $cssMtime = filemtime(__DIR__ . '/player.css');
@@ -1551,7 +1618,9 @@ var PLAYER_CONFIG = {
     isVideo: {$isVideo},
     baseUrl: '{$baseUrl}',
     pp: '{$pParamJs}',
-    episodeNav: {$episodeNavJson}
+    episodeNav: {$episodeNavJson},
+    watchPath: {$watchPathJs},
+    watchCsrf: {$watchCsrfJs}
 };
 </script>
 <script src="/share/player.js?v={$jsMtime}"></script>
