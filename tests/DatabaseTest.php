@@ -136,7 +136,7 @@ class DatabaseTest extends TestCase
     {
         $db = get_db();
         $version = (int) $db->query('PRAGMA user_version')->fetchColumn();
-        $this->assertSame(10, $version);
+        $this->assertSame(11, $version);
     }
 
     public function testUsersTableHasPrivateColumn(): void
@@ -205,6 +205,16 @@ class DatabaseTest extends TestCase
         $cols = $this->getColumnNames($db, 'folder_posters');
         $this->assertContains('tmdb_year', $cols);
         $this->assertContains('tmdb_type', $cols);
+    }
+
+    // ── 5e. folder_posters has match_attempts column (renamed from ai_attempts) ──
+
+    public function testFolderPostersHasMatchAttemptsColumn(): void
+    {
+        $db = get_db();
+        $cols = $this->getColumnNames($db, 'folder_posters');
+        $this->assertContains('match_attempts', $cols);
+        $this->assertNotContains('ai_attempts', $cols);
     }
 
     // ── 6. purge_probe_cache() ──────────────────────────────────────────
