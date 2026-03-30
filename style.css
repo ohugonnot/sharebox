@@ -142,6 +142,20 @@ body::before {
     overflow: hidden;
 }
 
+.file-filter-wrap { padding: .5rem .8rem .2rem; }
+.file-filter {
+    width: 100%;
+    background: var(--bg-input, #0d1018);
+    border: 1px solid var(--border, rgba(255,255,255,.04));
+    border-radius: 8px;
+    padding: .45rem .75rem;
+    color: var(--text, #d8dce8);
+    font-size: .85rem;
+    outline: none;
+    font-family: inherit;
+}
+.file-filter:focus { border-color: var(--accent, #f0a030); }
+
 /* ============================================================================
  * GRILLE DE CARTES — Liens actifs
  * Desktop : grille 2 colonnes | Mobile : stack vertical

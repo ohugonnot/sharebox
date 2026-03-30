@@ -159,6 +159,9 @@ function afficher_liens(): void {
         <div class="section-header">Parcourir les fichiers</div>
         <div id="breadcrumb" class="breadcrumb"></div>
         <div class="panel">
+            <div class="file-filter-wrap">
+                <input type="search" id="file-filter" class="file-filter" placeholder="Filtrer les fichiers…" autocomplete="off">
+            </div>
             <ul id="file-list" class="file-list">
                 <li class="file-item"><div class="empty-msg">Chargement&hellip;</div></li>
             </ul>
