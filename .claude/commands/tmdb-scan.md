@@ -103,6 +103,19 @@ UPDATE folder_posters SET poster_url=?, tmdb_id=?, title=?, overview=?, tmdb_yea
 UPDATE folder_posters SET verified=95 WHERE path LIKE '%/DIRNAME/%' AND tmdb_id=? AND (verified IS NULL OR verified = 0)
 ```
 
+### Phase 4: Detect and set folder_type
+
+The `folder_type` column determines how the grid displays a folder (`series` = subfolders with posters, `movies` = individual video files with posters).
+
+For each directory that has a `folder_posters` entry:
+- If it contains **only video files** (no subfolders) → set `folder_type = 'movies'`
+- If it contains **subfolders** (seasons, episodes grouped by folder) → set `folder_type = 'series'` (default)
+- Use `ls` to check the directory content
+
+```sql
+UPDATE folder_posters SET folder_type = 'movies' WHERE path = '/path/to/folder'
+```
+
 ### Rules
 
 - **Never ask the user anything.** Decide yourself. You know media.

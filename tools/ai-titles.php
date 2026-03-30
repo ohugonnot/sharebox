@@ -195,7 +195,28 @@ foreach ($byDirTmdb as $dir => $groups) {
 }
 if ($autoVerified > 0) ai_log('AUTO-VERIFY | ' . $autoVerified . ' entries (>3 same tmdb_id in same dir)');
 
-ai_log('SCAN done | matched=' . $totalFound . '/' . $totalProcessed . ' auto_verified=' . $autoVerified);
+// Propagate: if a parent folder is matched, apply its poster to unmatched children
+$propagated = 0;
+$parentRows = $db->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchAll();
+$parentMap = [];
+foreach ($parentRows as $pr) {
+    $parentMap[$pr['path']] = $pr;
+}
+$stillPending = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
+foreach ($stillPending as $childPath) {
+    $parentPath = dirname($childPath);
+    if (isset($parentMap[$parentPath])) {
+        $p = $parentMap[$parentPath];
+        try {
+            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, verified = 75, updated_at = datetime('now') WHERE path = ?")
+               ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $childPath]);
+            $propagated++;
+        } catch (PDOException $e) {}
+    }
+}
+if ($propagated > 0) ai_log('PROPAGATE | ' . $propagated . ' entries inherited from parent folder');
+
+ai_log('SCAN done | matched=' . $totalFound . '/' . $totalProcessed . ' auto_verified=' . $autoVerified . ' propagated=' . $propagated);
 
 // ── Helpers ──
 

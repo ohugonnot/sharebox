@@ -72,7 +72,7 @@ if (isset($_GET['posters'])) {
                     if ($row['poster_url'] === '__none__') {
                         $result[$f] = ['hidden' => true];
                     } elseif ($row['poster_url']) {
-                        $result[$f] = ['poster' => $row['poster_url']];
+                        $result[$f] = ['poster' => $row['poster_url'], 'confidence' => (int)($row['verified'] ?? 0)];
                         if ($row['overview']) $result[$f]['overview'] = $row['overview'];
                     }
                     $seasonFolders[] = $f;
@@ -205,7 +205,7 @@ if (isset($_GET['posters'])) {
                 if ($row['poster_url'] === '__none__') {
                     $result[$vf] = ['hidden' => true];
                 } elseif ($row['poster_url']) {
-                    $result[$vf] = ['poster' => $row['poster_url']];
+                    $result[$vf] = ['poster' => $row['poster_url'], 'confidence' => (int)($row['verified'] ?? 0)];
                     if ($row['overview']) $result[$vf]['overview'] = $row['overview'];
                 } elseif ((int)($row['verified'] ?? 0) === -1) {
                     $result[$vf] = ['pending_ai' => true];
