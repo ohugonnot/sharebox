@@ -229,24 +229,25 @@ if (isset($_GET['posters'])) {
     }
 
     // Count NULLs for JS polling (daemon handles the actual work)
-    $stmtNull = $db->prepare("SELECT COUNT(*) FROM folder_posters WHERE path LIKE :prefix AND poster_url IS NULL AND (ai_attempts IS NULL OR ai_attempts < 3)");
+    $stmtNull = $db->prepare("SELECT COUNT(*) FROM folder_posters WHERE path LIKE :prefix AND poster_url IS NULL AND (match_attempts IS NULL OR match_attempts = 0)");
     $stmtNull->execute([':prefix' => $resolvedPath . '/%']);
     $nullCount = (int)$stmtNull->fetchColumn();
 
-    // Ensure daemon is running (start if not)
+    // Ensure worker is running (start if not) — same lock file as the worker
     if ($nullCount > 0) {
-        $lockFile = sys_get_temp_dir() . '/sharebox_ai_daemon.lock';
-        $lockFp = @fopen($lockFile, 'w');
+        $workerLock = __DIR__ . '/../data/sharebox_tmdb_cron.lock';
+        @chmod($workerLock, 0666);
+        $lockFp = @fopen($workerLock, 'c'); // 'c': create if missing, no truncate
         if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
-            // Lock acquired = daemon not running, start it
+            // Lock acquired = worker not running, start it
             flock($lockFp, LOCK_UN);
             fclose($lockFp);
-            $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
-            $cmd = '/usr/bin/php ' . escapeshellarg($scriptPath) . ' --daemon >> ' . escapeshellarg(__DIR__ . '/../data/ai-titles.log') . ' 2>&1 &';
-            @pclose(@popen($cmd, 'r'));
-            poster_log('DAEMON started by web request');
+            $scriptPath = realpath(__DIR__ . '/../tools/tmdb-worker.php');
+            exec('/usr/bin/php ' . escapeshellarg($scriptPath) . ' >> ' . escapeshellarg(__DIR__ . '/../data/tmdb-worker.log') . ' 2>&1 &');
+            poster_log('WORKER started by web request');
         } else {
             if ($lockFp) fclose($lockFp);
+            poster_log('WORKER already running');
         }
     }
 
@@ -315,7 +316,7 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$posterUrl) {
             // Reset poster to NULL for re-fetch, keep folder_type
             poster_log('SET reset | ' . $folder . ' → clearing poster for re-fetch');
-            $db->prepare("INSERT INTO folder_posters (path) VALUES (:p) ON CONFLICT(path) DO UPDATE SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, ai_attempts = 0, updated_at = datetime('now')")
+            $db->prepare("INSERT INTO folder_posters (path) VALUES (:p) ON CONFLICT(path) DO UPDATE SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, match_attempts = 0, updated_at = datetime('now')")
                ->execute([':p' => $fullPath]);
         } else {
             poster_log('SET poster | ' . $folder . ' → ' . ($title ?: '?') . ' (id=' . $tmdbId . ') ' . ($posterUrl === '__none__' ? '__none__' : 'poster') . ' verified=100');
@@ -373,20 +374,19 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         // Mark as pending AI (verified=-1) so cron re-processes it
         // INSERT si pas d'entrée, UPDATE si existante (sauf __none__ = choix humain)
-        poster_log('AI recheck | ' . $name . ' → reset to pending (verified=-1, poster=NULL, ai_attempts=0)');
-        $db->prepare("INSERT INTO folder_posters (path, poster_url, verified, ai_attempts) VALUES (:p, NULL, -1, 0)
+        poster_log('AI recheck | ' . $name . ' → reset to pending (verified=-1, poster=NULL, match_attempts=0)');
+        $db->prepare("INSERT INTO folder_posters (path, poster_url, verified, match_attempts) VALUES (:p, NULL, -1, 0)
                       ON CONFLICT(path) DO UPDATE SET poster_url = CASE WHEN poster_url = '__none__' THEN '__none__' ELSE NULL END,
                       verified = CASE WHEN poster_url = '__none__' THEN verified ELSE -1 END,
-                      ai_attempts = CASE WHEN poster_url = '__none__' THEN ai_attempts ELSE 0 END")
+                      match_attempts = CASE WHEN poster_url = '__none__' THEN match_attempts ELSE 0 END")
            ->execute([':p' => $fullPath]);
         // Launch cron if not already running
-        $scriptPath = realpath(__DIR__ . '/../tools/ai-titles.php');
-        $lockFile = __DIR__ . '/../data/sharebox_ai_cron.lock';
-        $lockFp = @fopen($lockFile, 'w');
+        $scriptPath = realpath(__DIR__ . '/../tools/tmdb-worker.php');
+        $lockFile = __DIR__ . '/../data/sharebox_tmdb_cron.lock';
+        $lockFp = @fopen($lockFile, 'c');
         if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
             flock($lockFp, LOCK_UN); fclose($lockFp);
-            $cmd = '/usr/bin/php ' . escapeshellarg($scriptPath) . ' --cron >> ' . escapeshellarg(__DIR__ . '/../data/ai-titles.log') . ' 2>&1 &';
-            @pclose(@popen($cmd, 'r'));
+            exec('/usr/bin/php ' . escapeshellarg($scriptPath) . ' >> ' . escapeshellarg(__DIR__ . '/../data/tmdb-worker.log') . ' 2>&1 &');
             poster_log('AI cron triggered by recheck');
         } else {
             if ($lockFp) fclose($lockFp);
