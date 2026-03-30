@@ -129,17 +129,19 @@ try {
 
             // Générer un slug lisible à partir du nom + suffixe random
             $token = generate_slug($name, $db);
+            $createdBy = $_SESSION['sharebox_user'] ?? null;
             $stmt = $db->prepare("
-                INSERT INTO links (token, path, type, name, password_hash, expires_at)
-                VALUES (:token, :path, :type, :name, :password_hash, :expires_at)
+                INSERT INTO links (token, path, type, name, password_hash, expires_at, created_by)
+                VALUES (:token, :path, :type, :name, :password_hash, :expires_at, :created_by)
             ");
             $stmt->execute([
-                ':token' => $token,
-                ':path' => $fullPath,
-                ':type' => $type,
-                ':name' => $name,
+                ':token'         => $token,
+                ':path'          => $fullPath,
+                ':type'          => $type,
+                ':name'          => $name,
                 ':password_hash' => $passwordHash,
-                ':expires_at' => $expiresAt,
+                ':expires_at'    => $expiresAt,
+                ':created_by'    => $createdBy,
             ]);
 
             echo json_encode([
@@ -172,6 +174,16 @@ try {
             }
 
             $db = get_db();
+            if (($_SESSION['sharebox_role'] ?? '') !== 'admin') {
+                $owner = $db->prepare("SELECT created_by FROM links WHERE id = ?");
+                $owner->execute([$id]);
+                $row = $owner->fetch();
+                if ($row && $row['created_by'] !== null && $row['created_by'] !== ($_SESSION['sharebox_user'] ?? '')) {
+                    http_response_code(403);
+                    echo json_encode(['error' => 'Vous ne pouvez supprimer que vos propres liens']);
+                    exit;
+                }
+            }
             $stmt = $db->prepare("DELETE FROM links WHERE id = :id");
             $stmt->execute([':id' => $id]);
 
