@@ -161,7 +161,8 @@ function extract_title_year(string $name): array {
         $year = (int)$m[1];
     }
     // Remove season/saison markers before cutting to tech tags (they pollute TMDB search)
-    $clean = preg_replace('/\b(saison|season)\s*\d+[^a-z]*/i', ' ', $clean);
+    // Handles: "Saison 3", "Season 2", "34 Saisons", "4 Seasons"
+    $clean = preg_replace('/\b\d*\s*(saisons?|seasons?)\s*\d*\b/i', ' ', $clean);
     // Remove common non-title words that confuse TMDB
     $clean = preg_replace('/\b(int[eé]grale|collection|custom|restored|remast(?:er)?ed|pack|films?\s+\d+\s+a\s+\d+|oav|mini\s+film)\b/i', ' ', $clean);
     // Remove site tags like "Torrent911.com"
@@ -179,6 +180,8 @@ function extract_title_year(string $name): array {
     $title = preg_replace('/\s{2,}/', ' ', trim($title));
     // Fallback : le nom brut nettoyé
     if ($title === '') $title = trim($clean);
+    // Un code saison/épisode nu (S01, E03...) n'est pas un titre exploitable
+    if (preg_match('/^[SE]\d{1,2}$/i', $title)) $title = '';
     return ['title' => $title, 'year' => $year];
 }
 

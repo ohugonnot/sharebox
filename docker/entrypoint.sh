@@ -73,6 +73,15 @@ if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
     /bin/sh /docker/demo-data.sh
 fi
 
+# ── PHP limits (streaming + large uploads) ──────────────────────────────────
+cat > /usr/local/etc/php/conf.d/sharebox.ini <<PHPINI
+max_execution_time = 14400
+max_input_time = 300
+memory_limit = 512M
+post_max_size = 100M
+upload_max_filesize = 100M
+PHPINI
+
 # ── Cron (bandwidth history) ─────────────────────────────────────────────────
 echo "* * * * * php /app/cron/record_netspeed.php" > /etc/crontabs/www-data
 crond -b -l 8
