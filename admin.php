@@ -31,7 +31,7 @@ if ($action !== '') {
     // Actions admin-only
     $adminOnlyActions = ['list_users','create_user','update_user','delete_user',
                          'restart_rtorrent','stop_rtorrent','tmdb_status','tmdb_scan',
-                         'purge_expired','recent_activity'];
+                         'purge_expired','recent_activity','activity_events'];
     if (in_array($action, $adminOnlyActions, true) && !$isAdmin) {
         http_response_code(403);
         echo json_encode(['error' => 'Accès réservé aux administrateurs.']);
@@ -312,6 +312,32 @@ if ($action !== '') {
                 $stmt = $db->prepare("SELECT dl.id, l.name, l.token, l.created_by, dl.ip, dl.downloaded_at $base ORDER BY dl.downloaded_at DESC LIMIT $limit OFFSET ?");
                 $stmt->execute([...$params, $offset]);
                 echo json_encode(['logs' => $stmt->fetchAll(), 'total' => $totalCount, 'limit' => $limit, 'offset' => $offset]);
+                break;
+
+            case 'activity_events':
+                $db = get_db();
+                $typeFilter = trim($input['type_filter'] ?? '');
+                $offset     = max(0, (int)($input['offset'] ?? 0));
+                $limit      = 15;
+
+                $where  = [];
+                $params = [];
+
+                if ($typeFilter === 'connexions') {
+                    $where[] = "event_type IN ('login_ok','login_fail')";
+                } elseif ($typeFilter === 'liens') {
+                    $where[] = "event_type IN ('link_create','link_delete')";
+                } elseif ($typeFilter === 'admin') {
+                    $where[] = "event_type IN ('admin_create_user','admin_edit_user','admin_delete_user')";
+                }
+
+                $whereClause = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+
+                $total = (int)$db->query("SELECT COUNT(*) FROM activity_logs $whereClause")->fetchColumn();
+
+                $stmt = $db->prepare("SELECT id, event_type, username, ip, details, created_at FROM activity_logs $whereClause ORDER BY created_at DESC LIMIT $limit OFFSET ?");
+                $stmt->execute([...$params, $offset]);
+                echo json_encode(['logs' => $stmt->fetchAll(), 'total' => $total, 'limit' => $limit, 'offset' => $offset]);
                 break;
 
             default:
