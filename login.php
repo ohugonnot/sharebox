@@ -34,6 +34,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 session_regenerate_id(true);
                 $_SESSION['sharebox_user'] = $user['username'];
                 $_SESSION['sharebox_role'] = $user['role'];
+                $_SESSION['sharebox_private'] = (int)($user['private'] ?? 0);
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
                 header('Location: /share/');
                 exit;
