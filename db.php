@@ -20,15 +20,21 @@ function get_db(): PDO {
         throw new RuntimeException('DB_PATH not defined — config.php not loaded');
     }
 
-    // Safety: auto-backup before opening if DB exists and is non-empty
     $dbFile = DB_PATH;
-    if (file_exists($dbFile) && filesize($dbFile) > 4096) {
-        $backupDir = dirname($dbFile);
-        $backupFile = $backupDir . '/share.db.bak';
-        // Keep one rolling backup, refresh every 6 hours
+    $backupFile = dirname($dbFile) . '/share.db.bak';
+    $dbExisted = file_exists($dbFile) && filesize($dbFile) > 0;
+
+    // Safety: auto-backup before opening if DB has data
+    if ($dbExisted && filesize($dbFile) > 4096) {
         if (!file_exists($backupFile) || (time() - filemtime($backupFile)) > 21600) {
             @copy($dbFile, $backupFile);
         }
+    }
+
+    // Safety: if DB is empty/missing but backup has data, restore it
+    if (!$dbExisted && file_exists($backupFile) && filesize($backupFile) > 4096) {
+        @copy($backupFile, $dbFile);
+        error_log('ShareBox DB: restored from backup (DB was empty/missing)');
     }
 
     $db = new PDO('sqlite:' . $dbFile, null, null, [
