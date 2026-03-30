@@ -126,14 +126,20 @@ try {
                 $expiresAt = date('c', time() + (int)$expiresHours * 3600);
             }
 
+            // Limite optionnelle de téléchargements
+            $maxDownloads = null;
+            if (isset($input['max_downloads']) && (int)$input['max_downloads'] > 0) {
+                $maxDownloads = (int)$input['max_downloads'];
+            }
+
             $db = get_db();
 
             // Générer un slug lisible à partir du nom + suffixe random
             $token = generate_slug($name, $db);
             $createdBy = $_SESSION['sharebox_user'] ?? null;
             $stmt = $db->prepare("
-                INSERT INTO links (token, path, type, name, password_hash, expires_at, created_by)
-                VALUES (:token, :path, :type, :name, :password_hash, :expires_at, :created_by)
+                INSERT INTO links (token, path, type, name, password_hash, expires_at, created_by, max_downloads)
+                VALUES (:token, :path, :type, :name, :password_hash, :expires_at, :created_by, :max_downloads)
             ");
             $stmt->execute([
                 ':token'         => $token,
@@ -143,6 +149,7 @@ try {
                 ':password_hash' => $passwordHash,
                 ':expires_at'    => $expiresAt,
                 ':created_by'    => $createdBy,
+                ':max_downloads' => $maxDownloads,
             ]);
 
             echo json_encode([

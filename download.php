@@ -40,6 +40,14 @@ if ($link['expires_at'] !== null && strtotime($link['expires_at']) < time()) {
     exit;
 }
 
+// Vérifier la limite de téléchargements
+if ($link['max_downloads'] !== null && (int)$link['download_count'] >= (int)$link['max_downloads']) {
+    stream_log('ACCESS 410 | token=' . $token . ' | max_downloads reached (' . $link['download_count'] . '/' . $link['max_downloads'] . ')');
+    http_response_code(410);
+    afficher_erreur('Lien épuisé', 'Ce lien a atteint sa limite de téléchargements.');
+    exit;
+}
+
 // Vérifier que le fichier/dossier existe toujours
 if (!file_exists($link['path'])) {
     stream_log('ACCESS 404 | token=' . $token . ' | path gone: ' . $link['path']);

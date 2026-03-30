@@ -283,6 +283,16 @@ function ouvrirShareSheet(path, name) {
         pillsWrap.appendChild(pill);
     });
 
+    // Champ max_downloads
+    const maxDlLabel = creerElement('div', 'sheet-field-label');
+    maxDlLabel.textContent = 'Max téléchargements (optionnel)';
+    const maxDlInput = document.createElement('input');
+    maxDlInput.type = 'number';
+    maxDlInput.min = '1';
+    maxDlInput.placeholder = 'Illimité';
+    maxDlInput.className = 'sheet-pwd-input';
+    maxDlInput.style.width = '50%';
+
     // Bouton créer
     const createBtn = creerElement('button', 'sheet-create-btn');
     createBtn.innerHTML = svgUpload() + ' Créer le lien';
@@ -293,10 +303,10 @@ function ouvrirShareSheet(path, name) {
             const unit = customUnit.value;
             expiry = isNaN(val) || val < 1 ? '' : String(unit === 'j' ? val * 24 : val);
         }
-        creerLienSheet(path, pwdInput.value, expiry, sheet);
+        creerLienSheet(path, pwdInput.value, expiry, sheet, maxDlInput.value ? parseInt(maxDlInput.value) : null);
     });
 
-    sheet.append(handle, titleLabel, filename, pwdLabel, pwdWrap, expLabel, pillsWrap, customWrap, createBtn);
+    sheet.append(handle, titleLabel, filename, pwdLabel, pwdWrap, expLabel, pillsWrap, customWrap, maxDlLabel, maxDlInput, createBtn);
     document.body.append(overlay, sheet);
 
     setTimeout(() => pwdInput.focus(), 320);
@@ -307,7 +317,7 @@ function fermerShareSheet() {
     document.getElementById('share-sheet')?.remove();
 }
 
-async function creerLienSheet(path, password, expiresStr, sheet) {
+async function creerLienSheet(path, password, expiresStr, sheet, maxDownloads = null) {
     const expires = expiresStr ? parseInt(expiresStr) : null;
 
     const createBtn = sheet.querySelector('.sheet-create-btn');
@@ -320,7 +330,7 @@ async function creerLienSheet(path, password, expiresStr, sheet) {
         const resp = await fetch('/share/ctrl.php?cmd=create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path, password: password || '', expires, csrf_token: CSRF_TOKEN }),
+            body: JSON.stringify({ path, password: password || '', expires, max_downloads: maxDownloads, csrf_token: CSRF_TOKEN }),
         });
         const data = await resp.json();
         if (data.error) { alert('Erreur : ' + data.error); if (createBtn) createBtn.disabled = false; return; }

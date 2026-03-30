@@ -64,6 +64,9 @@ function afficher_liens(): void {
         $type = $link['type'];
         $dlUrl = '/dl/' . $token;
         $dlCount = (int)$link['download_count'];
+        $maxDl = isset($link['max_downloads']) && $link['max_downloads'] !== null ? (int)$link['max_downloads'] : null;
+        $dlDisplay = $maxDl !== null ? "{$dlCount}/{$maxDl}" : "{$dlCount}";
+        $isExhausted = $maxDl !== null && $dlCount >= $maxDl;
         $created = date('d/m/Y', strtotime($link['created_at']));
 
         // Badge type
@@ -86,7 +89,7 @@ function afficher_liens(): void {
             ? '<span class="badge badge-password">&#x1F512; mdp</span>'
             : '';
 
-        $expiredClass = $expired ? ' is-expired' : '';
+        $expiredClass = ($expired || $isExhausted) ? ' is-expired' : '';
         $linkId = (int)$link['id'];
 
         echo "<div class=\"link-card{$expiredClass}\">";
@@ -102,7 +105,7 @@ function afficher_liens(): void {
         echo "</div>";
         echo "<div class=\"link-card-bottom\">";
         echo "<div class=\"link-meta\"><span class=\"link-meta-label\">Expire</span>{$expHtml}</div>";
-        echo "<div class=\"link-meta\"><span class=\"link-meta-label\">Téléch.</span><span class=\"link-meta-val\">{$dlCount}</span></div>";
+        echo "<div class=\"link-meta\"><span class=\"link-meta-label\">Téléch.</span><span class=\"link-meta-val\">{$dlDisplay}</span></div>";
         echo "<div class=\"link-meta\"><span class=\"link-meta-label\">Créé</span><span class=\"link-meta-val\">{$created}</span></div>";
         if ($pwdHtml) echo $pwdHtml;
         if ($currentRole === 'admin' && !empty($link['created_by'])) {
