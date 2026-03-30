@@ -528,3 +528,13 @@ function change_password_for_user(PDO $db, string $username, string $currentPwd,
        ->execute([password_hash($newPwd, PASSWORD_BCRYPT), $username]);
     return ['ok' => true];
 }
+
+/**
+ * Supprime tous les liens expirés de la base.
+ * Retourne le nombre de liens supprimés.
+ */
+function purge_expired_links(PDO $db): int {
+    $stmt = $db->prepare("DELETE FROM links WHERE expires_at IS NOT NULL AND expires_at < datetime('now')");
+    $stmt->execute();
+    return $stmt->rowCount();
+}

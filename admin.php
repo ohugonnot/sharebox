@@ -251,6 +251,13 @@ if ($action !== '') {
                 echo json_encode(['ok' => true, 'message' => 'Scan TMDB lancé', 'pid' => $pid]);
                 break;
 
+            case 'purge_expired':
+                $db = get_db();
+                require_once __DIR__ . '/functions.php';
+                $deleted = purge_expired_links($db);
+                echo json_encode(['ok' => true, 'deleted' => $deleted]);
+                break;
+
             default:
                 http_response_code(400);
                 echo json_encode(['error' => 'Action inconnue']);
@@ -588,6 +595,16 @@ if ($action !== '') {
                 </div>
                 <div id="tmdb-bar-label" style="font-size:.72rem;color:var(--text-muted);margin-top:.3rem"></div>
             </div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:1.5rem">
+        <div class="card-header">
+            <div class="card-title">Maintenance</div>
+        </div>
+        <div style="padding:1rem 1.4rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-ghost" id="purge-btn" onclick="purgeExpired()">Purger les liens expirés</button>
+            <span id="purge-result" style="font-size:.82rem;color:var(--text-dim)"></span>
         </div>
     </div>
 
@@ -946,6 +963,25 @@ async function launchTmdbScan() {
     if (res.error) { toast(res.error, false); btn.disabled = false; btn.textContent = 'Scan TMDB'; return; }
     toast(res.message);
     setTimeout(loadTmdbStatus, 2000);
+}
+
+async function purgeExpired() {
+    const btn = document.getElementById('purge-btn');
+    const result = document.getElementById('purge-result');
+    btn.disabled = true;
+    btn.textContent = 'Purge…';
+    try {
+        const res = await api('purge_expired', {});
+        if (res.error) { toast(res.error, false); }
+        else {
+            const msg = res.deleted === 0 ? 'Aucun lien expiré.' : res.deleted + ' lien(s) supprimé(s).';
+            result.textContent = msg;
+            toast(msg);
+        }
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Purger les liens expirés';
+    }
 }
 
 // Init
