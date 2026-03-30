@@ -295,6 +295,36 @@ try {
             ));
             break;
 
+        case 'mark_watched':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                http_response_code(405);
+                echo json_encode(['error' => 'Méthode POST requise']);
+                exit;
+            }
+            // POST {path, duration, csrf_token}
+            // Disponible pour tout user connecté (non admin-only)
+            $path = $input['path'] ?? '';
+            $duration = isset($input['duration']) ? (int)$input['duration'] : null;
+            $currentUser = $_SESSION['sharebox_user'] ?? '';
+            if (!$currentUser || !$path) {
+                http_response_code(400);
+                echo json_encode(['error' => 'missing params']);
+                break;
+            }
+            if (!file_exists($path)) {
+                http_response_code(404);
+                echo json_encode(['error' => 'file not found']);
+                break;
+            }
+            $db = get_db();
+            $db->prepare("
+                INSERT INTO watch_history (user, path, watched_at, duration_sec)
+                VALUES (:u, :p, datetime('now'), :d)
+                ON CONFLICT(user, path) DO UPDATE SET watched_at = datetime('now'), duration_sec = :d
+            ")->execute([':u' => $currentUser, ':p' => $path, ':d' => $duration]);
+            echo json_encode(['ok' => true]);
+            break;
+
         default:
             http_response_code(400);
             echo json_encode(['error' => 'Action inconnue']);
