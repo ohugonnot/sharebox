@@ -47,7 +47,7 @@ if ($action !== '') {
 
             case 'list_users':
                 $db = get_db();
-                $users = $db->query("SELECT id, username, role, created_at FROM users ORDER BY created_at")->fetchAll();
+                $users = $db->query("SELECT id, username, role, private, created_at FROM users ORDER BY created_at ASC")->fetchAll();
 
                 foreach ($users as &$u) {
                     if ($seedboxMode) {
@@ -68,6 +68,7 @@ if ($action !== '') {
                 $username = preg_replace('/[^a-z0-9_-]/', '', strtolower(trim($input['username'] ?? '')));
                 $password = $input['password'] ?? '';
                 $role = in_array($input['role'] ?? '', ['admin', 'user']) ? $input['role'] : 'user';
+                $private = isset($input['private']) && $input['private'] ? 1 : 0;
 
                 if (strlen($username) < 2 || strlen($username) > 32) {
                     echo json_encode(['error' => 'Username : 2-32 caractères (a-z, 0-9, _, -)']);
@@ -87,8 +88,8 @@ if ($action !== '') {
                 }
 
                 // DB first
-                $stmt = $db->prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)");
-                $stmt->execute([$username, password_hash($password, PASSWORD_BCRYPT), $role]);
+                $stmt = $db->prepare("INSERT INTO users (username, password_hash, role, private) VALUES (?, ?, ?, ?)");
+                $stmt->execute([$username, password_hash($password, PASSWORD_BCRYPT), $role, $private]);
 
                 // Create seedbox user if in seedbox mode
                 if ($seedboxMode) {
@@ -123,9 +124,10 @@ if ($action !== '') {
 
                 $newPassword = $input['password'] ?? '';
                 $newRole = in_array($input['role'] ?? '', ['admin', 'user']) ? $input['role'] : $user['role'];
+                $newPrivate = array_key_exists('private', $input) ? ($input['private'] ? 1 : 0) : (int)$user['private'];
 
-                // Update role
-                $db->prepare("UPDATE users SET role = ? WHERE id = ?")->execute([$newRole, $userId]);
+                // Update role and private
+                $db->prepare("UPDATE users SET role = ?, private = ? WHERE id = ?")->execute([$newRole, $newPrivate, $userId]);
 
                 // Update password if provided
                 if ($newPassword !== '') {
@@ -231,15 +233,15 @@ if ($action !== '') {
                 break;
 
             case 'tmdb_scan':
-                // Launch ai-titles.php --cron in background
+                // Launch tmdb-worker.php in background
                 $lockFile = sys_get_temp_dir() . '/sharebox_tmdb_scan.lock';
                 if (file_exists($lockFile) && (time() - filemtime($lockFile)) < 300) {
                     echo json_encode(['ok' => false, 'message' => 'Scan déjà en cours']);
                     break;
                 }
                 touch($lockFile);
-                $script = realpath(__DIR__ . '/tools/ai-titles.php');
-                $logFile = __DIR__ . '/data/ai-titles.log';
+                $script = realpath(__DIR__ . '/tools/tmdb-worker.php');
+                $logFile = __DIR__ . '/data/tmdb-worker.log';
                 $cmd = sprintf(
                     '/usr/bin/php %s --cron >> %s 2>&1 & echo $!',
                     escapeshellarg($script),
