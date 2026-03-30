@@ -19,11 +19,12 @@ if (PHP_SAPI !== 'cli' && !is_logged_in()) {
 }
 
 $action = $_GET['cmd'] ?? '';
+$input = [];
 
 // Validation CSRF pour les requêtes POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     session_start();
-    $input = json_decode(file_get_contents('php://input'), true);
+    $input = json_decode(file_get_contents('php://input'), true) ?? [];
     $csrfToken = $input['csrf_token'] ?? '';
     if (!hash_equals($_SESSION['csrf_token'] ?? '', $csrfToken)) {
         http_response_code(403);
