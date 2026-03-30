@@ -406,6 +406,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card:hover .grid-card-overview { opacity:1; }
 .grid-card-overview-title { font-size:.85rem; font-weight:700; color:var(--accent); margin-bottom:.35rem; line-height:1.25; }
 .grid-card-overview-text { font-size:.74rem; color:#ccc; line-height:1.5; display:-webkit-box; -webkit-line-clamp:8; -webkit-box-orient:vertical; overflow:hidden; }
+.grid-card-confidence { position:absolute; bottom:.4rem; right:.4rem; width:7px; height:7px; border-radius:50%; opacity:.6; z-index:4; }
 .grid-card-toggle { position:absolute; top:.5rem; left:.5rem; width:22px; height:22px; border-radius:50%; background:rgba(0,0,0,.5); border:1px solid rgba(255,255,255,.1); display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition:opacity .15s; z-index:5; color:rgba(255,255,255,.5); }
 .grid-card:hover .grid-card-toggle { opacity:.6; }
 .grid-card-toggle:hover { opacity:1 !important; background:rgba(0,0,0,.7); border-color:rgba(255,255,255,.3); color:#fff; }
@@ -985,6 +986,15 @@ function reloadAllPosters() {
                             var bg = card.querySelector('.grid-card-bg');
                             if (bg) { bg.style.backgroundImage = 'url(' + poster + ')'; }
                             card.classList.add('has-poster');
+                        }
+                        // Confidence dot
+                        var conf = info.confidence || 0;
+                        if (conf > 0 && conf < 100) {
+                            var dot = card.querySelector('.grid-card-confidence') || document.createElement('div');
+                            dot.className = 'grid-card-confidence';
+                            dot.style.background = conf >= 80 ? '#3ddc84' : conf >= 50 ? '#f0a030' : '#e8453c';
+                            dot.title = conf + '% confidence';
+                            if (!dot.parentNode) card.appendChild(dot);
                         }
                     }
                     if (overview && !card.querySelector('.grid-card-overview')) {

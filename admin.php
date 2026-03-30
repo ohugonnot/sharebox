@@ -215,12 +215,18 @@ if ($action !== '') {
                 $total = (int)$db->query("SELECT COUNT(*) FROM folder_posters")->fetchColumn();
                 $matched = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchColumn();
                 $hidden = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url = '__none__'")->fetchColumn();
-                $pending = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NULL AND (verified IS NULL OR verified = 0)")->fetchColumn();
+                $pending = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NULL AND (verified IS NULL OR verified >= 0)")->fetchColumn();
                 $failed = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NULL AND verified = -1")->fetchColumn();
                 $scanning = file_exists(sys_get_temp_dir() . '/sharebox_tmdb_scan.lock');
+                // Confidence breakdown
+                $high = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND verified >= 80")->fetchColumn();
+                $medium = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND verified >= 50 AND verified < 80")->fetchColumn();
+                $low = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified < 50 OR verified IS NULL OR verified = 0)")->fetchColumn();
+                $avgConf = (int)$db->query("SELECT COALESCE(AVG(verified), 0) FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND verified > 0")->fetchColumn();
                 echo json_encode([
                     'total' => $total, 'matched' => $matched, 'hidden' => $hidden,
                     'pending' => $pending, 'failed' => $failed, 'scanning' => $scanning,
+                    'confidence' => ['high' => $high, 'medium' => $medium, 'low' => $low, 'avg' => $avgConf],
                 ]);
                 break;
 
@@ -951,16 +957,22 @@ async function loadTmdbStatus() {
         const hidden = res.hidden || 0;
         const pct = total > 0 ? Math.round((matched + hidden) / total * 100) : 0;
 
+        const conf = res.confidence || {};
         el.innerHTML =
             '<span style="color:var(--green)">' + matched + ' matchés</span>' +
             '<span>' + hidden + ' masqués</span>' +
             '<span style="color:var(--accent)">' + pending + ' en attente</span>' +
             (failed > 0 ? '<span style="color:var(--red)">' + failed + ' échoués</span>' : '') +
-            '<span style="color:var(--text-muted)">' + total + ' total</span>';
+            '<span style="color:var(--text-muted)">' + total + ' total</span>' +
+            (matched > 0 ? '<span style="opacity:.5;font-size:.75rem">|</span>' +
+                '<span title="verified ≥80%" style="color:#3ddc84;font-size:.75rem">● ' + (conf.high || 0) + '</span>' +
+                '<span title="verified 50-79%" style="color:#f0a030;font-size:.75rem">● ' + (conf.medium || 0) + '</span>' +
+                (conf.low > 0 ? '<span title="verified <50%" style="color:#e8453c;font-size:.75rem">● ' + conf.low + '</span>' : '') +
+                '<span style="color:var(--text-muted);font-size:.75rem">avg ' + (conf.avg || 0) + '%</span>' : '');
 
         barWrap.style.display = '';
         bar.style.width = pct + '%';
-        barLabel.textContent = pct + '% couvert';
+        barLabel.textContent = pct + '% couvert — confiance moyenne ' + (conf.avg || 0) + '%';
 
         if (res.scanning) {
             btn.textContent = 'Scan en cours...';
