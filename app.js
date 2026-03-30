@@ -100,6 +100,9 @@ function afficherFichiers(entries) {
     const list = document.getElementById('file-list');
     list.innerHTML = '';
 
+    const filterInput = document.getElementById('file-filter');
+    if (filterInput) filterInput.value = '';
+
     // Filtrer les fichiers cachés (commençant par un point)
     entries = entries.filter(e => !e.name.startsWith('.'));
 
@@ -817,3 +820,16 @@ function creerElement(tag, className) {
     if (className) el.className = className;
     return el;
 }
+
+// ── Filtre fichiers ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+    const filterInput = document.getElementById('file-filter');
+    if (!filterInput) return;
+    filterInput.addEventListener('input', function () {
+        const q = this.value.toLowerCase();
+        document.querySelectorAll('#file-list .file-item').forEach(li => {
+            const name = li.querySelector('.file-name')?.textContent?.toLowerCase() ?? '';
+            li.style.display = q === '' || name.includes(q) ? '' : 'none';
+        });
+    });
+});
