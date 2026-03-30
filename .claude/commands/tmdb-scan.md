@@ -28,7 +28,7 @@ These rules are deterministic — apply them first, no ambiguity:
 **Use parent context instead of standalone search:**
 - If folder name is a bare season/episode code (`S01`, `S02`, `Saison 3`, `Season 4`, `E001`, etc.) with no other title → do NOT search TMDB with that code. Instead:
   - If parent folder is already matched in `folder_posters` → inherit parent's `tmdb_id`, then try `GET /tv/{tmdb_id}/season/{N}` for a season-specific poster; fall back to series poster
-  - If parent is not matched → skip this entry (increment `ai_attempts`), process after parent is matched
+  - If parent is not matched → skip this entry (set `match_attempts = 1`), process after parent is matched
 
 **Series container folder:**
 - Folder named after a single series (e.g. "Pokemon La Series", "Naruto INTEGRALE") and containing season subfolders → search TMDB as TV, match to the series
@@ -50,15 +50,15 @@ Repeat until lock is gone or stale. Only proceed once worker has finished — ot
 ### Phase 1: Match pending entries
 
 1. **Read config** — `cd /var/www/sharebox && php -r 'require "config.php"; ...'` to get DB_PATH and TMDB_API_KEY
-2. **Query pending** — `poster_url IS NULL` or `verified = -1` (recheck requests)
+2. **Query pending** — `poster_url IS NULL` or `verified = -1` (recheck requests). Ne pas filtrer sur `match_attempts` — le skill doit traiter tout ce qui n'a pas de poster, quelle que soit la valeur de `match_attempts`.
 3. **Apply decision rules above** — skip or inherit before searching
 4. **Extract title** from remaining entries:
    - Strip release tags: `MULTi`, `1080p`, `BluRay`, `x264`, `x265`, `WEB`, `HEVC`, `HDR`, `REMASTERED`, `VOSTFR`, `VFF`, `iNTEGRALE`, group names after `-`
    - Extract year if present (4-digit number 1900-2099)
-   - If result is empty or just a codec/tag → increment `ai_attempts`, skip
+   - If result is empty or just a codec/tag → set `match_attempts = 1`, skip
 5. **Search TMDB** — `GET /search/multi?api_key=KEY&query=TITLE&language=fr&page=1`
    - If no result → retry in English (drop `&language=fr`)
-   - If still no result → increment `ai_attempts`
+   - If still no result → set `match_attempts = 1`
 6. **Pick best result** — prefer exact title match over partial; prefer `tv` for folders with multiple subfolders, `movie` for single-file folders:
    - Title + year + type all match → **95%**
    - Title matches, year absent from filename → **80%**
@@ -144,8 +144,8 @@ UPDATE folder_posters SET poster_url=?, tmdb_id=?, title=?, overview=?, tmdb_yea
 -- Skip (non-media / collection):
 UPDATE folder_posters SET poster_url='__none__', verified=100, updated_at=datetime('now') WHERE path=?
 
--- No match (retry later):
-UPDATE folder_posters SET ai_attempts = COALESCE(ai_attempts,0) + 1 WHERE path=?
+-- No match (worker already tried once — skill sets match_attempts=1 to mark as attempted):
+UPDATE folder_posters SET match_attempts = 1 WHERE path=?
 
 -- Fix false positive:
 UPDATE folder_posters SET poster_url=?, tmdb_id=?, title=?, overview=?, tmdb_year=?, tmdb_type=?, verified=SCORE, updated_at=datetime('now') WHERE path=?
