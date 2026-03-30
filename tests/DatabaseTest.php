@@ -136,7 +136,31 @@ class DatabaseTest extends TestCase
     {
         $db = get_db();
         $version = (int) $db->query('PRAGMA user_version')->fetchColumn();
-        $this->assertSame(8, $version);
+        $this->assertSame(10, $version);
+    }
+
+    public function testUsersTableHasPrivateColumn(): void
+    {
+        $db = get_db();
+        $cols = array_column($db->query("PRAGMA table_info(users)")->fetchAll(), 'name');
+        $this->assertContains('private', $cols);
+    }
+
+    public function testUsersPrivateDefaultsToZero(): void
+    {
+        $db = get_db();
+        $db->prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, 'user')")
+           ->execute(['testprivuser', password_hash('pass', PASSWORD_BCRYPT)]);
+        $row = $db->query("SELECT private FROM users WHERE username = 'testprivuser'")->fetch();
+        $this->assertSame(0, (int)$row['private']);
+        $db->prepare("DELETE FROM users WHERE username = ?")->execute(['testprivuser']);
+    }
+
+    public function testLinksTableHasCreatedByColumn(): void
+    {
+        $db = get_db();
+        $cols = array_column($db->query("PRAGMA table_info(links)")->fetchAll(), 'name');
+        $this->assertContains('created_by', $cols);
     }
 
     // ── 5b. folder_posters table exists ──────────────────────────────────
