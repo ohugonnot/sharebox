@@ -38,6 +38,9 @@ function plog(tag, msg, data) {
     var base        = PLAYER_CONFIG.baseUrl;
     var pp          = PLAYER_CONFIG.pp;
     var episodeNav  = PLAYER_CONFIG.episodeNav;
+    var watchPath   = PLAYER_CONFIG.watchPath  || null;
+    var watchCsrf   = PLAYER_CONFIG.watchCsrf  || null;
+    var watchMarked = false;
 
     // ── Icônes SVG ───────────────────────────────────────────────────────────
     var svgPlay   = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
@@ -226,6 +229,7 @@ function plog(tag, msg, data) {
     function startStream(resumeAt) {
         var mode = S.confirmed || S.step;
         plog('STREAM', 'startStream mode=' + mode + ' resumeAt=' + (resumeAt || 0).toFixed(1) + ' audio=' + S.audioIdx + ' quality=' + S.quality + ' burnSub=' + S.burnSub);
+        watchMarked = false;
         // En mode natif, le navigateur gère le seek via player.currentTime (pas de &start= dans l'URL)
         if (mode === 'native' && resumeAt > 0) {
             plog('STREAM', 'native seek via currentTime → ' + resumeAt.toFixed(1));
@@ -567,6 +571,18 @@ function plog(tag, msg, data) {
             requestAnimationFrame(function() { S.rafPending = false; updateSeekUI(); updateTitle(); });
         }
         updateBuffered(); Subs.render();
+        // Watch history : marquer vu à 85% (une seule fois par lecture)
+        if (!watchMarked && watchPath && watchCsrf && S.duration > 60) {
+            if (realTime() / S.duration >= 0.85) {
+                watchMarked = true;
+                fetch('/share/ctrl.php?cmd=mark_watched', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({path: watchPath, duration: Math.round(S.duration), csrf_token: watchCsrf})
+                }).catch(function(){});
+            }
+        }
     });
     seekBar.addEventListener('mousedown',  function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); });
     seekBar.addEventListener('touchstart', function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); }, {passive:true});
