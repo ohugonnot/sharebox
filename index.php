@@ -105,6 +105,10 @@ function afficher_liens(): void {
         echo "<div class=\"link-meta\"><span class=\"link-meta-label\">Téléch.</span><span class=\"link-meta-val\">{$dlCount}</span></div>";
         echo "<div class=\"link-meta\"><span class=\"link-meta-label\">Créé</span><span class=\"link-meta-val\">{$created}</span></div>";
         if ($pwdHtml) echo $pwdHtml;
+        if ($currentRole === 'admin' && !empty($link['created_by'])) {
+            $owner = htmlspecialchars($link['created_by']);
+            echo "<span class=\"badge badge-owner\">{$owner}</span>";
+        }
         echo "</div>";
 
         // Barre d'actions : Copier + Email
