@@ -10,11 +10,7 @@ require_once __DIR__ . '/functions.php';
 
 require_auth();
 
-if (($_SESSION['sharebox_role'] ?? '') !== 'admin') {
-    http_response_code(403);
-    echo 'Accès réservé aux administrateurs.';
-    exit;
-}
+$isAdmin = ($_SESSION['sharebox_role'] ?? '') === 'admin';
 
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -31,6 +27,15 @@ $action = $_GET['action'] ?? '';
 
 if ($action !== '') {
     header('Content-Type: application/json; charset=utf-8');
+
+    // Actions admin-only
+    $adminOnlyActions = ['list_users','create_user','update_user','delete_user',
+                         'list_downloads','start_rtorrent','stop_rtorrent','disk_usage'];
+    if (in_array($action, $adminOnlyActions, true) && !$isAdmin) {
+        http_response_code(403);
+        echo json_encode(['error' => 'Accès réservé aux administrateurs.']);
+        exit;
+    }
 
     // CSRF check for POST
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -285,26 +290,24 @@ if ($action !== '') {
             case 'recent_activity':
                 $db = get_db();
                 $userFilter = trim($input['user'] ?? '');
-                if ($userFilter !== '') {
-                    $stmt = $db->prepare("
-                        SELECT dl.id, l.name, l.token, l.created_by, dl.ip, dl.downloaded_at
-                        FROM download_logs dl
-                        JOIN links l ON dl.link_id = l.id
-                        WHERE l.created_by = ?
-                        ORDER BY dl.downloaded_at DESC
-                        LIMIT 50
-                    ");
-                    $stmt->execute([$userFilter]);
-                } else {
-                    $stmt = $db->query("
-                        SELECT dl.id, l.name, l.token, l.created_by, dl.ip, dl.downloaded_at
-                        FROM download_logs dl
-                        JOIN links l ON dl.link_id = l.id
-                        ORDER BY dl.downloaded_at DESC
-                        LIMIT 50
-                    ");
-                }
-                echo json_encode(['logs' => $stmt->fetchAll()]);
+                $search     = trim($input['search'] ?? '');
+                $offset     = max(0, (int)($input['offset'] ?? 0));
+                $limit      = 15;
+
+                $where = [];
+                $params = [];
+                if ($userFilter !== '') { $where[] = 'l.created_by = ?'; $params[] = $userFilter; }
+                if ($search !== '')     { $where[] = 'l.name LIKE ?';    $params[] = '%' . $search . '%'; }
+                $whereClause = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+
+                $base = "FROM download_logs dl JOIN links l ON dl.link_id = l.id $whereClause";
+                $totalStmt = $db->prepare("SELECT COUNT(*) $base");
+                $totalStmt->execute($params);
+                $totalCount = (int)$totalStmt->fetchColumn();
+
+                $stmt = $db->prepare("SELECT dl.id, l.name, l.token, l.created_by, dl.ip, dl.downloaded_at $base ORDER BY dl.downloaded_at DESC LIMIT $limit OFFSET ?");
+                $stmt->execute([...$params, $offset]);
+                echo json_encode(['logs' => $stmt->fetchAll(), 'total' => $totalCount, 'limit' => $limit, 'offset' => $offset]);
                 break;
 
             default:
@@ -334,7 +337,7 @@ if ($action !== '') {
 
         :root {
             --bg-void: #06080c;
-            --bg-deep: #0c0e14;
+            --bg-deep: #0f1119;
             --bg-card: #111420;
             --bg-input: #0d1018;
             --bg-row-hover: #161a26;
@@ -342,7 +345,7 @@ if ($action !== '') {
             --accent-dim: rgba(240, 160, 48, .08);
             --accent-glow: rgba(240, 160, 48, .15);
             --text: #d8dce8;
-            --text-dim: #5a6078;
+            --text-dim: #7e879e;
             --text-muted: #555968;
             --border: rgba(255, 255, 255, .04);
             --border-strong: rgba(255, 255, 255, .08);
@@ -363,8 +366,8 @@ if ($action !== '') {
             inset: 0;
             background:
                 radial-gradient(ellipse 80% 50% at 50% -20%, rgba(240, 160, 48, .03), transparent),
-                linear-gradient(rgba(255,255,255,.015) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255,255,255,.015) 1px, transparent 1px);
+                linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
             background-size: 100% 100%, 48px 48px, 48px 48px;
             pointer-events: none;
             z-index: 0;
@@ -421,7 +424,7 @@ if ($action !== '') {
             font-weight: 600;
             letter-spacing: .06em;
             text-transform: uppercase;
-            color: var(--text-muted);
+            color: var(--text-dim);
             border-bottom: 1px solid var(--border);
         }
 
@@ -619,6 +622,78 @@ if ($action !== '') {
             color: var(--text-muted);
             margin-top: .3rem;
         }
+
+        /* ── Pagination activité ── */
+        .activity-pager {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: .5rem;
+            padding: .7rem 1.4rem;
+            border-top: 1px solid var(--border);
+            font-size: .8rem;
+            color: var(--text-dim);
+        }
+        .activity-pager:empty { display: none; }
+        .pager-btn {
+            background: transparent;
+            border: 1px solid var(--border-strong);
+            border-radius: 6px;
+            color: var(--text-dim);
+            padding: .25rem .6rem;
+            font-size: .78rem;
+            cursor: pointer;
+            font-family: inherit;
+            transition: color .15s, border-color .15s;
+        }
+        .pager-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+        .pager-btn:disabled { opacity: .35; cursor: default; }
+
+        /* ── Tabs ── */
+        .admin-tabs {
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 1.5rem;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+        .admin-tabs::-webkit-scrollbar { display: none; }
+        .tab-btn {
+            background: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-dim);
+            padding: .65rem 1.2rem;
+            font-family: inherit;
+            font-size: .85rem;
+            font-weight: 500;
+            cursor: pointer;
+            white-space: nowrap;
+            margin-bottom: -1px;
+            transition: color .15s, border-color .15s;
+        }
+        .tab-btn:hover { color: var(--text); }
+        .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+
+        /* ── Responsive admin ── */
+        #user-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        @media (max-width: 768px) {
+            .admin-wrap { padding: 1rem .75rem; }
+            .card-header { flex-wrap: wrap; gap: .5rem; }
+            .user-table th, .user-table td { padding: .6rem .8rem; }
+            .col-token, .col-ip, .col-date { display: none; }
+        }
+        @media (max-width: 480px) {
+            .col-user, .col-disk, .col-rtorrent, .col-role { display: none; }
+            .user-table th, .user-table td { padding: .5rem .6rem; font-size: .78rem; }
+            #activity-search { width: 100%; }
+            .activity-pager { justify-content: center; }
+            .actions { flex-wrap: nowrap; }
+            .actions .btn { padding: .25rem .45rem; font-size: .72rem; }
+        }
     </style>
 </head>
 <body>
@@ -626,56 +701,71 @@ if ($action !== '') {
 <div class="app">
     <?php $header_subtitle = 'Administration'; $header_back = true; include __DIR__ . '/header.php'; ?>
 
-    <div class="page-title">Gestion des utilisateurs</div>
-    <div class="page-sub">Gérer les utilisateurs<?= $seedboxMode ? ' (rtorrent + ruTorrent + SFTP + ShareBox)' : '' ?></div>
+    <nav class="admin-tabs">
+        <button class="tab-btn active" onclick="switchTab('utilisateurs')">Utilisateurs</button>
+        <button class="tab-btn" onclick="switchTab('activite')">Activité</button>
+        <button class="tab-btn" onclick="switchTab('systeme')">Système</button>
+    </nav>
 
-    <div class="card" style="margin-bottom:1.5rem">
-        <div class="card-header">
-            <div class="card-title">TMDB Posters</div>
-            <button class="btn btn-accent" id="tmdb-scan-btn" onclick="launchTmdbScan()">Scan TMDB</button>
-        </div>
-        <div style="padding:1rem 1.4rem">
-            <div id="tmdb-status" style="display:flex;gap:1.5rem;flex-wrap:wrap;font-size:.82rem;color:var(--text-dim)">
-                Chargement...
+    <div id="tab-utilisateurs" class="tab-panel active">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">Utilisateurs<?= $seedboxMode ? ' <span style="font-weight:400;color:var(--text-dim);font-size:.75rem">(rtorrent + ruTorrent + SFTP)</span>' : '' ?></div>
+                <button class="btn btn-accent" onclick="openCreateModal()">+ Nouvel utilisateur</button>
             </div>
-            <div id="tmdb-bar-wrap" style="margin-top:.8rem;display:none">
-                <div style="background:var(--bg-input);border-radius:6px;height:6px;overflow:hidden">
-                    <div id="tmdb-bar" style="height:100%;background:var(--accent);border-radius:6px;transition:width .5s;width:0%"></div>
+            <div id="user-table-wrap">
+                <div class="empty-msg">Chargement...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="tab-activite" class="tab-panel">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">Activité récente</div>
+                <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+                    <input type="search" id="activity-search" placeholder="Rechercher un fichier…"
+                           oninput="activitySearchDebounce()"
+                           style="background:var(--bg-input);border:1px solid var(--border-strong);border-radius:6px;color:var(--text);padding:.3rem .6rem;font-size:.8rem;font-family:inherit;width:180px;outline:none">
+                    <select id="activity-user-filter" onchange="reloadActivity()"
+                            style="background:var(--bg-input);border:1px solid var(--border-strong);border-radius:6px;color:var(--text);padding:.3rem .6rem;font-size:.8rem;font-family:inherit">
+                        <option value="">Tous les utilisateurs</option>
+                    </select>
                 </div>
-                <div id="tmdb-bar-label" style="font-size:.72rem;color:var(--text-muted);margin-top:.3rem"></div>
+            </div>
+            <div id="activity-wrap" style="padding:.8rem 1.4rem">
+                <div class="empty-msg">Chargement…</div>
+            </div>
+            <div id="activity-pagination" class="activity-pager"></div>
+        </div>
+    </div>
+
+    <div id="tab-systeme" class="tab-panel">
+        <div class="card" style="margin-bottom:1.5rem">
+            <div class="card-header">
+                <div class="card-title">TMDB Posters</div>
+                <button class="btn btn-accent" id="tmdb-scan-btn" onclick="launchTmdbScan()">Scan TMDB</button>
+            </div>
+            <div style="padding:1rem 1.4rem">
+                <div id="tmdb-status" style="display:flex;gap:1.5rem;flex-wrap:wrap;font-size:.82rem;color:var(--text-dim)">
+                    Chargement...
+                </div>
+                <div id="tmdb-bar-wrap" style="margin-top:.8rem;display:none">
+                    <div style="background:var(--bg-input);border-radius:6px;height:6px;overflow:hidden">
+                        <div id="tmdb-bar" style="height:100%;background:var(--accent);border-radius:6px;transition:width .5s;width:0%"></div>
+                    </div>
+                    <div id="tmdb-bar-label" style="font-size:.72rem;color:var(--text-muted);margin-top:.3rem"></div>
+                </div>
             </div>
         </div>
-    </div>
-
-    <div class="card" style="margin-bottom:1.5rem">
-        <div class="card-header">
-            <div class="card-title">Maintenance</div>
-        </div>
-        <div style="padding:1rem 1.4rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap">
-            <button class="btn btn-ghost" id="purge-btn" onclick="purgeExpired()">Purger les liens expirés</button>
-            <span id="purge-result" style="font-size:.82rem;color:var(--text-dim)"></span>
-        </div>
-    </div>
-
-    <div class="card" style="margin-bottom:1.5rem">
-        <div class="card-header">
-            <div class="card-title">Activité récente</div>
-            <select id="activity-user-filter" onchange="loadRecentActivity()" style="background:var(--bg-input);border:1px solid var(--border-strong);border-radius:6px;color:var(--text);padding:.3rem .6rem;font-size:.8rem;font-family:inherit">
-                <option value="">Tous les utilisateurs</option>
-            </select>
-        </div>
-        <div id="activity-wrap" style="padding:.8rem 1.4rem">
-            <div class="empty-msg">Chargement...</div>
-        </div>
-    </div>
-
-    <div class="card">
-        <div class="card-header">
-            <div class="card-title">Utilisateurs</div>
-            <button class="btn btn-accent" onclick="openCreateModal()">+ Nouvel utilisateur</button>
-        </div>
-        <div id="user-table-wrap">
-            <div class="empty-msg">Chargement...</div>
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">Maintenance</div>
+            </div>
+            <div style="padding:1rem 1.4rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap">
+                <button class="btn btn-ghost" id="purge-btn" onclick="purgeExpired()">Purger les liens expirés</button>
+                <span id="purge-result" style="font-size:.82rem;color:var(--text-dim)"></span>
+            </div>
         </div>
     </div>
 </div>
@@ -723,7 +813,7 @@ if ($action !== '') {
         <input type="hidden" id="edit-id">
         <div class="modal-field">
             <label>Nom d'utilisateur</label>
-            <input type="text" id="edit-username" disabled style="opacity:.5">
+            <input type="text" id="edit-username" disabled style="color:var(--text-dim)">
         </div>
         <div class="modal-field">
             <label>Nouveau mot de passe</label>
@@ -827,9 +917,9 @@ async function loadUsers() {
     const sbMode = !!res.seedbox_mode;
 
     let html = '<table class="user-table"><thead><tr>';
-    html += '<th>Utilisateur</th><th>Rôle</th>';
-    if (sbMode) html += '<th>rtorrent</th>';
-    html += '<th>Disque</th><th>Créé le</th><th>Actions</th>';
+    html += '<th>Utilisateur</th><th class="col-role">Rôle</th>';
+    if (sbMode) html += '<th class="col-rtorrent">rtorrent</th>';
+    html += '<th class="col-disk">Disque</th><th class="col-date">Créé le</th><th>Actions</th>';
     html += '</tr></thead><tbody>';
 
     for (const u of res.users) {
@@ -843,7 +933,7 @@ async function loadUsers() {
 
         html += '<tr>';
         html += '<td class="username-cell">' + u.username + '</td>';
-        html += '<td>' + roleBadge + (u.private ? ' ' + privBadge : '') + '</td>';
+        html += '<td class="col-role">' + roleBadge + (u.private ? ' ' + privBadge : '') + '</td>';
 
         if (sbMode) {
             let statusBadge;
@@ -856,13 +946,13 @@ async function loadUsers() {
             } else {
                 statusBadge = '<span class="badge badge-inactive">inactif</span>';
             }
-            html += '<td>' + statusBadge + '</td>';
+            html += '<td class="col-rtorrent">' + statusBadge + '</td>';
         }
 
         const diskStr = formatBytes(u.disk_used);
-        html += '<td style="font-size:.8rem;color:var(--text-dim)">' + diskStr + '</td>';
+        html += '<td class="col-disk" style="font-size:.8rem;color:var(--text-dim)">' + diskStr + '</td>';
 
-        html += '<td style="font-size:.8rem;color:var(--text-dim)">' + date + '</td>';
+        html += '<td class="col-date" style="font-size:.8rem;color:var(--text-dim)">' + date + '</td>';
         html += '<td><div class="actions">';
         html += '<button class="btn btn-ghost" onclick=\'openEditModal(' + uJson + ')\'>Modifier</button>';
 
@@ -1061,33 +1151,68 @@ async function purgeExpired() {
     }
 }
 
+let activityOffset = 0;
+let activityDebounceTimer = null;
+
+function activitySearchDebounce() {
+    clearTimeout(activityDebounceTimer);
+    activityDebounceTimer = setTimeout(reloadActivity, 300);
+}
+
+function reloadActivity() {
+    activityOffset = 0;
+    loadRecentActivity();
+}
+
 async function loadRecentActivity() {
     const wrap = document.getElementById('activity-wrap');
+    const pager = document.getElementById('activity-pagination');
     const userFilter = document.getElementById('activity-user-filter')?.value ?? '';
+    const search = document.getElementById('activity-search')?.value ?? '';
+    wrap.innerHTML = '<div class="empty-msg">Chargement…</div>';
+    pager.innerHTML = '';
     try {
-        const res = await api('recent_activity', { user: userFilter });
+        const res = await api('recent_activity', { user: userFilter, search, offset: activityOffset });
         if (!res.logs || res.logs.length === 0) {
-            wrap.innerHTML = '<div class="empty-msg" style="padding:.8rem 0">Aucune activité enregistrée.</div>';
+            wrap.innerHTML = '<div class="empty-msg">Aucune activité enregistrée.</div>';
             return;
         }
         let html = '<table class="user-table"><thead><tr>';
-        html += '<th>Fichier</th><th>Token</th><th>User</th><th>IP</th><th>Date</th>';
+        html += '<th>Fichier</th><th class="col-token">Token</th><th class="col-user">User</th><th class="col-ip">IP</th><th>Date</th>';
         html += '</tr></thead><tbody>';
         for (const log of res.logs) {
             const d = log.downloaded_at ? new Date(log.downloaded_at + 'Z').toLocaleString('fr-FR') : '-';
             html += '<tr>';
             html += '<td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(log.name) + '">' + esc(log.name) + '</td>';
-            html += '<td><a href="/dl/' + esc(log.token) + '" target="_blank" style="color:var(--blue);font-size:.8rem">' + esc(log.token) + '</a></td>';
-            html += '<td style="font-size:.8rem;color:var(--text-dim)">' + (log.created_by ? esc(log.created_by) : '—') + '</td>';
-            html += '<td style="font-family:monospace;font-size:.8rem">' + esc(log.ip) + '</td>';
+            html += '<td class="col-token"><a href="/dl/' + esc(log.token) + '" target="_blank" style="color:var(--blue);font-size:.8rem">' + esc(log.token) + '</a></td>';
+            html += '<td class="col-user" style="font-size:.8rem;color:var(--text-dim)">' + (log.created_by ? esc(log.created_by) : '—') + '</td>';
+            html += '<td class="col-ip" style="font-family:monospace;font-size:.8rem">' + esc(log.ip) + '</td>';
             html += '<td style="font-size:.78rem;color:var(--text-dim)">' + esc(d) + '</td>';
             html += '</tr>';
         }
         html += '</tbody></table>';
         wrap.innerHTML = html;
+
+        const total = res.total ?? 0;
+        const limit = res.limit ?? 25;
+        const page = Math.floor(activityOffset / limit) + 1;
+        const pages = Math.ceil(total / limit);
+        let pagerHtml = '<span style="margin-right:auto">' + total + ' téléchargement' + (total > 1 ? 's' : '') + '</span>';
+        if (pages > 1) {
+            pagerHtml +=
+                '<button class="pager-btn" onclick="activityPage(-1)"' + (page <= 1 ? ' disabled' : '') + '>← Préc.</button>' +
+                '<span>Page ' + page + ' / ' + pages + '</span>' +
+                '<button class="pager-btn" onclick="activityPage(1)"' + (page >= pages ? ' disabled' : '') + '>Suiv. →</button>';
+        }
+        pager.innerHTML = pagerHtml;
     } catch (_) {
         wrap.innerHTML = '<div class="empty-msg">Erreur de chargement.</div>';
     }
+}
+
+function activityPage(dir) {
+    activityOffset = Math.max(0, activityOffset + dir * 15);
+    loadRecentActivity();
 }
 
 async function populateActivityUserFilter() {
@@ -1103,11 +1228,23 @@ async function populateActivityUserFilter() {
     }
 }
 
+// ── Tabs ────────────────────────────────────────────────────────────────────
+let activityLoaded = false;
+
+function switchTab(name) {
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + name).classList.add('active');
+    event.currentTarget.classList.add('active');
+    if (name === 'activite' && !activityLoaded) {
+        activityLoaded = true;
+        populateActivityUserFilter().then(() => loadRecentActivity());
+    }
+}
+
 // Init
 loadUsers();
 loadTmdbStatus();
-loadRecentActivity();
-populateActivityUserFilter();
 </script>
 </body>
 </html>
