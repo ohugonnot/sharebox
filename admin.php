@@ -6,6 +6,7 @@
 
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/functions.php';
 
 require_auth();
 
@@ -74,6 +75,9 @@ if ($action !== '') {
                                 fclose($pipes[0]);
                                 fclose($pipes[1]);
                                 fclose($pipes[2]);
+                                if ($out === false) {
+                                    proc_terminate($proc);
+                                }
                                 proc_close($proc);
                                 if ($out !== false && preg_match('/^(\d+)/', $out, $m)) {
                                     $u['disk_used'] = (int)$m[1];
@@ -274,7 +278,6 @@ if ($action !== '') {
 
             case 'purge_expired':
                 $db = get_db();
-                require_once __DIR__ . '/functions.php';
                 $deleted = purge_expired_links($db);
                 echo json_encode(['ok' => true, 'deleted' => $deleted]);
                 break;

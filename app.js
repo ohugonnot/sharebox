@@ -839,7 +839,9 @@ function ouvrirModalCompte() {
     document.getElementById('mdp-actuel').value = '';
     document.getElementById('mdp-nouveau').value = '';
     document.getElementById('mdp-confirm').value = '';
-    document.getElementById('mdp-error').style.display = 'none';
+    const errDiv = document.getElementById('mdp-error');
+    errDiv.style.display = 'none';
+    errDiv.style.color = 'var(--red, #e8453c)';
     document.getElementById('mdp-actuel').focus();
 }
 function fermerModalCompte() {
