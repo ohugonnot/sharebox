@@ -155,7 +155,7 @@ function plog(tag, msg, data) {
             else player.webkitEnterFullscreen();
             return;
         }
-        if (!isFs()) (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen || function(){}).call(playerCard);
+        if (!isFs()) (playerCard.requestFullscreen || playerCard.webkitRequestFullscreen || function(){}).call(playerCard, {navigationUI: 'hide'});
         else (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
     }
     var fsTitle = document.getElementById('fs-title');

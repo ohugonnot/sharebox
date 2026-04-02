@@ -438,6 +438,8 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0c0e14">
+    <link rel="manifest" href="/share/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$shareNameHtml}</title>
     <style>{$css}
@@ -1575,6 +1577,8 @@ function afficher_formulaire_mdp(string $name, string $erreur = ''): void {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0c0e14">
+    <link rel="manifest" href="/share/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>Accès protégé</title>
     <style>{$css}
@@ -1686,6 +1690,11 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#0c0e14">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="/share/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$fileNameHtml}</title>
     <link rel="stylesheet" href="/share/player.css?v={$cssMtime}">
@@ -1813,6 +1822,8 @@ function afficher_search_results(string $basePath, string $token, string $shareN
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0c0e14">
+    <link rel="manifest" href="/share/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>Recherche : {$queryHtml} — {$shareNameHtml}</title>
     <style>{$css}
@@ -1962,6 +1973,8 @@ function afficher_erreur(string $titre, string $message): void {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0c0e14">
+    <link rel="manifest" href="/share/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <title>{$titreHtml}</title>
     <style>{$css}
