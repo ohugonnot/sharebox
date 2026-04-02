@@ -1,0 +1,2 @@
+ACTION=="add", KERNEL=="sd[a-z]", ATTR{queue/read_ahead_kb}="4096"
+ACTION=="add", KERNEL=="md0", ATTR{queue/read_ahead_kb}="1024"

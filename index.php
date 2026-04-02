@@ -163,7 +163,13 @@ function afficher_liens(): void {
         <div id="breadcrumb" class="breadcrumb"></div>
         <div class="panel">
             <div class="file-filter-wrap">
-                <input type="search" id="file-filter" class="file-filter" placeholder="Filtrer les fichiers…" autocomplete="off">
+                <div class="search-bar-wrap">
+                    <input type="search" id="file-filter" class="file-filter" placeholder="Filtrer…" autocomplete="off">
+                    <button id="search-btn" class="search-btn" title="Chercher sur tout le disque" aria-label="Rechercher partout">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <span class="search-btn-label">Chercher partout</span>
+                    </button>
+                </div>
             </div>
             <ul id="file-list" class="file-list">
                 <li class="file-item"><div class="empty-msg">Chargement&hellip;</div></li>

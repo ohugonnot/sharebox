@@ -10,20 +10,29 @@ require_once __DIR__ . '/dashboard_helpers.php';
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
 
-// --- Auto-detect block device for BASE_PATH ---
+// --- Détection des volumes + device primaire (avant la fenêtre de mesure) ---
+$volumes    = detect_storage_volumes();
 $blockInfo  = detect_block_device(BASE_PATH);
 $diskPrefix = $blockInfo['prefix'];
 
-// --- Première lecture ---
-$cpu_a = parse_cpu_stat();
-$ds_a  = parse_diskstats_for_device($diskPrefix);
+// --- Première lecture (avant fenêtre 500 ms) ---
+$cpu_a    = parse_cpu_stat();
+$ds_a     = parse_diskstats_for_device($diskPrefix);
+$vol_ds_a = [];
+foreach ($volumes as $i => $vol) {
+    $vol_ds_a[$i] = parse_diskstats_for_device($vol['_block_prefix']);
+}
 
 // --- Fenêtre de mesure 500 ms ---
 usleep(500000);
 
 // --- Deuxième lecture ---
-$cpu_b = parse_cpu_stat();
-$ds_b  = parse_diskstats_for_device($diskPrefix);
+$cpu_b    = parse_cpu_stat();
+$ds_b     = parse_diskstats_for_device($diskPrefix);
+$vol_ds_b = [];
+foreach ($volumes as $i => $vol) {
+    $vol_ds_b[$i] = parse_diskstats_for_device($vol['_block_prefix']);
+}
 
 // CPU
 $cpu   = calc_cpu_pct($cpu_a, $cpu_b);
@@ -41,36 +50,46 @@ $buf_kb   = $mem['Buffers']      ?? 0;
 $cache_kb = ($mem['Cached'] ?? 0) + ($mem['SReclaimable'] ?? 0);
 $prog_kb  = max(0, $total_kb - $avail_kb - $buf_kb - $cache_kb);
 
-// Disk space (auto-detected device for BASE_PATH)
+// Disk space primaire (pour les champs disk_* de compatibilité)
 $disk_total = (float)(disk_total_space(BASE_PATH) ?: 0);
 $disk_free  = (float)(disk_free_space(BASE_PATH) ?: 0);
 $disk_used  = $disk_total - $disk_free;
 
-// Disk I/O calculé sur la fenêtre 500 ms
+// Disk I/O primaire (BASE_PATH) — fenêtre 500 ms
 $disk_busy_pct  = 0.0;
 $disk_io_pct    = 0.0;
 $disk_read_mbs  = 0.0;
 $disk_write_mbs = 0.0;
 
 if ($ds_a !== null && $ds_b !== null) {
-    // [5]=rd_sectors [9]=wr_sectors [12]=tot_ticks (ms busy, cap 100%)
-    // [13]=rq_ticks (temps pondéré, peut dépasser 500ms si I/O parallèles)
     $busy_ms_diff = (int)$ds_b[12] - (int)$ds_a[12];
     $rq_ms_diff   = (int)$ds_b[13] - (int)$ds_a[13];
     $rd_sec_diff  = (int)$ds_b[5]  - (int)$ds_a[5];
     $wr_sec_diff  = (int)$ds_b[9]  - (int)$ds_a[9];
 
-    // % classique (plafonné 100%) — garde pour compat
-    $disk_busy_pct = round(min(100.0, $busy_ms_diff / 500.0 * 100.0), 1);
-
-    // % de la capacité I/O parallèle réelle : rq_ticks / (fenêtre × nb_disques)
-    // rq_ticks peut valoir jusqu'à 500ms × N disques si tous les disques sont saturés
-    $raid_disks   = $blockInfo['raid_disks'];
-    $disk_io_pct  = round(min(100.0, $rq_ms_diff / (500.0 * max(1, $raid_disks)) * 100.0), 1);
-
+    $disk_busy_pct  = round(min(100.0, $busy_ms_diff / 500.0 * 100.0), 1);
+    $raid_disks     = $blockInfo['raid_disks'];
+    $disk_io_pct    = round(min(100.0, $rq_ms_diff / (500.0 * max(1, $raid_disks)) * 100.0), 1);
     $disk_read_mbs  = round(max(0.0, $rd_sec_diff * 512 / 1048576 / 0.5), 2);
     $disk_write_mbs = round(max(0.0, $wr_sec_diff * 512 / 1048576 / 0.5), 2);
 }
+
+// IO par volume — même fenêtre de mesure
+foreach ($volumes as $i => &$vol) {
+    $a = $vol_ds_a[$i] ?? null;
+    $b = $vol_ds_b[$i] ?? null;
+    if ($a !== null && $b !== null) {
+        $rq_ms  = (int)$b[13] - (int)$a[13];
+        $rd_sec = (int)$b[5]  - (int)$a[5];
+        $wr_sec = (int)$b[9]  - (int)$a[9];
+        $vol['io_pct']    = round(min(100.0, $rq_ms / (500.0 * max(1, $vol['_raid_disks'])) * 100.0), 1);
+        $vol['read_mbs']  = round(max(0.0, $rd_sec * 512 / 1048576 / 0.5), 2);
+        $vol['write_mbs'] = round(max(0.0, $wr_sec * 512 / 1048576 / 0.5), 2);
+    }
+    // Supprimer les champs internes avant la sérialisation JSON
+    unset($vol['_block_prefix'], $vol['_raid_disks']);
+}
+unset($vol);
 
 // Températures
 $cpu_temp  = read_cpu_package_temp();
@@ -88,8 +107,9 @@ echo json_encode([
     'ram_cache_mb'   => (int)round(($buf_kb + $cache_kb) / 1024),
     'ram_free_mb'    => (int)round($free_kb / 1024),
     'disk_total_gb'  => round($disk_total / 1073741824, 1),
-    'disk_used_gb'   => round($disk_used / 1073741824, 1),
-    'disk_free_gb'   => round($disk_free / 1073741824, 1),
+    'disk_used_gb'   => round($disk_used  / 1073741824, 1),
+    'disk_free_gb'   => round($disk_free  / 1073741824, 1),
+    'volumes'        => $volumes,
     'disk_busy_pct'  => $disk_busy_pct,
     'disk_io_pct'    => $disk_io_pct,
     'disk_read_mbs'  => $disk_read_mbs,

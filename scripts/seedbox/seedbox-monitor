@@ -1,0 +1,106 @@
+#!/bin/bash
+# Monitoring seedbox : I/O disque + bande passante reseau + upload rtorrent
+LOGFILE="${SEEDBOX_LOG_DIR:-/var/www/sharebox/data/logs}/seedbox-monitor.log"
+CRASH_LOGFILE="${SEEDBOX_LOG_DIR:-/var/www/sharebox/data/logs}/rtorrent-crashes.log"
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+IFACE="${SEEDBOX_IFACE:-enp59s0f0}"
+RAID="md0"
+NVME="nvme0n1"
+RT_USER="ropixv2"
+
+read_net() {
+    grep "$IFACE:" /proc/net/dev | awk '{print $2, $10}'
+}
+
+read_disk() {
+    grep " $1 " /proc/diskstats | awk '{print $6, $10}'
+}
+
+rt_upload_mbps() {
+    python3 - <<'PYEOF' 2>/dev/null || echo 0
+import sys, os, socket, xml.etree.ElementTree as ET
+SOCK = os.environ.get('RTORRENT_SOCK', '/var/run/rtorrent/ropixv2.sock')
+try:
+    body = b'<?xml version="1.0"?><methodCall><methodName>throttle.global_up.rate</methodName><params></params></methodCall>'
+    hdr = b'CONTENT_LENGTH\x00' + str(len(body)).encode() + b'\x00SCGI\x001\x00'
+    ns = str(len(hdr)).encode() + b':' + hdr + b','
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(3)
+    s.connect(SOCK)
+    s.sendall(ns + body)
+    resp = b''
+    while True:
+        c = s.recv(4096)
+        if not c: break
+        resp += c
+    s.close()
+    if b'\r\n\r\n' in resp:
+        resp = resp.split(b'\r\n\r\n', 1)[1]
+    root = ET.fromstring(resp.decode('utf-8', errors='replace'))
+    val = next((n for n in root.iter() if n.tag in ('i8','i4','int') and n.text), None)
+    print(int(val.text) // 1048576 if val is not None else 0)
+except:
+    print(0)
+PYEOF
+}
+
+prev_net=($(read_net))
+prev_raid=($(read_disk $RAID))
+prev_nvme=($(read_disk $NVME))
+prev_time=$(date +%s)
+prev_rt_pid=""
+
+sleep 10
+
+while true; do
+    now=$(date +%s)
+    cur_net=($(read_net))
+    cur_raid=($(read_disk $RAID))
+    cur_nvme=($(read_disk $NVME))
+
+    dt=$(( now - prev_time ))
+    [ $dt -eq 0 ] && dt=1
+
+    rx_mb=$(( (${cur_net[0]} - ${prev_net[0]}) / dt / 1048576 ))
+    tx_mb=$(( (${cur_net[1]} - ${prev_net[1]}) / dt / 1048576 ))
+    raid_rd=$(( (${cur_raid[0]} - ${prev_raid[0]}) * 512 / dt / 1048576 ))
+    raid_wr=$(( (${cur_raid[1]} - ${prev_raid[1]}) * 512 / dt / 1048576 ))
+    nvme_rd=$(( (${cur_nvme[0]} - ${prev_nvme[0]}) * 512 / dt / 1048576 ))
+    nvme_wr=$(( (${cur_nvme[1]} - ${prev_nvme[1]}) * 512 / dt / 1048576 ))
+
+    cache_gb=$(awk '/^Cached:/{printf "%.1f", $2/1048576}' /proc/meminfo)
+    rt_up=$(rt_upload_mbps)
+
+    # FD count + PID-based crash detection
+    rt_pid=$(pgrep -u "$RT_USER" rtorrent 2>/dev/null | head -1)
+    rt_fds="-"
+    if [ -n "$rt_pid" ]; then
+        rt_fds=$(ls /proc/$rt_pid/fd 2>/dev/null | wc -l)
+    fi
+    if [ -n "$prev_rt_pid" ] && [ "$rt_pid" != "$prev_rt_pid" ]; then
+        ts="$(date '+%Y-%m-%d %H:%M:%S')"
+        if [ -n "$rt_pid" ]; then
+            echo "$ts [RESTART] PID $prev_rt_pid → $rt_pid | contexte: up=${rt_up}MB/s raid_rd=${raid_rd}MB/s fds=${rt_fds}" >> "$CRASH_LOGFILE"
+        else
+            echo "$ts [DOWN] rtorrent PID $prev_rt_pid disparu | contexte: up=${rt_up}MB/s raid_rd=${raid_rd}MB/s" >> "$CRASH_LOGFILE"
+        fi
+    fi
+    prev_rt_pid="$rt_pid"
+
+    # Ratio disque lu / upload (efficacite cache OS : 1.0x = 100% cache, 5x = bcp de lectures)
+    total_disk_rd=$((raid_rd + nvme_rd))
+    if [ "$rt_up" -gt 0 ]; then
+        disk_eff=$(awk "BEGIN {printf \"%.1fx\", $total_disk_rd / $rt_up}")
+    else
+        disk_eff="idle"
+    fi
+
+    echo "$(date '+%Y-%m-%d %H:%M:%S') | NET rx=${rx_mb}MB/s tx=${tx_mb}MB/s | RT_UP=${rt_up}MB/s | FDS=${rt_fds} | RAID rd=${raid_rd}MB/s wr=${raid_wr}MB/s | NVME rd=${nvme_rd}MB/s wr=${nvme_wr}MB/s | CACHE=${cache_gb}GB | DISKEFF=${disk_eff}" >> "$LOGFILE"
+
+    prev_net=("${cur_net[@]}")
+    prev_raid=("${cur_raid[@]}")
+    prev_nvme=("${cur_nvme[@]}")
+    prev_time=$now
+
+    sleep 10
+done

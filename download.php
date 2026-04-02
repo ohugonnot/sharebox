@@ -10,6 +10,47 @@
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/functions.php';
 
+/**
+ * Écrit l'état du stream actif dans /tmp/sharebox_stream_{md5(session_id())}.json
+ * Préserve start_time si le fichier existe déjà, met à jour last_seen à chaque appel.
+ */
+function write_stream_info(array $info): void {
+    if (PHP_SAPI === 'cli') return;
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    $sid = session_id();
+    if (empty($sid)) return;
+    // On n'écrit pas dans $_SESSION — libère le verrou immédiatement.
+    if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+    $file = '/tmp/sharebox_stream_' . md5($sid) . '.json';
+    $now = time();
+    if (file_exists($file)) {
+        $existing = @json_decode(@file_get_contents($file), true) ?: [];
+        $info['start_time'] = $existing['start_time'] ?? (new DateTimeImmutable())->format('c');
+    } else {
+        $info['start_time'] = (new DateTimeImmutable())->format('c');
+        $is_new_stream = true;
+    }
+    $info['last_seen'] = $now;
+    @file_put_contents($file, json_encode($info, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT));
+    @chmod($file, 0600);
+
+    // Log to activity_logs on first write only
+    if (!empty($is_new_stream)) {
+        try {
+            require_once __DIR__ . '/db.php';
+            require_once __DIR__ . '/functions.php';
+            $db = get_db();
+            $ip = $_SERVER['REMOTE_ADDR'] ?? null;
+            $details = 'mode=' . $info['mode'] . ' | file=' . ($info['filename'] ?? '') . ' | user=' . ($info['user'] ?? 'anonymous');
+            log_activity($db, 'stream_start', $info['user'] ?? null, $ip, $details);
+        } catch (\Throwable $e) {
+            // Non-fatal: logging failure must not break streaming
+        }
+    }
+}
+
 // Récupérer le token depuis l'URL (passé par nginx)
 $token = $_GET['token'] ?? '';
 
@@ -89,6 +130,10 @@ if ($link['password_hash'] !== null) {
     }
 }
 
+// Libère le verrou de session — inutile de le garder pour servir des fichiers.
+// Sans ça, chaque requête HLS (~5s) bloque toutes les autres requêtes PHP du navigateur.
+session_write_close();
+
 // Sous-chemin dans le dossier partagé (pour la navigation)
 $subPath = $_GET['p'] ?? '';
 
@@ -135,6 +180,14 @@ if (is_file($resolvedPath)) {
 
     // Mode streaming natif : sert le fichier brut (audio uniquement, ou fallback)
     if (isset($_GET['stream']) && $_GET['stream'] === '1') {
+        write_stream_info([
+            'user'         => $_SESSION['sharebox_user'] ?? 'anonymous',
+            'filename'     => basename($resolvedPath),
+            'path'         => $resolvedPath,
+            'token'        => $token,
+            'mode'         => 'native',
+            'hls_pid_file' => null,
+        ]);
         require __DIR__ . '/handlers/stream_native.php';
     }
 
@@ -154,6 +207,14 @@ if (is_file($resolvedPath)) {
 
     // Mode transcodage complet : ré-encode vidéo + audio (CPU intensif)
     if (isset($_GET['stream']) && $_GET['stream'] === 'transcode') {
+        write_stream_info([
+            'user'         => $_SESSION['sharebox_user'] ?? 'anonymous',
+            'filename'     => basename($resolvedPath),
+            'path'         => $resolvedPath,
+            'token'        => $token,
+            'mode'         => 'transcode',
+            'hls_pid_file' => null,
+        ]);
         require __DIR__ . '/handlers/stream_transcode.php';
     }
 
@@ -161,6 +222,18 @@ if (is_file($resolvedPath)) {
     // Safari refuse le streaming fMP4 progressif (broken pipe) — HLS est le seul format
     // que Safari iOS supporte nativement pour le streaming adaptatif.
     if (isset($_GET['stream']) && $_GET['stream'] === 'hls') {
+        $hlsQuality  = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
+        $hlsBurnSub  = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
+        $hlsKey      = md5($resolvedPath . '|' . $hlsQuality . '|' . $audioTrack . '|' . $hlsBurnSub . '|' . $startSec);
+        $hlsPidFile  = sys_get_temp_dir() . '/hls_' . $hlsKey . '/ffmpeg.pid';
+        write_stream_info([
+            'user'         => $_SESSION['sharebox_user'] ?? 'anonymous',
+            'filename'     => basename($resolvedPath),
+            'path'         => $resolvedPath,
+            'token'        => $token,
+            'mode'         => 'hls',
+            'hls_pid_file' => $hlsPidFile,
+        ]);
         require __DIR__ . '/handlers/stream_hls.php';
     }
 
@@ -224,6 +297,11 @@ if (is_dir($resolvedPath)) {
         header('X-Accel-Buffering: no');
 
         passthru('cd ' . escapeshellarg($parentDir) . ' && zip -r -0 - ' . escapeshellarg($baseName));
+        exit;
+    }
+
+    if (isset($_GET['q']) && trim($_GET['q']) !== '') {
+        afficher_search_results($basePath, $token, $link['name'], trim($_GET['q']), $subPath);
         exit;
     }
 
@@ -385,6 +463,15 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .search-box { padding:.3rem .65rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.03); color:var(--text-primary); font-family:var(--font-sans); font-size:.8rem; outline:none; transition:border-color .15s; width:175px; }
 .search-box:focus { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
 .search-box::placeholder { color:var(--text-muted); }
+.search-all-label { display:inline-flex; align-items:center; gap:.3rem; font-size:.78rem; color:var(--text-muted); cursor:pointer; white-space:nowrap; user-select:none; }
+.search-all-label input { accent-color:var(--accent); cursor:pointer; }
+.btn-search-go { display:inline-flex; align-items:center; gap:.3rem; padding:.28rem .65rem; border:none; border-radius:var(--radius-sm); background:var(--accent); color:var(--bg-deep); font-family:var(--font-sans); font-size:.78rem; font-weight:700; cursor:pointer; transition:background .15s; white-space:nowrap; }
+.btn-search-go:hover { background:#ffc060; }
+.btn-search-go.hidden { display:none; }
+.grid-card-path { font-size:.68rem; color:rgba(255,255,255,.35); margin-top:.15rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.search-back { display:inline-flex; align-items:center; gap:.35rem; font-size:.82rem; color:var(--accent); text-decoration:none; margin-bottom:.8rem; }
+.search-back:hover { color:#ffc060; }
+.search-results-label { font-size:.8rem; color:var(--text-muted); margin-bottom:.7rem; }
 .btn-zip { display:inline-flex; align-items:center; gap:.35rem; padding:.38rem .85rem; border:none; border-radius:var(--radius-sm); background:var(--accent); color:var(--bg-deep); font-family:var(--font-sans); font-size:.82rem; font-weight:700; cursor:pointer; text-decoration:none; transition:all .15s; white-space:nowrap; }
 .btn-zip:hover { background:#ffc060; box-shadow:0 2px 12px rgba(240,160,48,.25); }
 .btn-zip:active { transform:scale(.97); }
@@ -426,6 +513,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card-overview-text { font-size:.74rem; color:#ccc; line-height:1.5; display:-webkit-box; -webkit-line-clamp:8; -webkit-box-orient:vertical; overflow:hidden; }
 .grid-card-confidence { position:absolute; bottom:.4rem; right:.4rem; width:7px; height:7px; border-radius:50%; opacity:.6; z-index:4; }
 .grid-card-rating { position:absolute; top:.5rem; left:.5rem; background:rgba(0,0,0,.65); backdrop-filter:blur(4px); border-radius:4px; padding:.15rem .4rem; font-size:.7rem; font-weight:700; color:#f0c040; z-index:5; pointer-events:none; letter-spacing:.02em; line-height:1.4; }
+.grid-card-watched { position:absolute; top:.42rem; left:3.5rem; width:18px; height:18px; border-radius:50%; background:rgba(61,220,132,.85); display:flex; align-items:center; justify-content:center; z-index:4; pointer-events:none; font-size:.75rem; color:#000; font-weight:700; }
 .grid-card-overview-meta { font-size:.72rem; color:rgba(255,255,255,.5); margin-bottom:.28rem; }
 .grid-card-ctx { position:absolute; top:.5rem; right:.5rem; width:26px; height:26px; border-radius:50%; background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.15); display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition:opacity .15s; z-index:5; color:rgba(255,255,255,.8); }
 .grid-card:hover .grid-card-ctx { opacity:1; }
@@ -509,7 +597,16 @@ HTML;
 
         // Recherche (seulement si 10+ éléments)
         if ($totalItems >= 10) {
-            echo '<input class="search-box" type="text" placeholder="Rechercher..." oninput="filtrer(this.value)">';
+            $baseUrlJs = htmlspecialchars(json_encode($baseUrl), ENT_QUOTES);
+            $subPathJs = htmlspecialchars(json_encode($subPath), ENT_QUOTES);
+            echo '<input class="search-box" id="main-search" type="text" placeholder="Rechercher..." '
+               . 'oninput="document.getElementById(\'cb-all\').checked?null:filtrer(this.value)" '
+               . 'onkeydown="if(event.key===\'Enter\'&&document.getElementById(\'cb-all\').checked){event.preventDefault();lancerRechercheGlobale(BASE_URL,SUB_PATH)}">';
+            echo '<label class="search-all-label" title="Chercher dans tous les sous-dossiers">'
+               . '<input type="checkbox" id="cb-all" onchange="toggleSearchMode()"> Tout</label>';
+            echo '<button class="btn-search-go hidden" id="search-go-btn" onclick="lancerRechercheGlobale(BASE_URL,SUB_PATH)">'
+               . '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+               . ' Rechercher</button>';
         }
 
         // Toggle grille/liste (si dossiers présents)
@@ -534,6 +631,15 @@ HTML;
         echo '<div class="gear-section"><div class="gear-label">Qualité par défaut</div><div class="gear-row">';
         echo '<select class="gear-select" id="gs-quality" onchange="lsSet(\'pref_quality\',this.value)">';
         echo '<option value="480">480p</option><option value="720" selected>720p</option><option value="1080">1080p</option>';
+        echo '</select></div></div>';
+        // Filtres vidéo
+        echo '<div class="gear-section"><div class="gear-label">Filtres vidéo</div><div class="gear-row">';
+        echo '<select class="gear-select" id="gs-filter" onchange="lsSet(\'pref_filter\',this.value)">';
+        echo '<option value="none" selected>Aucun</option>';
+        echo '<option value="hdr">HDR→SDR</option>';
+        echo '<option value="anime">Anime</option>';
+        echo '<option value="smooth">Lissage</option>';
+        echo '<option value="sharp">Netteté</option>';
         echo '</select></div></div>';
         // Langue audio
         echo '<div class="gear-section"><div class="gear-label">Audio préféré</div><div class="gear-row">';
@@ -707,9 +813,10 @@ function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
 
 // ── Preferences init ──
 (function(){
-    var q=lsGet('pref_quality','720'), a=lsGet('pref_audio',''), s=lsGet('pref_subs','off'), c=lsGet('pref_click','play');
+    var q=lsGet('pref_quality','720'), f=lsGet('pref_filter','none'), a=lsGet('pref_audio',''), s=lsGet('pref_subs','off'), c=lsGet('pref_click','play');
     var el;
     el=document.getElementById('gs-quality'); if(el)el.value=q;
+    el=document.getElementById('gs-filter');  if(el)el.value=f;
     el=document.getElementById('gs-audio');   if(el)el.value=a;
     el=document.getElementById('gs-subs');    if(el)el.value=s;
     // Click toggle
@@ -833,6 +940,22 @@ function tri(btn, key) {
         folderCards.forEach(c => grid.appendChild(c));
         fileCards.forEach(c => grid.appendChild(c));
     }
+}
+function lancerRechercheGlobale(baseUrl, subPath) {
+    var q = (document.getElementById('main-search') || {}).value || '';
+    q = q.trim();
+    if (!q) return;
+    var url = baseUrl + '?q=' + encodeURIComponent(q);
+    if (subPath) url += '&p=' + encodeURIComponent(subPath);
+    window.location = url;
+}
+function toggleSearchMode() {
+    var checked = document.getElementById('cb-all').checked;
+    var btn = document.getElementById('search-go-btn');
+    var input = document.getElementById('main-search');
+    btn.classList.toggle('hidden', !checked);
+    input.placeholder = checked ? 'Rechercher dans tout…' : 'Rechercher...';
+    if (!checked) filtrer(input.value);
 }
 function filtrer(q) {
     q = q.toLowerCase();
@@ -1012,6 +1135,17 @@ function reloadAllPosters() {
                                 card.appendChild(badge);
                             }
                         }
+                        // Badge vu
+                        if (info.watched && !card.querySelector('.grid-card-watched')) {
+                            var wb = document.createElement('div');
+                            wb.className = 'grid-card-watched';
+                            wb.title = 'Vu';
+                            wb.textContent = '✓';
+                            card.appendChild(wb);
+                        } else {
+                            var existing = card.querySelector('.grid-card-watched');
+                            if (existing) existing.remove();
+                        }
                     }
                     if (overview && !card.querySelector('.grid-card-overview')) {
                         var ov = document.createElement('div');
@@ -1092,15 +1226,15 @@ function openPosterPicker(folderName) {
     cleanName = cleanName.replace(/\b(x264|x265|h264|h265|HEVC|AVC|AAC|AC3|DTS|FLAC|10bit|HDR|HDR10|SDR|2160p|1080p|720p|480p|4K|UHD)\b.*/i, '');
     cleanName = cleanName.replace(/[-._]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
     searchInput.value = cleanName || folderName;
-    // Type toggle : Tous / Séries / Films
+    // Type toggle : Tous / Séries / Films / Studios
     var typeRow = document.createElement('div');
     typeRow.style.cssText = 'display:flex;gap:.3rem;margin-bottom:.5rem';
     var currentType = 'multi';
-    ['multi', 'tv', 'movie'].forEach(function(t) {
+    ['multi', 'tv', 'movie', 'company'].forEach(function(t) {
         var btn = document.createElement('button');
         btn.className = 'poster-modal-close';
         btn.style.cssText = 'flex:1;margin:0;padding:.25rem .4rem;font-size:.72rem;' + (t === 'multi' ? 'background:rgba(240,160,48,.15);border-color:var(--accent);color:var(--accent);' : '');
-        btn.textContent = t === 'multi' ? 'Tous' : (t === 'tv' ? 'S\u00e9ries' : 'Films');
+        btn.textContent = t === 'multi' ? 'Tous' : (t === 'tv' ? 'S\u00e9ries' : (t === 'movie' ? 'Films' : 'Studios'));
         btn.dataset.tmdbType = t;
         btn.onclick = function() {
             currentType = t;
@@ -1632,6 +1766,190 @@ HTML;
 /**
  * Affiche une page d'erreur
  */
+/**
+ * Affiche les résultats d'une recherche sur disque dans le dossier partagé
+ */
+function afficher_search_results(string $basePath, string $token, string $shareName, string $query, string $subPath): void {
+    $cardColors = ['#c06020','#2a7a5a','#4a5a8a','#8a4a6a','#5a7a3a','#7a5a2a','#3a6a7a','#6a3a5a'];
+    $css = css_public();
+    $shareNameHtml = htmlspecialchars($shareName);
+    $queryHtml = htmlspecialchars($query);
+    $baseUrl = '/dl/' . htmlspecialchars($token);
+    $subPathJs = json_encode($subPath, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+    $backUrl = $subPath ? $baseUrl . '?p=' . rawurlencode($subPath) : $baseUrl;
+
+    // Recherche disque — dossiers d'abord, puis fichiers
+    $words = array_values(array_filter(array_map('trim', explode(' ', $query))));
+    if (count($words) > 10) $words = array_slice($words, 0, 10);
+    $iname = implode(' ', array_map(fn($w) => '-iname ' . escapeshellarg("*{$w}*"), $words));
+    $searchRoot = rtrim($basePath, '/');
+
+    $cmdDirs  = "timeout 10 find " . escapeshellarg($searchRoot) . " -mindepth 1 -maxdepth 8 -type d $iname ! -name '.*' 2>/dev/null | head -80";
+    $cmdFiles = "timeout 10 find " . escapeshellarg($searchRoot) . " -mindepth 1 -maxdepth 8 ! -type d $iname ! -name '.*' 2>/dev/null | head -50";
+
+    $dirLines  = array_filter(array_map('trim', explode("\n", shell_exec($cmdDirs)  ?? '')));
+    $fileLines = array_filter(array_map('trim', explode("\n", shell_exec($cmdFiles) ?? '')));
+
+    // Posters en batch depuis la DB
+    $db = get_db();
+    $allDirPaths = array_values($dirLines);
+    $posterMap = [];
+    if (!empty($allDirPaths)) {
+        $phs = implode(',', array_fill(0, count($allDirPaths), '?'));
+        $stmt = $db->prepare("SELECT path, poster_url, overview, tmdb_rating FROM folder_posters WHERE path IN ($phs) AND poster_url IS NOT NULL AND poster_url != ''");
+        $stmt->execute($allDirPaths);
+        foreach ($stmt->fetchAll() as $row) {
+            $posterMap[$row['path']] = $row;
+        }
+    }
+
+    $baseLen = strlen($searchRoot) + 1;
+    $totalFound = count($dirLines) + count($fileLines);
+
+    echo <<<HTML
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
+    <title>Recherche : {$queryHtml} — {$shareNameHtml}</title>
+    <style>{$css}
+@keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+.page { position:relative; z-index:1; max-width:1100px; margin:0 auto; padding:2rem 1.25rem 4rem; }
+.header { display:flex; align-items:center; gap:.7rem; margin-bottom:1rem; padding-bottom:1rem; border-bottom:1px solid var(--border); }
+.header-icon { width:36px; height:36px; background:var(--accent-soft); border-radius:var(--radius-md); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.header-title { font-size:1.1rem; font-weight:700; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.toolbar { display:flex; align-items:center; gap:.4rem; margin-bottom:.9rem; flex-wrap:wrap; }
+.toolbar-info { color:var(--text-muted); font-size:.79rem; margin-right:auto; }
+.search-box { padding:.3rem .65rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.03); color:var(--text-primary); font-family:var(--font-sans); font-size:.8rem; outline:none; transition:border-color .15s; width:200px; }
+.search-box:focus { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+.search-box::placeholder { color:var(--text-muted); }
+.search-all-label { display:inline-flex; align-items:center; gap:.3rem; font-size:.78rem; color:var(--text-muted); cursor:pointer; white-space:nowrap; user-select:none; }
+.search-all-label input { accent-color:var(--accent); cursor:pointer; }
+.btn-zip { display:inline-flex; align-items:center; gap:.35rem; padding:.38rem .85rem; border:none; border-radius:var(--radius-sm); background:var(--accent); color:var(--bg-deep); font-family:var(--font-sans); font-size:.82rem; font-weight:700; cursor:pointer; text-decoration:none; transition:all .15s; white-space:nowrap; }
+.btn-zip:hover { background:#ffc060; }
+.search-back { display:inline-flex; align-items:center; gap:.35rem; font-size:.82rem; color:var(--accent); text-decoration:none; margin-bottom:.9rem; }
+.search-back:hover { color:#ffc060; }
+.grid-wrap { display:grid; grid-template-columns:repeat(auto-fill,minmax(var(--card-size,160px),1fr)); gap:.75rem; margin-bottom:1.5rem; --card-size:160px; }
+.grid-card { position:relative; border-radius:var(--radius-md); overflow:hidden; aspect-ratio:2/3; border:1px solid rgba(255,255,255,.06); cursor:pointer; text-decoration:none; color:inherit; display:flex; flex-direction:column; transition:transform .2s,box-shadow .2s,border-color .2s; animation:fadeUp .22s ease both; }
+.grid-card:hover { transform:translateY(-4px) scale(1.02); box-shadow:0 12px 32px rgba(0,0,0,.5); border-color:rgba(240,160,48,.2); }
+.grid-card-bg { position:absolute; inset:0; background-size:cover; background-position:center top; background-repeat:no-repeat; transition:opacity .3s; }
+.grid-card-bg::after { content:''; position:absolute; inset:0; background:linear-gradient(to bottom, transparent 40%, rgba(6,8,14,.95) 100%); }
+.grid-card-letter { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:3.5rem; font-weight:800; color:rgba(255,255,255,.15); }
+.grid-card-label { position:absolute; bottom:0; left:0; right:0; padding:.5rem .55rem .55rem; z-index:2; }
+.grid-card-title { font-size:.78rem; font-weight:600; color:#fff; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; text-shadow:0 1px 4px rgba(0,0,0,.8); }
+.grid-card-path { font-size:.66rem; color:rgba(255,255,255,.38); margin-top:.2rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.grid-card.has-poster .grid-card-bg { background-color:transparent; }
+.grid-card.has-poster .grid-card-letter { display:none; }
+.grid-card-rating { position:absolute; top:.5rem; left:.5rem; background:rgba(0,0,0,.65); backdrop-filter:blur(4px); border-radius:4px; padding:.15rem .4rem; font-size:.7rem; font-weight:700; color:#f0c040; z-index:5; pointer-events:none; }
+.files-label { font-size:.8rem; color:var(--text-muted); margin:.5rem 0 .5rem; font-weight:600; }
+.panel { background:rgba(26,29,40,.65); border:1px solid rgba(255,255,255,.07); border-radius:var(--radius-lg); backdrop-filter:blur(12px); overflow:hidden; }
+.row { display:flex; align-items:center; min-height:44px; padding:.4rem .9rem; border-bottom:1px solid var(--border); text-decoration:none; color:var(--text-primary); animation:fadeUp .18s ease both; }
+.row:last-child { border-bottom:none; }
+.row:hover { background:rgba(255,255,255,.022); }
+.row-icon { width:28px; height:28px; border-radius:6px; display:flex; align-items:center; justify-content:center; margin-right:.65rem; flex-shrink:0; }
+.row-icon.vid { background:rgba(102,187,106,.1); } .row-icon.aud { background:rgba(171,71,188,.12); }
+.row-icon.img { background:rgba(38,198,218,.1); } .row-icon.arc { background:rgba(239,83,80,.1); }
+.row-icon.file { background:rgba(66,165,245,.08); }
+.row-name { flex:1; min-width:0; font-size:.85rem; }
+.row-path { font-size:.72rem; color:var(--text-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.row-size { font-size:.75rem; color:var(--text-muted); margin-left:.8rem; white-space:nowrap; flex-shrink:0; }
+    </style>
+</head>
+<body>
+<div class="page">
+    <div class="header">
+        <div class="header-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div>
+        <div class="header-title">{$shareNameHtml}</div>
+    </div>
+    <a class="search-back" href="{$backUrl}">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>
+        Retour
+    </a>
+    <div class="toolbar">
+        <span class="toolbar-info">{$totalFound} résultat(s) pour &ldquo;{$queryHtml}&rdquo;</span>
+        <input class="search-box" id="main-search" type="text" placeholder="Nouvelle recherche…" value="{$queryHtml}"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();var q=this.value.trim();if(q)window.location='{$baseUrl}?q='+encodeURIComponent(q)+({$subPathJs}?'&p='+encodeURIComponent({$subPathJs}):'');}">
+        <label class="search-all-label"><input type="checkbox" checked disabled> Tout</label>
+    </div>
+HTML;
+
+    // ── Grille de dossiers ──
+    if (!empty($dirLines)) {
+        echo '<div class="grid-wrap">';
+        foreach (array_values($dirLines) as $idx => $path) {
+            $name     = basename($path);
+            $relPath  = substr($path, $baseLen);
+            $folderUrl = $baseUrl . '?p=' . rawurlencode($relPath);
+            $nameHtml = htmlspecialchars($name);
+            $pathHtml = htmlspecialchars(dirname($relPath) === '.' ? '' : dirname($relPath));
+            $color    = $cardColors[$idx % count($cardColors)];
+            $letter   = mb_strtoupper(mb_substr($name, 0, 1));
+            $poster   = $posterMap[$path] ?? null;
+            $bgStyle  = $poster ? ' style="background-image:url(' . htmlspecialchars($poster['poster_url'], ENT_QUOTES) . ')"' : '';
+            $hasPoster = $poster ? ' has-poster' : '';
+            $rating   = isset($poster['tmdb_rating']) && $poster['tmdb_rating'] >= 1
+                ? '<div class="grid-card-rating">&#9733; ' . number_format((float)$poster['tmdb_rating'], 1) . '</div>'
+                : '';
+            $pathLabel = $pathHtml ? '<div class="grid-card-path">' . $pathHtml . '</div>' : '';
+            echo '<a class="grid-card' . $hasPoster . '" href="' . $folderUrl . '" style="background:' . $color . '">';
+            echo '<div class="grid-card-bg"' . $bgStyle . '><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
+            echo $rating;
+            echo '<div class="grid-card-label"><div class="grid-card-title">' . $nameHtml . '</div>' . $pathLabel . '</div>';
+            echo '</a>';
+        }
+        echo '</div>';
+    }
+
+    // ── Liste de fichiers ──
+    if (!empty($fileLines)) {
+        echo '<div class="files-label">Fichiers</div>';
+        echo '<div class="panel">';
+        foreach (array_values($fileLines) as $idx => $path) {
+            $name    = basename($path);
+            $relPath = substr($path, $baseLen);
+            $fileUrl = $baseUrl . '?p=' . rawurlencode($relPath);
+            $ext     = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+            $sizeRaw = @filesize($path);
+            $sizeStr = '';
+            if ($sizeRaw !== false) {
+                if ($sizeRaw >= 1073741824) $sizeStr = round($sizeRaw/1073741824,1).' GB';
+                elseif ($sizeRaw >= 1048576) $sizeStr = round($sizeRaw/1048576,1).' MB';
+                elseif ($sizeRaw >= 1024) $sizeStr = round($sizeRaw/1024).' KB';
+                else $sizeStr = $sizeRaw.' B';
+            }
+            $parentPath = htmlspecialchars(dirname($relPath) === '.' ? '' : dirname($relPath));
+
+            $iconType = match(true) {
+                in_array($ext, ['mkv','mp4','avi','mov','wmv','m4v','ts','iso']) => 'vid',
+                in_array($ext, ['mp3','flac','aac','ogg','wav','m4a'])           => 'aud',
+                in_array($ext, ['jpg','jpeg','png','gif','webp','svg'])           => 'img',
+                in_array($ext, ['zip','rar','7z','tar','gz'])                    => 'arc',
+                default => 'file',
+            };
+            $svgIcon = match($iconType) {
+                'vid'  => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg>',
+                'aud'  => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#ab47bc"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+                default => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+            };
+            echo '<a class="row" href="' . $fileUrl . '">';
+            echo '<div class="row-icon ' . $iconType . '">' . $svgIcon . '</div>';
+            echo '<div class="row-name"><div>' . htmlspecialchars($name) . '</div>'
+               . ($parentPath ? '<div class="row-path">' . $parentPath . '</div>' : '') . '</div>';
+            if ($sizeStr) echo '<span class="row-size">' . $sizeStr . '</span>';
+            echo '</a>';
+        }
+        echo '</div>';
+    }
+
+    if (empty($dirLines) && empty($fileLines)) {
+        echo '<div style="color:var(--text-muted);text-align:center;padding:3rem 0">Aucun résultat</div>';
+    }
+
+    echo '</div></body></html>';
+}
+
 function afficher_erreur(string $titre, string $message): void {
     $titreHtml = htmlspecialchars($titre);
     $messageHtml = htmlspecialchars($message);

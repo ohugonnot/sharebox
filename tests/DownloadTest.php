@@ -93,7 +93,7 @@ class DownloadTest extends TestCase
     public function testBuildFfmpegInputArgsNoSeek(): void
     {
         $result = buildFfmpegInputArgs('/path/to/file.mkv');
-        $this->assertStringStartsWith('ffmpeg', $result);
+        $this->assertStringContainsString('ffmpeg', $result);
         $this->assertStringContainsString('-thread_queue_size 512', $result);
         $this->assertStringContainsString("'/path/to/file.mkv'", $result);
     }
@@ -339,7 +339,7 @@ class DownloadTest extends TestCase
         $this->assertStringContainsString('-c:v libx264', $result);
         $this->assertStringContainsString('-preset ultrafast', $result);
         $this->assertStringContainsString('-crf 23', $result);
-        $this->assertStringContainsString('-threads 4', $result);
+        $this->assertStringContainsString('-threads 10', $result);
         $this->assertStringContainsString('-c:a aac', $result);
         $this->assertStringContainsString('-ac 2', $result);
         $this->assertStringContainsString('-b:a 192k', $result);

@@ -7,6 +7,7 @@ $cached = $db->prepare("SELECT result FROM probe_cache WHERE path = :p AND mtime
 $cached->execute([':p' => $resolvedPath, ':m' => $mtime]);
 if ($row = $cached->fetch()) {
     // Invalider les entrées cache sans isMP4/isMKV (champs ajoutés après coup)
+    // colorTransfer est optionnel (sera vide '' pour les anciens caches, pas grave)
     $decoded = json_decode($row['result'], true);
     if (isset($decoded['isMP4']) && isset($decoded['isMKV'])) {
         stream_log('PROBE cache-hit | ' . basename($resolvedPath) . ' | codec=' . ($decoded['videoCodec'] ?? '?') . ' h=' . ($decoded['videoHeight'] ?? '?') . ' audio=' . count($decoded['audio'] ?? []) . ' subs=' . count($decoded['subtitles'] ?? []));
@@ -23,7 +24,7 @@ if (!$probeFp) {
     exit;
 }
 
-$cmd = 'timeout ' . PROBE_TIMEOUT . ' ffprobe -v error -show_entries format=duration,format_name -show_entries stream=index,codec_type,codec_name,width,height:stream_tags=language,title -of json '
+$cmd = 'timeout ' . PROBE_TIMEOUT . ' ffprobe -v error -show_entries format=duration,format_name -show_entries stream=index,codec_type,codec_name,width,height,color_transfer,color_primaries,color_space:stream_tags=language,title -of json '
     . escapeshellarg($resolvedPath) . ' 2>/dev/null';
 $output = shell_exec($cmd);
 $data = json_decode($output, true);
@@ -37,6 +38,7 @@ $audioIdx = 0;
 $subIdx = 0;
 $videoHeight = 0;
 $videoCodec = '';
+$colorTransfer = '';
 foreach (($data['streams'] ?? []) as $s) {
     $lang  = $s['tags']['language'] ?? '';
     $title = strip_tags($s['tags']['title'] ?? '');
@@ -44,6 +46,7 @@ foreach (($data['streams'] ?? []) as $s) {
         && !in_array($s['codec_name'] ?? '', ['mjpeg', 'png', 'bmp'])) {
         $videoHeight = (int)$s['height'];
         $videoCodec = $s['codec_name'] ?? '';
+        $colorTransfer = $s['color_transfer'] ?? '';
     } elseif ($s['codec_type'] === 'audio') {
         $label = $lang ? strtoupper($lang) : 'Piste ' . ($audioIdx + 1);
         if ($title) $label .= ' — ' . $title;
@@ -59,7 +62,7 @@ foreach (($data['streams'] ?? []) as $s) {
         $subIdx++;
     }
 }
-$result = json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec, 'isMP4' => $isMP4, 'isMKV' => $isMKV]);
+$result = json_encode(['audio' => $audio, 'subtitles' => $subs, 'duration' => $duration, 'videoHeight' => $videoHeight, 'videoCodec' => $videoCodec, 'colorTransfer' => $colorTransfer, 'isMP4' => $isMP4, 'isMKV' => $isMKV]);
 stream_log('PROBE ffprobe | ' . basename($resolvedPath) . ' | codec=' . $videoCodec . ' h=' . $videoHeight . ' dur=' . round($duration) . 's fmt=' . $formatName . ' audio=' . count($audio) . ' subs=' . count($subs));
 
 // Stocker en cache (best-effort : on ignore si la DB est encore verrouillée)
@@ -81,7 +84,7 @@ if ($firstTextSub) {
     {
         $subCached->execute([':p' => $resolvedPath, ':t' => $s['index'], ':m' => $mtime]);
         if (!$subCached->fetch()) {
-            $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+            $logFile = ffmpeg_log_path();
             $bgCmd = 'timeout ' . SUBTITLE_EXTRACT_TIMEOUT . ' ffmpeg -i ' . escapeshellarg($resolvedPath)
                 . ' -map 0:s:' . $s['index'] . ' -f webvtt pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
             $dbPath = DB_PATH;

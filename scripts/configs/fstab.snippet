@@ -1,0 +1,14 @@
+# fstab snippet pour le disque de donnees seedbox
+# NE PAS deployer automatiquement -- editer /etc/fstab manuellement
+#
+# Remplacer la ligne /dev/md0 existante par :
+#
+# /dev/md0 /home/storage ext4 defaults,nofail,noatime,data=writeback,barrier=0,usrquota,grpquota 0 2
+#
+# Puis appliquer sans reboot :
+#   mount -o remount,data=writeback,barrier=0 /home/storage
+#
+# Notes :
+#   data=writeback : donnees non journalisees (metadonnees seulement) -> moins d'I/O
+#   barrier=0      : supprime les barrieres d'ecriture (OK sur RAID0 sans cache write-back protege)
+#   noatime        : evite les ecritures atime a chaque lecture

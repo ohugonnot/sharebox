@@ -1,0 +1,54 @@
+# rtorrent config for {{USERNAME}}
+
+system.daemon.set = true
+
+directory.default.set = /mnt/nvme-seedbox/{{USERNAME}}/downloads
+session.path.set = {{USER_DIR}}/.rtorrent.session
+
+schedule2 = watch_directory, 5, 5, "load.start={{USER_DIR}}/watch/*.torrent"
+
+network.port_range.set = {{PEER_PORT}}-{{PEER_PORT}}
+network.port_random.set = no
+
+network.scgi.open_local = {{RTORRENT_SOCK}}
+schedule2 = chmod_scgi_socket, 0, 0, "execute2=chmod,770,{{RTORRENT_SOCK}}"
+
+throttle.global_down.max_rate.set_kb = 0
+throttle.global_up.max_rate.set_kb = 0
+throttle.max_uploads.set = 100
+throttle.max_uploads.global.set = 2000
+throttle.max_peers.normal.set = 300
+throttle.max_peers.seed.set = 500
+throttle.min_peers.seed.set = 20
+throttle.min_peers.normal.set = 40
+
+network.max_open_files.set = 2048
+network.max_open_sockets.set = 1500
+network.http.max_open.set = 60
+network.http.max_host_connections.set = 4
+network.send_buffer.size.set = 16M
+network.receive_buffer.size.set = 16M
+network.tos.set = throughput
+network.http.dns_cache_timeout.set = 25
+
+pieces.memory.max.set = 4096M
+pieces.hash.on_completion.set = no
+system.file.allocate.set = 1
+pieces.preload.type.set = 1
+pieces.preload.min_size.set = 262144
+pieces.preload.min_rate.set = 51200
+
+dht.mode.set = auto
+dht.port.set = {{PEER_PORT}}
+protocol.pex.set = yes
+protocol.encryption.set = allow_incoming,enable_retry,prefer_plaintext
+trackers.numwant.set = 100
+schedule2 = low_diskspace, 5, 60, "close_low_diskspace=500M"
+trackers.use_udp.set = yes
+
+encoding.add = UTF-8
+
+method.set_key = event.download.inserted_new, check_nvme_space, "execute2={/var/www/sharebox/scripts/seedbox/rtorrent-check-space,$d.hash=,$d.name=,$d.size_bytes=}"
+
+log.open_file = "rtorrent_log", {{LOG_DIR}}/rtorrent-{{USERNAME}}.log
+log.add_output = "warn", "rtorrent_log"

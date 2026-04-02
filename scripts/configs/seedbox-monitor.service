@@ -1,0 +1,14 @@
+[Unit]
+Description=Seedbox I/O and bandwidth monitor
+After=network.target
+
+[Service]
+Environment="SEEDBOX_LOG_DIR={{LOG_DIR}}"
+Environment="SEEDBOX_IFACE={{IFACE}}"
+Environment="RTORRENT_SOCK={{RTORRENT_SOCK}}"
+ExecStart={{SEEDBOX_DIR}}/seedbox-monitor
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

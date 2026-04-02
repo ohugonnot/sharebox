@@ -831,69 +831,142 @@ function creerElement(tag, className) {
     return el;
 }
 
-// ── Modal changement de mot de passe ────────────────────────────────────────
-function ouvrirModalCompte() {
-    const m = document.getElementById('modal-compte');
-    if (!m) return;
-    m.style.display = 'flex';
-    document.getElementById('mdp-actuel').value = '';
-    document.getElementById('mdp-nouveau').value = '';
-    document.getElementById('mdp-confirm').value = '';
-    const errDiv = document.getElementById('mdp-error');
-    errDiv.style.display = 'none';
-    errDiv.style.color = 'var(--red, #e8453c)';
-    document.getElementById('mdp-actuel').focus();
+// ── Filtre local + recherche disque ─────────────────────────────────────────
+
+let searchMode = false;  // true = on affiche des résultats de recherche disque
+
+function lancerRecherche() {
+    const q = document.getElementById('file-filter')?.value?.trim() ?? '';
+    if (!q) { quitterRecherche(); return; }
+    afficherResultatsRecherche(q);
 }
-function fermerModalCompte() {
-    const m = document.getElementById('modal-compte');
-    if (m) m.style.display = 'none';
+
+function quitterRecherche() {
+    searchMode = false;
+    const label = document.getElementById('search-mode-label');
+    if (label) label.remove();
+    navigateTo(currentPath);
+    document.getElementById('file-filter').value = '';
 }
-async function soumettreChangementMdp() {
-    const btn = document.getElementById('mdp-submit');
-    const errDiv = document.getElementById('mdp-error');
-    btn.disabled = true;
-    errDiv.style.display = 'none';
+
+async function afficherResultatsRecherche(q) {
+    const list = document.getElementById('file-list');
+    list.innerHTML = '<li class="file-item"><div class="empty-msg">Recherche en cours…</div></li>';
+    searchMode = true;
+
+    // Bandeau "mode recherche"
+    let label = document.getElementById('search-mode-label');
+    if (!label) {
+        label = creerElement('div', 'search-mode-label');
+        label.id = 'search-mode-label';
+        document.getElementById('file-filter').closest('.file-filter-wrap').after(label);
+    }
+    label.innerHTML = `Résultats pour "<strong>${q.replace(/</g,'&lt;')}</strong>" &nbsp;<a id="quit-search">✕ Retour</a>`;
+    document.getElementById('quit-search').addEventListener('click', quitterRecherche);
+
     try {
-        const resp = await fetch('/share/ctrl.php?cmd=change_password', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                current_password: document.getElementById('mdp-actuel').value,
-                new_password: document.getElementById('mdp-nouveau').value,
-                confirm_password: document.getElementById('mdp-confirm').value,
-                csrf_token: CSRF_TOKEN
-            })
-        });
+        const resp = await fetch('/share/ctrl.php?cmd=search&q=' + encodeURIComponent(q));
         const data = await resp.json();
+
+        list.innerHTML = '';
         if (data.error) {
-            errDiv.textContent = data.error;
-            errDiv.style.display = 'block';
-        } else {
-            errDiv.style.color = 'var(--green, #3ddc84)';
-            errDiv.textContent = 'Mot de passe modifié.';
-            errDiv.style.display = 'block';
-            setTimeout(() => {
-                fermerModalCompte();
-                errDiv.style.color = 'var(--red, #e8453c)';
-            }, 1200);
+            list.innerHTML = `<li class="file-item"><div class="empty-msg">${data.error}</div></li>`;
+            return;
         }
-    } catch (_) {
-        errDiv.textContent = 'Erreur de connexion';
-        errDiv.style.display = 'block';
-    } finally {
-        btn.disabled = false;
+
+        const results = (data.results ?? []).sort((a, b) => {
+            if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+            return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        });
+        if (results.length === 0) {
+            list.innerHTML = '<li class="file-item"><div class="empty-msg">Aucun résultat</div></li>';
+            return;
+        }
+
+        results.forEach(entry => {
+            const isFolder = entry.type === 'folder';
+            // Pour un fichier : naviguer vers le dossier parent
+            const navPath = isFolder
+                ? entry.path
+                : entry.path.split('/').slice(0, -1).join('/');
+
+            const li = creerElement('li', 'file-item is-clickable');
+            li.addEventListener('click', (e) => {
+                if (e.target.closest('.file-actions')) return;
+                quitterRecherche();
+                navigateTo(navPath);
+            });
+
+            const icon = creerElement('span', 'file-icon ' + (isFolder ? 'is-folder' : 'is-file'));
+            if (isFolder) {
+                icon.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="color:var(--accent)"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg>';
+            } else {
+                icon.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+            }
+
+            const nameWrap = creerElement('div', '');
+            const nameSpan = creerElement('span', isFolder ? 'file-name is-folder' : 'file-name');
+            nameSpan.textContent = entry.name;
+            const pathHint = creerElement('div', 'file-path-hint');
+            pathHint.textContent = entry.path;
+            nameWrap.append(nameSpan, pathHint);
+
+            const sizeSpan = creerElement('span', 'file-size');
+            sizeSpan.textContent = isFolder ? '' : formatTaille(entry.size);
+
+            const info = creerElement('div', 'file-info');
+            info.append(icon, nameWrap, sizeSpan);
+
+            const actions = creerElement('div', 'file-actions');
+            const shareBtn = creerElement('button', 'btn btn-share-icon');
+            shareBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>';
+            shareBtn.setAttribute('title', 'Partager');
+            shareBtn.setAttribute('aria-label', 'Partager');
+            shareBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                ouvrirShareSheet(entry.path, entry.name);
+            });
+            actions.appendChild(shareBtn);
+
+            li.append(info, actions);
+            list.appendChild(li);
+        });
+
+        if (results.length >= 150) {
+            const li = creerElement('li', 'file-item');
+            li.innerHTML = '<div class="empty-msg" style="font-size:.8rem;opacity:.6">150 résultats max — affinez la recherche</div>';
+            list.appendChild(li);
+        }
+
+    } catch (e) {
+        console.error('search error:', e);
+        list.innerHTML = '<li class="file-item"><div class="empty-msg">Erreur de connexion</div></li>';
     }
 }
 
-// ── Filtre fichiers ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
     const filterInput = document.getElementById('file-filter');
+    const searchBtn   = document.getElementById('search-btn');
     if (!filterInput) return;
+
+    // Entrée → recherche disque
+    filterInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); lancerRecherche(); }
+        if (e.key === 'Escape' && searchMode) quitterRecherche();
+    });
+
+    // Frappe → filtre local + état du bouton
     filterInput.addEventListener('input', function () {
+        const hasVal = this.value.trim().length > 0;
+        if (searchBtn) searchBtn.classList.toggle('has-query', hasVal);
+        if (searchMode) return;
         const q = this.value.toLowerCase();
         document.querySelectorAll('#file-list .file-item').forEach(li => {
             const name = li.querySelector('.file-name')?.textContent?.toLowerCase() ?? '';
             li.style.display = q === '' || name.includes(q) ? '' : 'none';
         });
     });
+
+    // Bouton loupe → recherche disque
+    if (searchBtn) searchBtn.addEventListener('click', lancerRecherche);
 });

@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""
+fix-missing-symlinks — Cron toutes les 15 minutes
+
+Pour chaque dossier/fichier dans NVME_DOWNLOADS, crée le symlink
+correspondant dans RAID_DOWNLOADS s'il est absent.
+"""
+
+import os
+import stat
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+def load_conf():
+    path = Path(__file__).parent / 'seedbox.conf'
+    conf = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                k, v = line.split('=', 1)
+                conf[k.strip()] = v.strip()
+    return conf
+
+
+def fix_permissions(path: Path) -> None:
+    """S'assure que path (et son contenu si dossier) est lisible par www-data (other+r, dirs+x)."""
+    try:
+        st = path.stat()
+        current = stat.S_IMODE(st.st_mode)
+        needed = current | stat.S_IROTH | (stat.S_IXOTH if stat.S_ISDIR(st.st_mode) else 0)
+        if needed != current:
+            path.chmod(needed)
+        if path.is_dir():
+            for child in path.rglob('*'):
+                try:
+                    cst = child.stat()
+                    cm = stat.S_IMODE(cst.st_mode)
+                    nm = cm | stat.S_IROTH | (stat.S_IXOTH if stat.S_ISDIR(cst.st_mode) else 0)
+                    if nm != cm:
+                        child.chmod(nm)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
+def main():
+    conf = load_conf()
+    nvme = Path(conf['NVME_DOWNLOADS'])
+    raid = Path(conf['RAID_DOWNLOADS'])
+
+    if not nvme.exists():
+        sys.exit(0)
+
+    raid.mkdir(parents=True, exist_ok=True)
+
+    for item in nvme.iterdir():
+        link = raid / item.name
+        fix_permissions(item)
+        if not link.exists() and not link.is_symlink():
+            link.symlink_to(item)
+            print(f'[fix-symlinks] créé : {item.name}', flush=True)
+
+    for link in raid.iterdir():
+        if link.is_symlink() and not link.resolve().exists():
+            link.unlink()
+            print(f'[fix-symlinks] supprimé (cible morte) : {link.name}', flush=True)
+
+
+if __name__ == '__main__':
+    main()

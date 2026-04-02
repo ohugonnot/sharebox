@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""
+rtorrent-check-space — Hook event.download.inserted_new
+
+Verifie si le torrent qui vient d'etre insere rentre sur le NVMe.
+  - Assez de place : cree un symlink RAID_DOWNLOADS/name -> NVMe pour que
+    sharebox voie le torrent a son chemin habituel des le debut.
+  - Pas assez de place : log seulement, nvme-to-raid gerera la pression via cron.
+
+Appele par rtorrent avec hash, name et size_bytes en arguments.
+Note : les args sont passes directement par rtorrent ($d.name=, $d.size_bytes=)
+pour eviter tout appel SCGI re-entrant (deadlock).
+"""
+
+import sys
+import os
+import shutil
+from pathlib import Path
+
+
+def load_conf():
+    path = Path(__file__).parent / 'seedbox.conf'
+    conf = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                k, v = line.split('=', 1)
+                conf[k.strip()] = v.strip()
+    return conf
+
+
+def check_space(hash_, name, size_bytes, nvme_downloads, raid_downloads, margin_gb):
+    free_bytes   = shutil.disk_usage(nvme_downloads).free
+    needed_bytes = size_bytes + margin_gb * (1024 ** 3)
+    torrent_gb   = size_bytes / (1024 ** 3)
+    free_gb      = free_bytes / (1024 ** 3)
+
+    if free_bytes >= needed_bytes:
+        if name:
+            symlink     = Path(raid_downloads) / name
+            nvme_target = Path(nvme_downloads) / name
+            if not symlink.exists() and not symlink.is_symlink():
+                Path(raid_downloads).mkdir(parents=True, exist_ok=True)
+                symlink.symlink_to(nvme_target)
+        print(
+            f'[check-space] NVMe - {torrent_gb:.1f} GB, {free_gb:.1f} GB libre'
+            + (f', symlink cree : {name}' if name else ''),
+            flush=True,
+        )
+    else:
+        print(
+            f'[check-space] NVMe plein - {torrent_gb:.1f} GB > {free_gb:.1f} GB libre'
+            f' (marge {margin_gb} GB) - torrent ira sur RAID via cron',
+            flush=True,
+        )
+
+
+def main():
+    if len(sys.argv) < 4:
+        sys.exit(0)
+    hash_      = sys.argv[1].strip()
+    name       = sys.argv[2].strip()
+    size_bytes = int(sys.argv[3].strip() or '0')
+    if not hash_:
+        sys.exit(0)
+
+    conf           = load_conf()
+    nvme_downloads = conf['NVME_DOWNLOADS']
+    raid_downloads = conf['RAID_DOWNLOADS']
+    margin_gb      = int(conf.get('NVME_MARGIN_GB', '50'))
+
+    check_space(hash_, name, size_bytes, nvme_downloads, raid_downloads, margin_gb)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,10 @@
+#!/bin/bash
+# Distribuer les IRQ NIC sur les CPUs du NUMA node 0
+# Surcharger SEEDBOX_IFACE si necessaire (defaut: enp59s0f0)
+IFACE="${SEEDBOX_IFACE:-enp59s0f0}"
+CPUS=(0 1 2 3 4 5 6 7 8 9 10 11)
+i=0
+for IRQ in $(grep "$IFACE" /proc/interrupts | awk '{print $1}' | tr -d ':'); do
+    echo ${CPUS[$((i % ${#CPUS[@]}))]} > /proc/irq/$IRQ/smp_affinity_list
+    ((i++))
+done

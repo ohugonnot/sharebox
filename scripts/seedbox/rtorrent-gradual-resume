@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+"""
+Resume les torrents un par un avec delai pour etaler les announces tracker.
+Lance en background par le service systemd apres le pause-all.
+"""
+import sys, time, os, socket as sock
+
+SOCKET = os.environ.get('RTORRENT_SOCK', '/var/run/rtorrent/ropixv2.sock')
+DELAY  = 8   # secondes entre chaque resume
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from rtorrent_scgi import scgi_call, download_list
+
+try:
+    hashes = download_list()
+    print(f"gradual-resume: {len(hashes)} torrents, delai {DELAY}s", flush=True)
+    for i, h in enumerate(hashes):
+        try:
+            scgi_call(f'<?xml version="1.0"?><methodCall><methodName>d.start</methodName><params><param><value><string>{h}</string></value></param></params></methodCall>')
+            print(f"gradual-resume: [{i+1}/{len(hashes)}] {h[:8]}", flush=True)
+        except Exception as e:
+            print(f"gradual-resume: [{i+1}/{len(hashes)}] {h[:8]} ERR {e}", flush=True)
+        time.sleep(DELAY)
+    print(f"gradual-resume: done", flush=True)
+except Exception as e:
+    print(f"gradual-resume: erreur fatale {e}", flush=True)

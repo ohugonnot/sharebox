@@ -64,7 +64,7 @@ function plog(tag, msg, data) {
     var S = {
         step: 'native', confirmed: '',   // machine d'état stream
         offset: 0,      duration: 0,     // position et durée totale
-        audioIdx: 0,    quality: 720,    burnSub: -1,  isMP4: false,  isMKV: false,
+        audioIdx: 0,    quality: 720,    filter: 'none',  burnSub: -1,  isMP4: false,  isMKV: false,
         speed: 1,
         dragging: false, seekPending: false, rafPending: false,
         hasFailed: false, stallCount: 0,
@@ -95,6 +95,7 @@ function plog(tag, msg, data) {
         var url = base + '?' + pp + 'stream=' + streamMode + '&audio=' + (audio || 0);
         if (mode === 'transcode' || streamMode === 'hls') {
             url += '&quality=' + S.quality;
+            if (S.filter && S.filter !== 'none') url += '&filter=' + S.filter;
             if (S.burnSub >= 0) url += '&burnSub=' + S.burnSub;
         }
         if (startSec > 0) url += '&start=' + startSec.toFixed(1);
@@ -112,6 +113,7 @@ function plog(tag, msg, data) {
             mode: S.confirmed || '',
             audio: S.audioIdx,
             quality: S.quality,
+            filter: S.filter,
             burnSub: S.burnSub
         }));
     }
@@ -656,6 +658,11 @@ function plog(tag, msg, data) {
                     var prefQ = parseInt(lsGet('pref_quality', '720'), 10);
                     S.quality = qs.indexOf(prefQ) !== -1 ? prefQ : (qs.indexOf(720) !== -1 ? 720 : qs[qs.length - 1]);
                 }
+                if (!savedCfg || !savedCfg.filter) {
+                    S.filter = lsGet('pref_filter', 'none');
+                } else {
+                    S.filter = savedCfg.filter;
+                }
                 hasControls = true;
                 var lbl3 = document.createElement('label'); lbl3.textContent = 'Qualit\u00E9 :';
                 var sel3 = document.createElement('select'); sel3.className = 'track-select';
@@ -667,6 +674,18 @@ function plog(tag, msg, data) {
                     saveCfg(); startStream(realTime());
                 });
                 trackBar.append(lbl3, sel3);
+                // Sélecteur de filtres
+                var lbl4 = document.createElement('label'); lbl4.textContent = 'Filtre :';
+                var sel4 = document.createElement('select'); sel4.className = 'track-select';
+                var filters = [{v:'none',t:'Aucun'},{v:'hdr',t:'HDR→SDR'},{v:'anime',t:'Anime'},{v:'smooth',t:'Lissage'},{v:'sharp',t:'Netteté'}];
+                filters.forEach(function(f) { var o = document.createElement('option'); o.value = f.v; o.textContent = f.t; if (f.v === S.filter) o.selected = true; sel4.appendChild(o); });
+                sel4.addEventListener('change', function() {
+                    S.filter = sel4.value || 'none'; S.confirmed = 'transcode';
+                    plog('TRACK', 'filter changed → ' + S.filter);
+                    hint.textContent = 'Changement de filtre...'; hint.className = 'player-hint transcoding';
+                    saveCfg(); startStream(realTime());
+                });
+                trackBar.append(lbl4, sel4);
             }
         }
         if (d.subtitles && d.subtitles.length) {
@@ -1124,6 +1143,17 @@ function plog(tag, msg, data) {
                     streamStarted = true;
                     if (!savedCfg || !savedCfg.mode) S.step = chooseModeFromProbe(d);
                     if (savedCfg) restoreCfgUI();
+                    // Auto-détection HDR : force 'hdr' si colorTransfer indique HDR (écrase localStorage)
+                    if (d.colorTransfer && ['smpte2084', 'arib-std-b67', 'smpte428'].indexOf(d.colorTransfer) !== -1) {
+                        S.filter = 'hdr';
+                        // Mettre à jour le sélecteur UI
+                        trackBar.querySelectorAll('select.track-select').forEach(function(sel) {
+                            if (sel.previousElementSibling && sel.previousElementSibling.textContent === 'Filtre :') {
+                                sel.value = 'hdr';
+                            }
+                        });
+                        plog('HDR', 'auto-detected colorTransfer=' + d.colorTransfer + ', forcing filter=hdr');
+                    }
                     hint.textContent = '';
                     if (savedPos > 30) {
                         plog('INIT', 'show resume banner at ' + fmtTime(savedPos));
