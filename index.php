@@ -139,6 +139,8 @@ function afficher_liens(): void {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0c0e14">
+    <link rel="manifest" href="/share/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
     <meta name="csrf-token" content="<?= htmlspecialchars($_SESSION['csrf_token']) ?>">
     <title>ShareBox</title>

@@ -1,0 +1,17 @@
+{
+  "name": "ShareBox",
+  "short_name": "ShareBox",
+  "start_url": "/share/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#0c0e14",
+  "theme_color": "#0c0e14",
+  "icons": [
+    {
+      "src": "/share/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
