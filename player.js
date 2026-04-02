@@ -630,7 +630,7 @@ function plog(tag, msg, data) {
         if (d.audio && d.audio.length > 1) {
             hasControls = true;
             var lbl = document.createElement('label'); lbl.textContent = 'Audio :';
-            var sel = document.createElement('select'); sel.className = 'track-select';
+            var sel = document.createElement('select'); sel.className = 'track-select'; sel.title = 'Audio';
             d.audio.forEach(function(a) { var o = document.createElement('option'); o.value = a.index; o.textContent = a.label; sel.appendChild(o); });
             sel.addEventListener('change', function() {
                 S.audioIdx = parseInt(sel.value, 10) || 0; S.confirmed = S.step = 'transcode';
@@ -665,7 +665,7 @@ function plog(tag, msg, data) {
                 }
                 hasControls = true;
                 var lbl3 = document.createElement('label'); lbl3.textContent = 'Qualit\u00E9 :';
-                var sel3 = document.createElement('select'); sel3.className = 'track-select';
+                var sel3 = document.createElement('select'); sel3.className = 'track-select'; sel3.title = 'Qualit\u00E9';
                 qs.forEach(function(q) { var o = document.createElement('option'); o.value = q; o.textContent = q + 'p'; if (q === S.quality) o.selected = true; sel3.appendChild(o); });
                 sel3.addEventListener('change', function() {
                     S.quality = parseInt(sel3.value, 10) || 720; S.confirmed = 'transcode';
@@ -676,7 +676,7 @@ function plog(tag, msg, data) {
                 trackBar.append(lbl3, sel3);
                 // Sélecteur de filtres
                 var lbl4 = document.createElement('label'); lbl4.textContent = 'Filtre :';
-                var sel4 = document.createElement('select'); sel4.className = 'track-select';
+                var sel4 = document.createElement('select'); sel4.className = 'track-select'; sel4.title = 'Filtre';
                 var filters = [{v:'none',t:'Aucun'},{v:'hdr',t:'HDR→SDR'},{v:'anime',t:'Anime'},{v:'detail',t:'Détail'},{v:'night',t:'Nuit'},{v:'deinterlace',t:'Désentrelacé'}];
                 filters.forEach(function(f) { var o = document.createElement('option'); o.value = f.v; o.textContent = f.t; if (f.v === S.filter) o.selected = true; sel4.appendChild(o); });
                 sel4.addEventListener('change', function() {
@@ -692,7 +692,7 @@ function plog(tag, msg, data) {
             hasControls = true;
             d.subtitles.forEach(function(s) { Subs.urls.push(s.type === 'text' ? base + '?' + pp + 'subtitle=' + s.index : null); Subs.types.push(s.type || 'text'); });
             var lbl2 = document.createElement('label'); lbl2.textContent = 'Sous-titres :';
-            var selSub = document.createElement('select'); selSub.className = 'track-select';
+            var selSub = document.createElement('select'); selSub.className = 'track-select'; selSub.title = 'Sous-titres';
             var off = document.createElement('option'); off.value = '-1'; off.textContent = 'D\u00E9sactiv\u00E9s'; selSub.appendChild(off);
             d.subtitles.forEach(function(s, i) { var o = document.createElement('option'); o.value = i; o.textContent = s.label; selSub.appendChild(o); });
             // Restaurer le dernier sous-titre choisi pour ce fichier
