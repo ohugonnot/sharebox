@@ -59,49 +59,41 @@ echo "[3/7] Configuring rtorrent..."
 # Generate random peer port in range 49152-65535
 PEER_PORT=$((RANDOM % 16383 + PORT_BASE))
 
-cat > "${USER_DIR}/.rtorrent.rc" << RTRC
+REAL_SCRIPT="$(readlink -f "$0")"
+SHAREBOX_DIR="$(dirname "$(dirname "$REAL_SCRIPT")")"
+LOG_DIR="${SHAREBOX_DIR}/data/logs"
+TEMPLATE="${SHAREBOX_DIR}/scripts/configs/rtorrent.rc.template"
+
+if [ -f "$TEMPLATE" ]; then
+    sed \
+        -e "s|{{USERNAME}}|${USERNAME}|g" \
+        -e "s|{{USER_DIR}}|${USER_DIR}|g" \
+        -e "s|{{PEER_PORT}}|${PEER_PORT}|g" \
+        -e "s|{{RTORRENT_SOCK}}|${RTORRENT_SOCK}|g" \
+        -e "s|{{LOG_DIR}}|${LOG_DIR}|g" \
+        "$TEMPLATE" > "${USER_DIR}/.rtorrent.rc"
+else
+    echo "WARNING: template $TEMPLATE introuvable, config minimale utilisee"
+    cat > "${USER_DIR}/.rtorrent.rc" << RTRC
 # rtorrent config for ${USERNAME}
-
 system.daemon.set = true
-
 directory.default.set = ${USER_DIR}/downloads
 session.path.set = ${USER_DIR}/.rtorrent.session
-
 schedule2 = watch_directory, 5, 5, "load.start=${USER_DIR}/watch/*.torrent"
-
 network.port_range.set = ${PEER_PORT}-${PEER_PORT}
 network.port_random.set = no
-
 network.scgi.open_local = ${RTORRENT_SOCK}
 schedule2 = chmod_scgi_socket, 0, 0, "execute2=chmod,770,${RTORRENT_SOCK}"
-
-throttle.global_down.max_rate.set_kb = 0
-throttle.global_up.max_rate.set_kb = 0
-throttle.max_uploads.set = 100
-throttle.max_uploads.global.set = 250
-
-network.max_open_files.set = 600
-network.max_open_sockets.set = 300
-network.http.max_open.set = 50
-network.send_buffer.size.set = 4M
-network.receive_buffer.size.set = 4M
-pieces.memory.max.set = 2048M
-pieces.hash.on_completion.set = yes
-
 dht.mode.set = auto
 dht.port.set = ${PEER_PORT}
-protocol.pex.set = yes
-trackers.use_udp.set = yes
-
 encoding.add = UTF-8
-
-log.open_file = "rtorrent_log", ${USER_DIR}/downloads/.rtorrent.log
-log.add_output = "warn", "rtorrent_log"
 RTRC
+fi
 
 chown "${USERNAME}:${USERNAME}" "${USER_DIR}/.rtorrent.rc"
-touch "${USER_DIR}/downloads/.rtorrent.log"
-chown "${USERNAME}:${USERNAME}" "${USER_DIR}/downloads/.rtorrent.log"
+mkdir -p "${LOG_DIR}"
+touch "${LOG_DIR}/rtorrent-${USERNAME}.log"
+chown "${USERNAME}:${USERNAME}" "${LOG_DIR}/rtorrent-${USERNAME}.log"
 
 # 4. Create systemd service for rtorrent
 echo "[4/7] Creating systemd service..."

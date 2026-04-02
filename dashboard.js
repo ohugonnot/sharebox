@@ -12,6 +12,7 @@ const D = {
     pillTimer:             null,  // Toujours actif même accordéon fermé
     netChartLoaded:        false,
     netChart:              null,
+    netRange:              '7d',
     torrentIntervalOpen:   10000,
     torrentIntervalClosed: 30000,
     pillInterval:          60000, // Refresh pills quand accordéon fermé
@@ -136,26 +137,66 @@ function updateRam(d) {
 }
 
 function updateDisk(d) {
-    const total    = d.disk_total_gb || 1;
-    const used     = d.disk_used_gb  || 0;
-    const free     = d.disk_free_gb  || 0;
-    const pct      = used / total * 100;
-    const color    = colorByThreshold(pct, 80, 93);
+    // Volumes auto-détectés
+    const volumes = Array.isArray(d.volumes) ? d.volumes : [];
+    const wrap    = id('dash-disk-volumes');
+    if (wrap && volumes.length) {
+        wrap.innerHTML = '';
+        volumes.forEach(function(vol, i) {
+            const pct   = (vol.used_gb || 0) / (vol.total_gb || 1) * 100;
+            const color = colorByThreshold(pct, 80, 93);
+            const unit  = fmtGbUnit(vol.total_gb || 0);
 
-    // "X.X / Y.Y TB" — unité commune calculée depuis le total
-    const unit = fmtGbUnit(total);
-    setText('dash-disk-val', fmtGbVal(used) + '\u00a0/\u00a0' + fmtGbVal(total) + '\u00a0' + unit);
-    setText('dash-disk-sub', fmtGb(free) + '\u00a0libre');
-    setText('dash-disk-io',  'IO\u00a0' + fmtPct(d.disk_io_pct || 0));
-    setText('dash-disk-rw',  'R\u00a0' + fmtMbs(d.disk_read_mbs  || 0) + '\u00a0W\u00a0' + fmtMbs(d.disk_write_mbs || 0));
-    updateBar(id('dash-disk-bar'), pct, color);
+            if (i > 0) {
+                const sep = document.createElement('div');
+                sep.className = 'dash-temp-line';
+                sep.style.marginBottom = '.3rem';
+                wrap.appendChild(sep);
+            }
+
+            const lbl = document.createElement('div');
+            lbl.className = 'dash-temp-label';
+            lbl.style.marginBottom = '.25rem';
+            lbl.textContent = vol.label || 'Disque';
+            wrap.appendChild(lbl);
+
+            const main = document.createElement('div');
+            main.className = 'dash-metric-main';
+            main.textContent = fmtGbVal(vol.used_gb || 0) + '\u00a0/\u00a0' + fmtGbVal(vol.total_gb || 0) + '\u00a0' + unit;
+            wrap.appendChild(main);
+
+            const sub = document.createElement('div');
+            sub.className = 'dash-metric-sub';
+            sub.textContent = fmtGb(vol.free_gb || 0) + '\u00a0libre';
+            wrap.appendChild(sub);
+
+            const bar  = document.createElement('div');
+            bar.className = 'dash-bar';
+            const fill = document.createElement('div');
+            fill.className = 'dash-bar-fill';
+            fill.style.width      = Math.min(100, pct).toFixed(1) + '%';
+            fill.style.background = color;
+            bar.appendChild(fill);
+            wrap.appendChild(bar);
+
+            if (vol.io_pct != null) {
+                const io = document.createElement('div');
+                io.className = 'dash-subtitle';
+                io.style.marginBottom = '.1rem';
+                io.textContent = 'IO\u00a0' + fmtPct(vol.io_pct)
+                    + '\u2002R\u00a0' + fmtMbs(vol.read_mbs || 0)
+                    + '\u00a0W\u00a0' + fmtMbs(vol.write_mbs || 0);
+                wrap.appendChild(io);
+            }
+        });
+    }
+
     // Températures HDD
-    const hddTemps  = d.hdd_temps;
-    const hddEl     = id('dash-disk-temps');
-    const hddRow    = id('dash-disk-temps-row');
+    const hddTemps = d.hdd_temps;
+    const hddEl    = id('dash-disk-temps');
+    const hddRow   = id('dash-disk-temps-row');
     if (hddEl && hddRow) {
         if (hddTemps && Object.keys(hddTemps).length) {
-            // Format compact : juste les °C séparés par des points ("31·33·32·32°C")
             const vals = Object.values(hddTemps);
             hddEl.textContent = vals.map(t => Math.round(t)).join('\u00b7') + '\u00b0C';
             hddRow.style.display = 'flex';
@@ -187,7 +228,18 @@ function updateNet(d) {
  * Historique réseau 7j — Chart.js
  * ============================================================ */
 
-function fetchHistory() { fetchJSON('/share/api/netspeed_history.php', initNetChart); }
+function fetchHistory() { fetchJSON('/share/api/netspeed_history.php?range=' + D.netRange, initNetChart); }
+
+function fmtNetLabel(ts) {
+    const d = new Date(ts * 1000);
+    switch (D.netRange) {
+        case '24h': return d.toLocaleTimeString('fr', {hour: '2-digit', minute: '2-digit'});
+        case '7d':  return d.toLocaleDateString('fr', {weekday: 'short', hour: '2-digit'}) + 'h';
+        case '1m':  return d.toLocaleDateString('fr', {day: '2-digit', month: 'short'});
+        case '1y':  return d.toLocaleDateString('fr', {month: 'short', year: '2-digit'});
+        default:    return d.toLocaleString('fr');
+    }
+}
 
 function initNetChart(d) {
     const pts   = d.points || [];
@@ -203,7 +255,7 @@ function initNetChart(d) {
     gradDn.addColorStop(0,   'rgba(88,166,255,.50)');
     gradDn.addColorStop(1,   'rgba(88,166,255,.03)');
 
-    const labels = pts.map(p => fmtTime(p.ts));
+    const labels = pts.map(p => fmtNetLabel(p.ts));
     const ups    = pts.map(p => p.upload);
     const downs  = pts.map(p => p.download);
 
@@ -462,7 +514,10 @@ function updatePillsFromSysinfo(d) {
     const cpuPct  = d.cpu_active_pct || 0;
     const cpuTemp = d.cpu_temp_c;
     const ramPct  = (d.ram_used_mb  || 0) / (d.ram_total_mb  || 1) * 100;
-    const diskPct = (d.disk_used_gb || 0) / (d.disk_total_gb || 1) * 100;
+    const volumes  = Array.isArray(d.volumes) ? d.volumes : [];
+    const diskPct  = volumes.length
+        ? Math.max.apply(null, volumes.map(function(v) { return (v.used_gb || 0) / (v.total_gb || 1) * 100; }))
+        : (d.disk_used_gb || 0) / (d.disk_total_gb || 1) * 100;
     const busyPct = d.disk_io_pct || 0;
 
     // CPU : % + température
@@ -582,6 +637,28 @@ function stopDashTimers() {
                 D.netChartLoaded = true;
                 fetchHistory();
             }
+        });
+
+        // Boutons de temporalité — restore + persist dans localStorage
+        const savedRange = lsGet('sb_net_range');
+        if (savedRange) {
+            D.netRange = savedRange;
+            document.querySelectorAll('.net-range-btn').forEach(function (b) {
+                b.classList.toggle('active', b.dataset.range === savedRange);
+            });
+        }
+        document.querySelectorAll('.net-range-btn').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                e.stopPropagation();
+                document.querySelectorAll('.net-range-btn').forEach(function (b) {
+                    b.classList.remove('active');
+                });
+                btn.classList.add('active');
+                D.netRange = btn.dataset.range;
+                lsSet('sb_net_range', D.netRange);
+                fetchHistory();
+            });
         });
     }
 

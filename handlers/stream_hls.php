@@ -3,13 +3,19 @@ $mime = get_stream_mime(strtolower(pathinfo($resolvedPath, PATHINFO_EXTENSION)))
 if ($mime && str_starts_with($mime, 'video/')) {
     $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
     $quality = validateQuality($quality);
+    $filterMode = isset($_GET['filter']) ? $_GET['filter'] : 'none';
+    $filterMode = validateFilterMode($filterMode);
+    // Auto-détection HDR si aucun filtre spécifié
+    if ($filterMode === 'none' && isHDRFile($db, $resolvedPath)) {
+        $filterMode = 'hdr';
+    }
     $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
-    $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+    $logFile = ffmpeg_log_path();
 
-    // Dossier temp unique par fichier+qualité+audio+burnSub+startSec
-    // Chaque seek crée une nouvelle session HLS (Safari ne peut pas seek au-delà des segments encodés)
-    $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $burnSub . '|' . $startSec);
-    $hlsDir = sys_get_temp_dir() . '/hls_' . $hlsKey;
+    // Dossier cache unique par fichier+qualité+audio+burnSub+startSec+filterMode
+    // Hors de /tmp pour éviter la race condition avec systemd-tmpfiles qui supprime pendant ffmpeg
+    $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $burnSub . '|' . $startSec . '|' . $filterMode);
+    $hlsDir = (defined('STREAM_LOG') && STREAM_LOG ? dirname(STREAM_LOG) : sys_get_temp_dir()) . '/hls_cache/hls_' . $hlsKey;
     $m3u8   = $hlsDir . '/stream.m3u8';
     $pidFile = $hlsDir . '/ffmpeg.pid';
 
@@ -56,7 +62,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
         array_map('unlink', glob($hlsDir . '/seg*.ts'));
         if (file_exists($m3u8)) unlink($m3u8);
 
-        $fc = buildFilterGraph($quality, $audioTrack, $burnSub);
+        $fc = buildFilterGraph($quality, $audioTrack, $burnSub, $filterMode);
 
         [$slotFp, $queued] = acquireStreamSlot();
         if ($queued) stream_log('HLS queued | ' . basename($resolvedPath));
@@ -66,7 +72,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
 
         $ffmpegCmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
             . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
-            . buildFfmpegCodecArgs(50)
+            . buildFfmpegCodecArgs(50, $filterMode === 'hdr')
             . ' -f hls -hls_time 4 -hls_list_size 0 -hls_playlist_type event'
             . ' -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
             . ' -hls_flags append_list'
@@ -84,7 +90,11 @@ if ($mime && str_starts_with($mime, 'video/')) {
         // flock dans le shell hérite le lock — maintient le slot occupé pendant ffmpeg
         // Avant rm -rf, vérifier qu'un nouveau ffmpeg n'a pas pris le relais
         // (le stall watchdog peut relancer un transcode avec les mêmes params → même hlsDir)
-        $cleanupBody = 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do sleep 5; done; '
+        // Watchdog : tue ffmpeg après 5 min d'inactivité (client déconnecté), sinon attend mort naturelle
+        $cleanupBody = 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do '
+            . 'inactive=$(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))); '
+            . 'if [ $inactive -gt 300 ]; then kill -9 ' . (int)$pid . ' 2>/dev/null; break; fi; '
+            . 'sleep 30; done; '
             . 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '
             . 'if [ -f ' . escapeshellarg($pidFile) . ' ] && [ "$(cat ' . escapeshellarg($pidFile) . ')" != "' . (int)$pid . '" ]; then exit 0; fi; '
             . 'rm -rf ' . escapeshellarg($hlsDir);

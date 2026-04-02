@@ -1,0 +1,18 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+PYTHONIOENCODING=utf-8
+
+# Ejecte les peers < 50 KB/s toutes les 5 minutes
+*/5 * * * * root python3 /var/www/sharebox/scripts/seedbox/kick-slow-peers >> /var/www/sharebox/data/logs/kick-peers.log 2>&1
+
+# Stoppe les torrents publics/ygg termines a ratio >= 2.0 toutes les 30 minutes
+*/30 * * * * root python3 /var/www/sharebox/scripts/seedbox/stop-public-torrents >> /var/www/sharebox/data/logs/stop-public.log 2>&1
+
+# Verifie les trackers HTTP morts (lun+jeu a 4h) -- retire apres 3 echecs sur 7 jours
+0 4 * * 1,4 root python3 /var/www/sharebox/scripts/seedbox/check-dead-trackers >> /var/www/sharebox/data/logs/dead-trackers.log 2>&1
+
+# Migre les torrents froids du NVMe vers RAID0 (vitesse < 1 MB/s sur 48h ou pression espace)
+*/15 * * * * root python3 /var/www/sharebox/scripts/seedbox/nvme-to-raid >> /var/www/sharebox/data/logs/nvme-to-raid.log 2>&1
+
+# Snapshot rtorrent : peers, top torrents, DHT, FDs, detection crash (toutes les 5 min)
+*/5 * * * * root RTORRENT_SOCK=/var/run/rtorrent/ropixv2.sock python3 /var/www/sharebox/scripts/seedbox/rtorrent-stats-snapshot >> /var/www/sharebox/data/logs/rtorrent-stats.log 2>&1

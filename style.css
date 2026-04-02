@@ -7,7 +7,7 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-    --bg-deep: #0c0e14;
+    --bg-deep: #0f1119;
     --bg-base: #12141c;
     --bg-surface: #1a1d28;
     --bg-elevated: #222530;
@@ -54,8 +54,8 @@ body::before {
     inset: 0;
     background:
         radial-gradient(ellipse 80% 50% at 50% -20%, rgba(240, 160, 48, .03), transparent),
-        linear-gradient(rgba(255,255,255,.015) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,.015) 1px, transparent 1px);
+        linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px);
     background-size: 100% 100%, 48px 48px, 48px 48px;
     pointer-events: none;
     z-index: 0;
@@ -143,18 +143,48 @@ body::before {
 }
 
 .file-filter-wrap { padding: .5rem .8rem .2rem; }
+.search-bar-wrap { position: relative; display: flex; align-items: center; }
 .file-filter {
     width: 100%;
     background: var(--bg-input, #0d1018);
-    border: 1px solid var(--border, rgba(255,255,255,.04));
+    border: 1px solid var(--border-strong, rgba(255,255,255,.10));
     border-radius: 8px;
-    padding: .45rem .75rem;
+    padding: .45rem 2.2rem .45rem .75rem;
     color: var(--text, #d8dce8);
     font-size: .85rem;
     outline: none;
     font-family: inherit;
 }
 .file-filter:focus { border-color: var(--accent, #f0a030); }
+.search-btn {
+    position: absolute; right: .3rem;
+    background: none; border: none; cursor: pointer;
+    color: var(--text-muted, rgba(255,255,255,.4));
+    padding: .2rem .35rem; display: flex; align-items: center; gap: .3rem;
+    border-radius: 6px;
+    transition: color .15s, background .15s;
+    font-size: .75rem; font-family: inherit; white-space: nowrap;
+}
+.search-btn:hover { color: var(--accent, #f0a030); }
+.search-btn-label { display: none; font-weight: 600; }
+.search-btn.has-query { color: var(--accent, #f0a030); background: rgba(240,160,48,.1); }
+.search-btn.has-query .search-btn-label { display: inline; }
+.file-path-hint {
+    font-size: .72rem;
+    color: var(--text-muted, rgba(255,255,255,.35));
+    margin-top: .15rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.search-mode-label {
+    font-size: .75rem;
+    color: var(--accent, #f0a030);
+    padding: .25rem .8rem .1rem;
+    display: flex; align-items: center; gap: .4rem;
+}
+.search-mode-label a {
+    color: inherit; opacity: .7; text-decoration: none; cursor: pointer;
+}
+.search-mode-label a:hover { opacity: 1; }
 
 /* ============================================================================
  * GRILLE DE CARTES — Liens actifs
@@ -1414,7 +1444,27 @@ body::before {
     border-top: 1px solid var(--border);
 }
 
-/* Graphe réseau 7j */
+/* Graphe réseau — boutons temporalité */
+.net-range-btns {
+    float: right;
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+.net-range-btn {
+    background: none;
+    border: 1px solid #333;
+    color: #8b90a0;
+    border-radius: 3px;
+    padding: 1px 7px;
+    font-size: 10px;
+    cursor: pointer;
+    line-height: 1.6;
+}
+.net-range-btn:hover  { border-color: #555; color: #c0c4d0; }
+.net-range-btn.active { border-color: #58a6ff; color: #58a6ff; }
+
+/* Graphe réseau */
 #dash-net-graph-section > div {
     padding: .65rem .85rem .85rem;
 }
@@ -1491,6 +1541,6 @@ body::before {
 }
 
 /* ── Modal changement de mot de passe ─────────────────────────────────────── */
-.modal-compte-label { font-size: .78rem; color: var(--text-dim); margin-bottom: .3rem; margin-top: .8rem; }
-.modal-compte-input { width: 100%; background: var(--bg-input, #0d1018); border: 1px solid var(--border, rgba(255,255,255,.04)); border-radius: 8px; padding: .5rem .75rem; color: var(--text, #d8dce8); font-size: .88rem; outline: none; font-family: inherit; box-sizing: border-box; }
+.modal-compte-label { font-size: .78rem; color: var(--text-secondary, #8b90a0); margin-bottom: .3rem; margin-top: .8rem; }
+.modal-compte-input { width: 100%; background: var(--bg-input, #0d1018); border: 1px solid var(--border-strong, rgba(255,255,255,.10)); border-radius: 8px; padding: .5rem .75rem; color: var(--text, #d8dce8); font-size: .88rem; outline: none; font-family: inherit; box-sizing: border-box; }
 .modal-compte-input:focus { border-color: var(--accent, #f0a030); }

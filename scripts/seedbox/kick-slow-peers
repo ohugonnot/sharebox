@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""
+Ejecte les peers qui telechargent trop lentement depuis ropixv2.
+Criteres : 0 < up_rate < THRESHOLD_KB*1024, sur torrents avec >= MIN_PEERS peers.
+"""
+import sys
+import os
+import xml.etree.ElementTree as ET
+from datetime import datetime
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rtorrent_scgi import scgi_call, download_list, scgi_simple
+
+THRESHOLD_KB   = 50     # kick si < 50 KB/s
+MIN_PEERS      = 5      # ne pas vider un torrent rare
+
+def log(msg):
+    print(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}', flush=True)
+
+def torrent_name(hash_: str) -> str:
+    resp = scgi_simple('d.name', hash_)
+    root = ET.fromstring(resp)
+    n = next(root.iter('string'), None)
+    return (n.text or '').strip() if n is not None else hash_[:8]
+
+def peer_list(hash_: str) -> list:
+    xml = (
+        '<?xml version="1.0"?><methodCall><methodName>p.multicall</methodName><params>'
+        f'<param><value><string>{hash_}</string></value></param>'
+        '<param><value><string></string></value></param>'
+        '<param><value><string>p.up_rate=</string></value></param>'
+        '<param><value><string>p.address=</string></value></param>'
+        '<param><value><string>p.id=</string></value></param>'
+        '</params></methodCall>'
+    )
+    resp = scgi_call(xml)
+    root = ET.fromstring(resp)
+    peers = []
+    outer = root.find('.//params/param/value/array/data')
+    if outer is None:
+        return peers
+    for val in outer:
+        inner = val.find('array/data')
+        if inner is None:
+            continue
+        def pval(v):
+            c = list(v); return (c[0].text or '0') if c else (v.text or '0')
+        vals = [pval(v) for v in inner if v.tag == 'value']
+        if len(vals) >= 3:
+            peers.append(vals)
+    return peers
+
+def peer_kick(hash_: str, peer_id: str) -> bool:
+    target = f'{hash_}:p{peer_id}'
+    xml = (
+        '<?xml version="1.0"?><methodCall><methodName>p.disconnect</methodName><params>'
+        f'<param><value><string>{target}</string></value></param>'
+        '</params></methodCall>'
+    )
+    resp = scgi_call(xml)
+    return '<fault>' not in resp
+
+threshold = THRESHOLD_KB * 1024
+hashes = download_list()
+total_kicked = 0
+
+for h in hashes:
+    peers = peer_list(h)
+    if len(peers) < MIN_PEERS:
+        continue
+    name = None
+    for peer in peers:
+        rate    = int(peer[0]) if peer[0].isdigit() else 0
+        address = peer[1]
+        pid     = peer[2]
+        if rate == 0 or rate >= threshold:
+            continue
+        if name is None:
+            name = torrent_name(h)
+        if peer_kick(h, pid):
+            log(f'kick {address} ({rate//1024}KB/s) on "{name[:50]}" [{h[:8]}]')
+            total_kicked += 1
+
+log(f'DONE - {total_kicked} peers kickes sur {len(hashes)} torrents')

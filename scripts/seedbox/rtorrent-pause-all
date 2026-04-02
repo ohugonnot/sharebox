@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""
+Pause tous les torrents rtorrent immediatement apres le demarrage.
+Appele par ExecStartPost dans le service systemd.
+"""
+import sys, time, os, socket as sock
+
+SOCKET = os.environ.get('RTORRENT_SOCK', '/var/run/rtorrent/ropixv2.sock')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+def wait_socket(timeout=10):
+    for _ in range(timeout * 20):
+        if os.path.exists(SOCKET):
+            try:
+                s = sock.socket(sock.AF_UNIX, sock.SOCK_STREAM)
+                s.settimeout(1)
+                s.connect(SOCKET)
+                s.close()
+                return True
+            except:
+                pass
+        time.sleep(0.05)
+    return False
+
+if not wait_socket():
+    sys.exit(0)
+
+from rtorrent_scgi import scgi_call, download_list
+try:
+    hashes = download_list()
+    for h in hashes:
+        scgi_call(f'<?xml version="1.0"?><methodCall><methodName>d.stop</methodName><params><param><value><string>{h}</string></value></param></params></methodCall>')
+    print(f"pause-all: {len(hashes)} torrents en pause", flush=True)
+except Exception as e:
+    print(f"pause-all: erreur {e}", flush=True)

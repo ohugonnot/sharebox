@@ -29,7 +29,7 @@ $db = get_db();
 // ── Single lock file shared with web handler ──
 // Web handler checks this file to know if worker is running.
 // Stale lock (>15 min): kill old PID and break lock.
-$cronLock = __DIR__ . '/../data/sharebox_tmdb_cron.lock';
+$cronLock = dirname(DB_PATH) . '/sharebox_tmdb_cron.lock';
 @touch($cronLock); @chmod($cronLock, 0666);
 if (file_exists($cronLock) && (time() - filemtime($cronLock)) > 900) {
     $stalePid = (int)@file_get_contents($cronLock);
@@ -128,7 +128,56 @@ do {
     $totalFound = 0;
     $totalProcessed = 0;
 
+    // ── Company/Studio detection for movies-type folders ──
+    // If parent folder is type=movies and entry is a subfolder (not a video file),
+    // try TMDB company search (e.g., "Disney", "DreamWorks" folders)
+    foreach ($byDir as $dir => &$names) {
+        // Check if parent is a movies folder
+        $stmtType = $db->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
+        $stmtType->execute([':p' => $dir]);
+        $typeRow = $stmtType->fetch();
+        $isMoviesFolder = ($typeRow && ($typeRow['folder_type'] ?? 'series') === 'movies');
+
+        if ($isMoviesFolder) {
+            foreach ($names as $i => $n) {
+                $fullPath = $dir . '/' . $n;
+                // Skip if not a directory
+                if (!is_dir($fullPath)) continue;
+
+                // Try multi-source search (collections > wikimedia > company)
+                ai_log('STUDIO try | ' . $n);
+                $studioMatch = find_studio_artwork($n, $TMDB_API_KEY, $ctx);
+
+                if ($studioMatch) {
+                    $rowId = $getRowId($dir, $n);
+                    if ($rowId) {
+                        try {
+                            $db->prepare("UPDATE folder_posters SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 70, tmdb_type = :mt, updated_at = datetime('now') WHERE rowid = :id")
+                               ->execute([
+                                   ':id' => $rowId,
+                                   ':u' => $studioMatch['poster'],
+                                   ':i' => $studioMatch['id'],
+                                   ':t' => $studioMatch['title'],
+                                   ':o' => $studioMatch['overview'] ?? null,
+                                   ':mt' => $studioMatch['type']
+                               ]);
+                            ai_log('STUDIO found | ' . $n . ' → ' . $studioMatch['title'] . ' (source=' . $studioMatch['type'] . ')');
+                            $totalFound++;
+                            unset($names[$i]); // Remove from normal processing
+                        } catch (PDOException $e) {
+                            ai_log('DB error (studio write): ' . $e->getMessage());
+                        }
+                    }
+                }
+                usleep(100000); // Rate limit (multiple API calls)
+            }
+            $names = array_values($names); // Re-index after unset
+        }
+    }
+    unset($names); // Break reference
+
     foreach ($byDir as $dir => $names) {
+        if (empty($names)) continue; // Skip if all entries were company matches
         ai_log('SCAN | dir=' . basename($dir) . ' entries=' . count($names));
 
         // Group files by extracted title to deduplicate TMDB calls
@@ -157,6 +206,7 @@ do {
                             'overview' => $r['overview'] ?? null,
                             'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
                             'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
+                            'rating' => round((float)($r['vote_average'] ?? 0), 1),
                         ];
                         break;
                     }
@@ -170,8 +220,8 @@ do {
                 if ($match) {
                     $found++;
                     try {
-                        $db->prepare("UPDATE folder_posters SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 60, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now') WHERE rowid = :id")
-                           ->execute([':id' => $rowId, ':u' => $match['poster'], ':i' => $match['id'], ':t' => $match['title'], ':o' => $match['overview'], ':y' => $match['year'], ':mt' => $match['type']]);
+                        $db->prepare("UPDATE folder_posters SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 60, tmdb_year = :y, tmdb_type = :mt, tmdb_rating = :r, updated_at = datetime('now') WHERE rowid = :id")
+                           ->execute([':id' => $rowId, ':u' => $match['poster'], ':i' => $match['id'], ':t' => $match['title'], ':o' => $match['overview'], ':y' => $match['year'], ':mt' => $match['type'], ':r' => $match['rating']]);
                     } catch (PDOException $e) {
                         ai_log('DB error (match write): ' . $e->getMessage());
                     }
@@ -244,7 +294,7 @@ do {
 
     // Propagate: if a parent folder is matched, apply its poster to unmatched children
     $propagated = 0;
-    $parentRows = $db->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchAll();
+    $parentRows = $db->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type, tmdb_rating FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchAll();
     $parentMap = [];
     foreach ($parentRows as $pr) {
         $parentMap[$pr['path']] = $pr;
@@ -257,8 +307,8 @@ do {
         if (isset($parentMap[$parentPath])) {
             $p = $parentMap[$parentPath];
             try {
-                $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, verified = 75, updated_at = datetime('now') WHERE path = ?")
-                   ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $childPath]);
+                $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 75, updated_at = datetime('now') WHERE path = ?")
+                   ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath]);
                 $propagated++;
             } catch (PDOException $e) {
                 ai_log('DB error (propagate): ' . $e->getMessage());
@@ -284,6 +334,103 @@ if (filesize($dbFile) > 4096) {
 }
 
 // ── Helpers ──
+
+/**
+ * Multi-source search for studio artwork (collections > wikimedia > company)
+ * Returns best match with poster URL or null
+ */
+function find_studio_artwork(string $studioName, string $apiKey, $ctx): ?array {
+    $query = urlencode($studioName);
+
+    // 1. Try TMDB Collections (best artwork quality)
+    $collUrl = "https://api.themoviedb.org/3/search/collection?api_key={$apiKey}&query={$query}&language=fr&page=1";
+    $collResult = tmdb_fetch($collUrl, $ctx);
+    if ($collResult && !empty($collResult['results'])) {
+        foreach ($collResult['results'] as $r) {
+            if (!empty($r['poster_path'])) {
+                return [
+                    'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
+                    'id' => $r['id'] ?? 0,
+                    'title' => $r['name'] ?? $studioName,
+                    'overview' => $r['overview'] ?? null,
+                    'type' => 'collection',
+                ];
+            }
+        }
+    }
+
+    // 2. Try Wikimedia Commons (high-quality logos)
+    $wikiResult = find_wikimedia_logo($studioName, $ctx);
+    if ($wikiResult) return $wikiResult;
+
+    // 3. Fallback to TMDB Company (logo only, often landscape format)
+    $compUrl = "https://api.themoviedb.org/3/search/company?api_key={$apiKey}&query={$query}&page=1";
+    $compResult = tmdb_fetch($compUrl, $ctx);
+    if ($compResult && !empty($compResult['results'])) {
+        foreach ($compResult['results'] as $c) {
+            if (!empty($c['logo_path'])) {
+                return [
+                    'poster' => 'https://image.tmdb.org/t/p/w300' . $c['logo_path'],
+                    'id' => $c['id'] ?? 0,
+                    'title' => $c['name'] ?? $studioName,
+                    'overview' => null,
+                    'type' => 'company',
+                ];
+            }
+        }
+    }
+
+    return null;
+}
+
+/**
+ * Search Wikimedia Commons for studio logo
+ * Returns first suitable result or null
+ */
+function find_wikimedia_logo(string $studioName, $ctx): ?array {
+    $searchQuery = urlencode($studioName . ' logo');
+    $searchUrl = "https://commons.wikimedia.org/w/api.php?action=query&list=search&srsearch={$searchQuery}&srnamespace=6&format=json&srlimit=3";
+
+    $searchResp = @file_get_contents($searchUrl, false, $ctx);
+    $searchData = $searchResp ? json_decode($searchResp, true) : null;
+
+    if (!$searchData || empty($searchData['query']['search'])) {
+        return null;
+    }
+
+    // Try to get first suitable image
+    foreach ($searchData['query']['search'] as $item) {
+        $title = $item['title'] ?? '';
+        if (!$title) continue;
+
+        $infoUrl = "https://commons.wikimedia.org/w/api.php?action=query&titles=" . urlencode($title) . "&prop=imageinfo&iiprop=url|size&format=json";
+        $infoResp = @file_get_contents($infoUrl, false, $ctx);
+        $infoData = $infoResp ? json_decode($infoResp, true) : null;
+
+        if (!$infoData || empty($infoData['query']['pages'])) continue;
+
+        $page = reset($infoData['query']['pages']);
+        if (empty($page['imageinfo'][0]['url'])) continue;
+
+        $imageUrl = $page['imageinfo'][0]['url'];
+        $width = $page['imageinfo'][0]['width'] ?? 0;
+        $height = $page['imageinfo'][0]['height'] ?? 0;
+
+        // Skip tiny images or very wide landscape logos
+        if ($width < 200 || $height < 100) continue;
+        if ($width > 0 && $height > 0 && ($width / $height) > 3) continue;
+
+        return [
+            'poster' => $imageUrl,
+            'id' => 0,
+            'title' => $studioName . ' (Wikimedia)',
+            'overview' => 'Logo depuis Wikimedia Commons',
+            'type' => 'wikimedia',
+        ];
+    }
+
+    return null;
+}
 
 function ai_log(string $msg): void {
     echo '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n";

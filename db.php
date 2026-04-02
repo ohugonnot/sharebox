@@ -39,11 +39,13 @@ function get_db(): PDO {
     foreach ($statements as $s) $db->query($s);
 
     // Safety: auto-backup après ouverture (max 1h).
-    // Checkpoint WAL d'abord : sans ça, @copy capture share.db sans share.db-wal
-    // et le backup manque toutes les écritures non encore fusionnées dans le main file.
+    // PASSIVE : ne bloque ni readers ni writers (contrairement à TRUNCATE/FULL qui
+    // bloquent tous les nouveaux writers et peuvent provoquer des "database is locked"
+    // sur les requêtes concurrentes). Le backup peut rater quelques frames WAL récentes
+    // mais c'est acceptable — le worker fait un TRUNCATE propre en fin de scan.
     if ($dbExisted && filesize($dbFile) > 4096) {
         if (!file_exists($backupFile) || (time() - filemtime($backupFile)) > 3600) {
-            $db->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+            $db->exec('PRAGMA wal_checkpoint(PASSIVE)');
             @copy($dbFile, $backupFile);
         }
     }
@@ -94,7 +96,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 16; // bump when adding migrations
+    $targetVersion = 18; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -271,6 +273,50 @@ function get_db(): PDO {
         ");
         $db->query("CREATE INDEX IF NOT EXISTS idx_watch_user ON watch_history(user)");
         $db->query('PRAGMA user_version = 16');
+    }
+
+    if ($version < 17) {
+        // v17 : historique réseau agrégé (hourly + daily) pour les vues 1m et 1an
+        $db->query("
+            CREATE TABLE IF NOT EXISTS net_speed_hourly (
+                hour_ts  INTEGER PRIMARY KEY,
+                upload   REAL NOT NULL,
+                download REAL NOT NULL
+            )
+        ");
+        $db->query("
+            CREATE TABLE IF NOT EXISTS net_speed_daily (
+                day_ts   INTEGER PRIMARY KEY,
+                upload   REAL NOT NULL,
+                download REAL NOT NULL
+            )
+        ");
+        // Backfill depuis les données brutes existantes
+        // Note: SQLite n'a pas 'start of hour' — on utilise l'arithmétique entière
+        $db->query("
+            INSERT OR IGNORE INTO net_speed_hourly (hour_ts, upload, download)
+            SELECT (ts/3600)*3600, AVG(upload), AVG(download)
+            FROM net_speed
+            WHERE ts < (strftime('%s','now') / 3600) * 3600
+            GROUP BY (ts/3600)*3600
+        ");
+        $db->query("
+            INSERT OR IGNORE INTO net_speed_daily (day_ts, upload, download)
+            SELECT (ts/86400)*86400, AVG(upload), AVG(download)
+            FROM net_speed
+            WHERE ts < strftime('%s','now','start of day')
+            GROUP BY (ts/86400)*86400
+        ");
+        $db->query('PRAGMA user_version = 17');
+    }
+
+    if ($version < 18) {
+        // v18 : colonne ia_checked pour le scan TMDB IA (0=pas scanné, 1=confirmé par IA)
+        $cols = array_column($db->query("PRAGMA table_info(folder_posters)")->fetchAll(), 'name');
+        if (!in_array('ia_checked', $cols, true)) {
+            $db->exec("ALTER TABLE folder_posters ADD COLUMN ia_checked INTEGER DEFAULT 0");
+        }
+        $db->query('PRAGMA user_version = 18');
     }
 
     if ($version < $targetVersion) {

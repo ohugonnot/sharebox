@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""
+raid-to-nvme — Déplace manuellement un torrent du RAID0 vers le NVMe.
+
+Usage : python3 raid-to-nvme <nom_ou_motif>
+
+Recherche un torrent dont le nom contient le motif (insensible à la casse).
+Lève une erreur si plusieurs torrents correspondent.
+
+Migration :
+  pause → rsync RAID→NVMe.nvme-tmp → d.directory.set NVMe → d.save_full_session
+  → remplace le dossier RAID par un symlink → NVMe → resume → rm source RAID
+"""
+
+import sys
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rtorrent_scgi import download_list, multicall, scgi_simple
+
+
+def load_conf():
+    path = Path(__file__).parent / 'seedbox.conf'
+    conf = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                k, v = line.split('=', 1)
+                conf[k.strip()] = v.strip()
+    return conf
+
+
+def log(msg):
+    print(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}', flush=True)
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(f'Usage: {sys.argv[0]} <nom_ou_motif>', file=sys.stderr)
+        sys.exit(1)
+
+    pattern = sys.argv[1].lower()
+
+    conf = load_conf()
+    nvme = conf['NVME_DOWNLOADS']
+    raid = conf['RAID_DOWNLOADS']
+
+    # ── Trouver le torrent ────────────────────────────────────────────────────
+    hashes = download_list()
+    if not hashes:
+        log('Aucun torrent dans rtorrent')
+        sys.exit(1)
+
+    FIELDS = ('d.name', 'd.directory', 'd.size_bytes', 'd.is_open', 'd.is_multi_file')
+    calls = [{'method': m, 'params': [h]} for h in hashes for m in FIELDS]
+    vals  = multicall(calls)
+    N     = len(FIELDS)
+
+    matches = []
+    for i, h in enumerate(hashes):
+        base = i * N
+        name = vals[base] or ''
+        if pattern in name.lower():
+            matches.append({
+                'hash':     h,
+                'name':     name,
+                'dir':      vals[base + 1] or '',
+                'size':     int(vals[base + 2] or 0),
+                'is_open':  int(vals[base + 3] or 0),
+                'is_multi': int(vals[base + 4] or 0),
+            })
+
+    if not matches:
+        log(f'Aucun torrent ne correspond à "{pattern}"')
+        sys.exit(1)
+    if len(matches) > 1:
+        log(f'{len(matches)} torrents correspondent, sois plus précis :')
+        for m in matches:
+            log(f'  {m["name"]}')
+        sys.exit(1)
+
+    t = matches[0]
+    name     = t['name']
+    hash_    = t['hash']
+    was_open = t['is_open']
+    is_multi = t['is_multi']
+    size_gb  = t['size'] / (1024 ** 3)
+
+    log(f'Torrent : {name}')
+    log(f'  répertoire actuel : {t["dir"]}')
+    log(f'  taille : {size_gb:.1f} GB  |  ouvert : {was_open}')
+
+    # ── Vérifications ─────────────────────────────────────────────────────────
+    if not t['dir'].startswith(raid):
+        log(f'ERREUR : le torrent n\'est pas sur RAID ({t["dir"]})')
+        sys.exit(1)
+
+    src = Path(raid) / name
+    if not src.exists():
+        log(f'ERREUR : source introuvable : {src}')
+        sys.exit(1)
+
+    free_gb = shutil.disk_usage(nvme).free / (1024 ** 3)
+    if free_gb < size_gb + 10:
+        log(f'ERREUR : NVMe trop plein ({free_gb:.1f} GB libre, besoin de {size_gb + 10:.1f} GB)')
+        sys.exit(1)
+
+    log(f'NVMe libre : {free_gb:.1f} GB - OK')
+
+    # ── Migration ─────────────────────────────────────────────────────────────
+    dst_nvme  = Path(nvme) / name
+    dst_tmp   = Path(nvme) / (name + '.raid-tmp')
+    Path(nvme).mkdir(parents=True, exist_ok=True)
+
+    if was_open:
+        log('pause...')
+        scgi_simple('d.pause', hash_)
+        time.sleep(2)
+
+    try:
+        if is_multi:
+            cmd = ['rsync', '-a', '--delete', '--info=progress2',
+                   str(src) + '/', str(dst_tmp) + '/']
+        else:
+            cmd = ['rsync', '-a', '--info=progress2', str(src), str(dst_tmp)]
+
+        log(f'rsync {"multi" if is_multi else "single"} -> {dst_tmp.name}  (peut prendre plusieurs minutes)')
+        result = subprocess.run(cmd)
+        if result.returncode != 0:
+            raise RuntimeError(f'rsync exit {result.returncode}')
+
+        # Pointer rtorrent vers NVMe
+        scgi_simple('d.directory.set', hash_, nvme)
+        scgi_simple('d.save_full_session', hash_)
+
+        # Remplacer le dossier RAID par un symlink → NVMe
+        if src.is_symlink():
+            src.unlink()
+        elif src.is_dir():
+            shutil.rmtree(src)
+        else:
+            src.unlink()
+
+        # Rename tmp → dossier final NVMe
+        dst_tmp.rename(dst_nvme)
+
+        # Créer symlink RAID/name → NVMe/name
+        src.symlink_to(dst_nvme)
+
+        log(f'OK - {name} est maintenant sur NVMe, symlink cree sur RAID')
+
+    except Exception as e:
+        log(f'ERREUR : {e}')
+        if dst_tmp.exists():
+            shutil.rmtree(dst_tmp) if dst_tmp.is_dir() else dst_tmp.unlink()
+        sys.exit(1)
+
+    finally:
+        if was_open:
+            scgi_simple('d.resume', hash_)
+            log('resume')
+
+
+if __name__ == '__main__':
+    main()

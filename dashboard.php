@@ -62,16 +62,8 @@ function sb_has_vnstat(): bool {
 
             <!-- Disque -->
             <div class="dash-card" id="dash-disk">
-                <div class="dash-card-title">Disque</div>
-                <div class="dash-metric-main" id="dash-disk-val">&mdash;</div>
-                <div class="dash-metric-sub" id="dash-disk-sub">&mdash; libre</div>
-                <div class="dash-bar">
-                    <div class="dash-bar-fill" id="dash-disk-bar" style="width:0%"></div>
-                </div>
-                <div class="dash-subtitle">
-                    <span id="dash-disk-io">busy &mdash;</span>
-                    <span id="dash-disk-rw">R &mdash; W &mdash;</span>
-                </div>
+                <div class="dash-card-title">Stockage</div>
+                <div id="dash-disk-volumes"><!-- rempli dynamiquement --></div>
                 <div class="dash-temp-line" id="dash-disk-temps-row" style="display:none">
                     <span class="dash-temp-label">hdd</span>
                     <span class="dash-temp-val" id="dash-disk-temps"></span>
@@ -124,9 +116,17 @@ function sb_has_vnstat(): bool {
         </div>
         <?php endif; ?>
 
-        <!-- Graphe réseau 7 jours -->
+        <!-- Graphe réseau multi-temporalité -->
         <details class="dash-subsection" id="dash-net-graph-section" open>
-            <summary>R&eacute;seau 7 jours</summary>
+            <summary>
+                R&eacute;seau
+                <span class="net-range-btns">
+                    <button class="net-range-btn" data-range="24h">24h</button>
+                    <button class="net-range-btn active" data-range="7d">7j</button>
+                    <button class="net-range-btn" data-range="1m">1m</button>
+                    <button class="net-range-btn" data-range="1y">1an</button>
+                </span>
+            </summary>
             <div style="position:relative;height:200px">
                 <canvas id="netChart"></canvas>
             </div>

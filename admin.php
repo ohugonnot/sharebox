@@ -31,7 +31,8 @@ if ($action !== '') {
     // Actions admin-only
     $adminOnlyActions = ['list_users','create_user','update_user','delete_user',
                          'restart_rtorrent','stop_rtorrent','tmdb_status','tmdb_scan',
-                         'purge_expired','recent_activity','activity_events'];
+                         'purge_expired','recent_activity','activity_events',
+                         'ai_scan_launch','ai_scan_status','ai_scan_log'];
     if (in_array($action, $adminOnlyActions, true) && !$isAdmin) {
         http_response_code(403);
         echo json_encode(['error' => 'Accès réservé aux administrateurs.']);
@@ -275,7 +276,7 @@ if ($action !== '') {
                 }
                 touch($lockFile);
                 $script = realpath(__DIR__ . '/tools/tmdb-worker.php');
-                $logFile = __DIR__ . '/data/tmdb-worker.log';
+                $logFile = dirname(DB_PATH) . '/tmdb-worker.log';
                 $cmd = sprintf(
                     '/usr/bin/php %s --cron >> %s 2>&1 & echo $!',
                     escapeshellarg($script),
@@ -283,6 +284,143 @@ if ($action !== '') {
                 );
                 $pid = trim(shell_exec($cmd));
                 echo json_encode(['ok' => true, 'message' => 'Scan TMDB lancé', 'pid' => $pid]);
+                break;
+
+            case 'ai_scan_launch':
+                $lockFile  = __DIR__ . '/data/sharebox_ai_scan.lock';
+                $logFile   = __DIR__ . '/data/ai-scan.log';
+                $tsFile    = __DIR__ . '/data/ai-scan-last-launch.txt';
+                if (file_exists($lockFile)) {
+                    $pid = (int)file_get_contents($lockFile);
+                    if ($pid > 0 && is_dir("/proc/$pid")) {
+                        echo json_encode(['ok' => false, 'message' => 'Scan IA déjà en cours', 'pid' => $pid]);
+                        break;
+                    }
+                }
+                // Rate limit : 1 scan par heure
+                if (file_exists($tsFile)) {
+                    $elapsed = time() - (int)file_get_contents($tsFile);
+                    if ($elapsed < 3600) {
+                        $wait = 3600 - $elapsed;
+                        $min  = ceil($wait / 60);
+                        echo json_encode(['ok' => false, 'message' => "Scan IA disponible dans $min min"]);
+                        break;
+                    }
+                }
+                file_put_contents($logFile, '');
+                file_put_contents($tsFile, (string)time());
+                // Effacer le résultat du scan précédent
+                @unlink(__DIR__ . '/data/ai-scan-result.json');
+                $cmd = 'sudo /usr/local/bin/sharebox-tmdb-ai-scan >> ' . escapeshellarg($logFile) . ' 2>&1 & echo $!';
+                $pid = (int)trim(shell_exec($cmd));
+                if ($pid <= 0) {
+                    echo json_encode(['ok' => false, 'message' => 'Échec du lancement']);
+                    break;
+                }
+                file_put_contents($lockFile, (string)$pid);
+                echo json_encode(['ok' => true, 'pid' => $pid]);
+                break;
+
+            case 'ai_scan_status':
+                $lockFile = __DIR__ . '/data/sharebox_ai_scan.lock';
+                $logFile  = __DIR__ . '/data/ai-scan.log';
+                $running  = false;
+                $pid      = 0;
+                if (file_exists($lockFile)) {
+                    $pid = (int)file_get_contents($lockFile);
+                    if ($pid > 0 && is_dir("/proc/$pid")) {
+                        $running = true;
+                    }
+                }
+                $logSize    = file_exists($logFile) ? filesize($logFile) : 0;
+                $resultFile = __DIR__ . '/data/ai-scan-result.json';
+                $lastResult = file_exists($resultFile) ? json_decode(file_get_contents($resultFile), true) : null;
+                $tsFile     = __DIR__ . '/data/ai-scan-last-launch.txt';
+                $cooldown   = 0;
+                if (file_exists($tsFile)) {
+                    $elapsed  = time() - (int)file_get_contents($tsFile);
+                    $cooldown = max(0, 3600 - $elapsed);
+                }
+                $aiAvailable = file_exists('/usr/local/bin/sharebox-tmdb-ai-scan');
+                echo json_encode(['running' => $running, 'pid' => $pid, 'log_size' => $logSize, 'last_result' => $lastResult, 'cooldown' => $cooldown, 'ai_available' => $aiAvailable]);
+                break;
+
+            case 'ai_scan_log':
+                $logFile = __DIR__ . '/data/ai-scan.log';
+                $offset  = max(0, (int)($_GET['offset'] ?? 0));
+                $lines   = [];
+                $nextOffset = $offset;
+                if (file_exists($logFile)) {
+                    $fh = fopen($logFile, 'r');
+                    if ($fh) {
+                        fseek($fh, $offset);
+                        $chunk = fread($fh, 131072);
+                        fclose($fh);
+                        if ($chunk !== false && $chunk !== '') {
+                            $nextOffset = $offset + strlen($chunk);
+                            // Parse stream-json JSONL — extraire les lignes lisibles
+                            foreach (explode("\n", $chunk) as $jsonLine) {
+                                $jsonLine = trim($jsonLine);
+                                if ($jsonLine === '') continue;
+                                $ev = json_decode($jsonLine, true);
+                                if (!$ev) continue;
+                                $type = $ev['type'] ?? '';
+                                if ($type === 'assistant') {
+                                    foreach ($ev['message']['content'] ?? [] as $c) {
+                                        if ($c['type'] === 'text' && trim($c['text']) !== '') {
+                                            $lines[] = trim($c['text']);
+                                        } elseif ($c['type'] === 'tool_use') {
+                                            $desc = $c['input']['description'] ?? $c['input']['command'] ?? '';
+                                            $name = $c['name'] ?? 'tool';
+                                            $lines[] = '▶ ' . $name . ($desc ? ': ' . mb_substr($desc, 0, 120) : '');
+                                        }
+                                    }
+                                } elseif ($type === 'user') {
+                                    foreach ($ev['message']['content'] ?? [] as $c) {
+                                        if (($c['type'] ?? '') === 'tool_result') {
+                                            $out = $c['content'] ?? '';
+                                            if (is_array($out)) $out = implode(' ', array_column($out, 'text'));
+                                            $out = trim((string)$out);
+                                            if ($out !== '') $lines[] = '  ' . mb_substr($out, 0, 300);
+                                        }
+                                    }
+                                } elseif ($type === 'result') {
+                                    $res = trim($ev['result'] ?? '');
+                                    if ($res !== '') $lines[] = $res;
+                                }
+                            }
+                        }
+                    }
+                }
+                $lockFile = __DIR__ . '/data/sharebox_ai_scan.lock';
+                $running  = false;
+                if (file_exists($lockFile)) {
+                    $pid = (int)file_get_contents($lockFile);
+                    if ($pid > 0 && is_dir("/proc/$pid")) {
+                        $running = true;
+                    }
+                }
+                $fileSize = file_exists($logFile) ? filesize($logFile) : 0;
+                $done     = !$running && $nextOffset >= $fileSize;
+                // Quand le scan vient de se terminer, extraire le résumé du log brut
+                if ($done && file_exists($logFile)) {
+                    $rawLog = file_get_contents($logFile);
+                    $resultFile = __DIR__ . '/data/ai-scan-result.json';
+                    if (!file_exists($resultFile) && $rawLog) {
+                        $matched = 0; $skipped = 0; $failed = 0;
+                        $confirmed = 0; $fixed = 0;
+                        if (preg_match('/matched=(\d+)/', $rawLog, $m)) $matched = (int)$m[1];
+                        if (preg_match('/skipped=(\d+)/', $rawLog, $m)) $skipped = (int)$m[1];
+                        if (preg_match('/failed=(\d+)/', $rawLog, $m)) $failed = (int)$m[1];
+                        if (preg_match('/confirmed=(\d+)/', $rawLog, $m)) $confirmed = (int)$m[1];
+                        if (preg_match('/fixed=(\d+)/', $rawLog, $m)) $fixed = (int)$m[1];
+                        file_put_contents($resultFile, json_encode([
+                            'ts' => time(), 'matched' => $matched, 'skipped' => $skipped,
+                            'failed' => $failed, 'confirmed' => $confirmed, 'fixed' => $fixed,
+                        ]));
+                    }
+                }
+                echo json_encode(['lines' => $lines, 'next_offset' => $nextOffset, 'done' => $done]);
                 break;
 
             case 'purge_expired':
@@ -734,6 +872,103 @@ if ($action !== '') {
             .actions { flex-wrap: nowrap; }
             .actions .btn { padding: .25rem .45rem; font-size: .72rem; }
         }
+        /* ── Streams actifs ── */
+        .live-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: var(--text-muted);
+            display: inline-block;
+            flex-shrink: 0;
+            transition: background .4s;
+        }
+        .live-dot.active {
+            background: var(--green);
+            animation: pulse-live 2s ease-in-out infinite;
+        }
+        @keyframes pulse-live {
+            0%,100% { box-shadow: 0 0 0 0 rgba(61,220,132,.5); }
+            50%      { box-shadow: 0 0 0 5px rgba(61,220,132,0); }
+        }
+        .streams-count-badge {
+            font-size: .68rem; font-weight: 700;
+            padding: .1rem .42rem;
+            border-radius: 99px;
+            background: rgba(61,220,132,.1);
+            color: var(--green);
+            border: 1px solid rgba(61,220,132,.18);
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: .03em;
+        }
+        .stream-row {
+            display: grid;
+            grid-template-columns: 30px 1fr auto auto auto;
+            align-items: center;
+            column-gap: 1rem;
+            padding: .6rem 1.2rem;
+            border-bottom: 1px solid var(--border);
+            transition: background .12s;
+        }
+        .stream-row:last-child { border-bottom: none; }
+        .stream-row:hover { background: var(--bg-row-hover); }
+        .stream-avatar {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            background: var(--accent-dim);
+            border: 1px solid rgba(240,160,48,.18);
+            color: var(--accent);
+            font-size: .65rem; font-weight: 700;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0;
+            font-family: 'JetBrains Mono', monospace;
+        }
+        .stream-info { min-width: 0; }
+        .stream-filename {
+            font-size: .8rem; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            line-height: 1.3;
+        }
+        .stream-user-label {
+            font-size: .7rem; color: var(--text-muted);
+            margin-top: .1rem; font-family: 'JetBrains Mono', monospace;
+        }
+        .stream-mode-badge {
+            font-size: .62rem; font-weight: 700;
+            padding: .18rem .45rem; border-radius: 4px;
+            letter-spacing: .07em; text-transform: uppercase;
+            font-family: 'JetBrains Mono', monospace;
+            white-space: nowrap; border: 1px solid transparent;
+        }
+        .smode-hls      { background:rgba(240,160,48,.1); color:var(--accent);   border-color:rgba(240,160,48,.2); }
+        .smode-transcode{ background:rgba(66,165,245,.1);  color:var(--blue);    border-color:rgba(66,165,245,.2); }
+        .smode-native   { background:rgba(61,220,132,.1);  color:var(--green);   border-color:rgba(61,220,132,.2); }
+        .stream-duration {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: .76rem; color: var(--text-dim);
+            white-space: nowrap; min-width: 4.8rem; text-align: right;
+        }
+        .stream-cpu {
+            min-width: 3.8rem; text-align: right;
+            font-family: 'JetBrains Mono', monospace; font-size: .76rem;
+        }
+        .scpu-low  { color: var(--green); }
+        .scpu-mid  { color: var(--accent); }
+        .scpu-high { color: var(--red); }
+        .scpu-none { color: var(--text-muted); }
+        .streams-empty {
+            padding: 2.2rem 1.4rem; text-align: center;
+            color: var(--text-muted); font-size: .82rem;
+        }
+        .streams-empty svg { display:block; margin: 0 auto .7rem; opacity:.2; }
+        .streams-col-heads {
+            display: grid;
+            grid-template-columns: 30px 1fr auto auto auto;
+            column-gap: 1rem;
+            padding: .4rem 1.2rem;
+            border-bottom: 1px solid var(--border);
+            font-size: .67rem; font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: .08em; text-transform: uppercase;
+        }
     </style>
 </head>
 <body>
@@ -808,10 +1043,26 @@ if ($action !== '') {
     </div>
 
     <div id="tab-systeme" class="tab-panel">
+        <div class="card mb-4" id="card-streams">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <div style="display:flex;align-items:center;gap:.55rem">
+              <span class="live-dot" id="streams-live-dot"></span>
+              <span>Streams actifs</span>
+              <span class="streams-count-badge" id="streams-count" style="display:none">0</span>
+            </div>
+            <small class="text-muted" id="streams-last-update" style="font-family:'JetBrains Mono',monospace;font-size:.7rem"></small>
+          </div>
+          <div id="streams-container">
+            <p class="text-muted p-3 mb-0" style="font-size:.82rem">Chargement…</p>
+          </div>
+        </div>
         <div class="card" style="margin-bottom:1.5rem">
             <div class="card-header">
                 <div class="card-title">TMDB Posters</div>
-                <button class="btn btn-accent" id="tmdb-scan-btn" onclick="launchTmdbScan()">Scan TMDB</button>
+                <div style="display:flex;gap:.5rem">
+                    <button class="btn btn-ghost" id="tmdb-scan-btn" onclick="launchTmdbScan()">Scan TMDB</button>
+                    <button class="btn btn-accent" id="ai-scan-btn" onclick="launchAiScan()">Vérification IA</button>
+                </div>
             </div>
             <div style="padding:1rem 1.4rem">
                 <div id="tmdb-status" style="display:flex;gap:1.5rem;flex-wrap:wrap;font-size:.82rem;color:var(--text-dim)">
@@ -822,6 +1073,13 @@ if ($action !== '') {
                         <div id="tmdb-bar" style="height:100%;background:var(--accent);border-radius:6px;transition:width .5s;width:0%"></div>
                     </div>
                     <div id="tmdb-bar-label" style="font-size:.72rem;color:var(--text-muted);margin-top:.3rem"></div>
+                </div>
+                <div id="ai-scan-panel" style="display:none;margin-top:1rem">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem">
+                        <span style="font-size:.72rem;color:var(--text-muted)">Log IA</span>
+                        <button onclick="closeAiPanel()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:.8rem;padding:0">×</button>
+                    </div>
+                    <div id="ai-scan-log" style="background:#0c0e14;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.6rem .8rem;height:350px;overflow-y:auto;font-family:monospace;font-size:.75rem;color:#cdd6f4;white-space:pre-wrap;word-break:break-all;line-height:1.5"></div>
                 </div>
             </div>
         </div>
@@ -1152,6 +1410,73 @@ async function stopRtorrent(username) {
     loadUsers();
 }
 
+// ── Streams actifs ──
+function loadActiveStreams() {
+    fetch('ctrl.php?cmd=active_streams')
+        .then(r => r.json())
+        .then(data => {
+            const container = document.getElementById('streams-container');
+            const upd      = document.getElementById('streams-last-update');
+            const dot      = document.getElementById('streams-live-dot');
+            const cnt      = document.getElementById('streams-count');
+            if (upd) upd.textContent = new Date().toLocaleTimeString();
+
+            const streams = data.streams || [];
+            if (dot) dot.classList.toggle('active', streams.length > 0);
+            if (cnt) { cnt.textContent = streams.length; cnt.style.display = streams.length ? '' : 'none'; }
+
+            if (!streams.length) {
+                container.innerHTML = `<div class="streams-empty">
+                    <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+                        <rect x="2" y="7" width="20" height="15" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/>
+                        <line x1="12" y1="12" x2="12" y2="16"/><line x1="10" y1="14" x2="14" y2="14"/>
+                    </svg>
+                    Aucun stream actif</div>`;
+                return;
+            }
+
+            const esc = t => (t||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+            const modeClass = { hls: 'smode-hls', transcode: 'smode-transcode', native: 'smode-native' };
+            const rows = streams.map(s => {
+                const dur = s.duration_sec >= 3600
+                    ? Math.floor(s.duration_sec/3600)+'h'+String(Math.floor((s.duration_sec%3600)/60)).padStart(2,'0')+'m'
+                    : Math.floor(s.duration_sec/60)+'m'+String(s.duration_sec%60).padStart(2,'0')+'s';
+                let cpuHtml;
+                if (s.cpu_pct !== null && s.cpu_pct >= 0) {
+                    const cls = s.cpu_pct < 30 ? 'scpu-low' : s.cpu_pct < 70 ? 'scpu-mid' : 'scpu-high';
+                    cpuHtml = `<span class="${cls}">${s.cpu_pct.toFixed(1)}%</span>`;
+                } else {
+                    cpuHtml = `<span class="scpu-none">—</span>`;
+                }
+                const rawName = s.filename.length > 44 ? s.filename.slice(0,41)+'…' : s.filename;
+                const fname = esc(rawName);
+                const initials = esc((s.user||'?').slice(0,2).toUpperCase());
+                const mc = modeClass[s.mode] || 'smode-native';
+                return `<div class="stream-row">
+                    <div class="stream-avatar">${initials}</div>
+                    <div class="stream-info">
+                        <div class="stream-filename" title="${esc(s.path || s.filename)}">${fname}</div>
+                        <div class="stream-user-label">${s.folder ? esc(s.folder) + ' · ' : ''}${esc(s.user)}</div>
+                    </div>
+                    <span class="stream-mode-badge ${mc}">${s.mode}</span>
+                    <span class="stream-duration">${dur}</span>
+                    <div class="stream-cpu">${cpuHtml}</div>
+                </div>`;
+            }).join('');
+
+            container.innerHTML = `<div class="streams-col-heads">
+                <span></span><span>Fichier</span>
+                <span style="text-align:right">Mode</span>
+                <span style="text-align:right">Durée</span>
+                <span style="text-align:right">CPU</span>
+            </div>${rows}`;
+        })
+        .catch(() => {
+            const c = document.getElementById('streams-container');
+            if (c) c.innerHTML = '<p style="color:var(--red);padding:.8rem 1.2rem;font-size:.8rem">Erreur de chargement</p>';
+        });
+}
+
 // ── TMDB status & scan ──
 var tmdbPolling = false;
 
@@ -1218,6 +1543,98 @@ async function launchTmdbScan() {
     if (res.error) { toast(res.error, false); btn.disabled = false; btn.textContent = 'Scan TMDB'; return; }
     toast(res.message);
     setTimeout(loadTmdbStatus, 2000);
+}
+
+// ── AI scan ──
+var aiScanPollTimer = null;
+
+async function refreshAiScanBtn() {
+    try {
+        const res = await fetch('/share/admin.php?action=ai_scan_status');
+        const data = await res.json();
+        const btn = document.getElementById('ai-scan-btn');
+        if (!btn) return;
+        if (!data.ai_available) {
+            btn.style.display = 'none';
+            return;
+        }
+        if (data.running) return;
+        if (data.cooldown > 0) {
+            const min = Math.ceil(data.cooldown / 60);
+            btn.textContent = 'IA — ' + min + ' min';
+            btn.disabled = true;
+            btn.title = 'Disponible dans ' + min + ' minute' + (min > 1 ? 's' : '');
+        } else {
+            const lr = data.last_result;
+            if (lr && lr.confirmed === 0 && lr.fixed === 0 && lr.matched === 0) {
+                btn.textContent = '✓ Déjà vérifié';
+                btn.style.opacity = '0.5';
+                btn.disabled = false;
+                btn.title = 'Dernier scan : rien à corriger. Cliquer pour forcer une nouvelle analyse.';
+            } else {
+                btn.textContent = 'Vérification IA';
+                btn.style.opacity = '';
+                btn.disabled = false;
+                btn.title = '';
+            }
+        }
+    } catch(e) {}
+}
+
+async function launchAiScan() {
+    const btn = document.getElementById('ai-scan-btn');
+    btn.textContent = 'IA en cours...';
+    btn.disabled = true;
+    const panel = document.getElementById('ai-scan-panel');
+    const log   = document.getElementById('ai-scan-log');
+    log.textContent = '';
+    panel.style.display = '';
+    const res = await api('ai_scan_launch', {});
+    if (res.error || !res.ok) {
+        appendAiLog('Erreur : ' + (res.message || res.error || 'Échec du lancement'));
+        btn.textContent = 'Vérification IA';
+        btn.disabled = false;
+        return;
+    }
+    appendAiLog('Scan IA démarré (PID ' + res.pid + ')…\n');
+    pollAiLog(0);
+}
+
+function appendAiLog(text) {
+    const log = document.getElementById('ai-scan-log');
+    if (!log) return;
+    log.textContent += text;
+    log.scrollTop = log.scrollHeight;
+}
+
+async function pollAiLog(offset) {
+    try {
+        const res = await fetch('/share/admin.php?action=ai_scan_log&offset=' + offset);
+        const data = await res.json();
+        if (data.lines && data.lines.length) {
+            appendAiLog(data.lines.join('\n') + '\n');
+        }
+        if (data.done) {
+            onAiScanDone();
+            return;
+        }
+        aiScanPollTimer = setTimeout(function() { pollAiLog(data.next_offset); }, 2000);
+    } catch(e) {
+        aiScanPollTimer = setTimeout(function() { pollAiLog(offset); }, 3000);
+    }
+}
+
+function onAiScanDone() {
+    const btn = document.getElementById('ai-scan-btn');
+    btn.disabled = false;
+    appendAiLog('\n--- Scan terminé ---');
+    loadTmdbStatus();
+    setTimeout(refreshAiScanBtn, 1000);
+}
+
+function closeAiPanel() {
+    clearTimeout(aiScanPollTimer);
+    document.getElementById('ai-scan-panel').style.display = 'none';
 }
 
 async function purgeExpired() {
@@ -1475,6 +1892,9 @@ if (_urlTab && document.getElementById('tab-' + _urlTab)) {
 <?php if ($isAdmin): ?>
 loadUsers();
 loadTmdbStatus();
+refreshAiScanBtn();
+loadActiveStreams();
+setInterval(loadActiveStreams, 10000);
 <?php endif; ?>
 initAccordion('activite-recente', false);
 initAccordion('evenements-systeme', false);

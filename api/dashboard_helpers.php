@@ -230,6 +230,79 @@ function detect_block_device(string $path, string $mountsPath = '/proc/mounts'):
 }
 
 /**
+ * Derive a short human label from a block device name prefix.
+ * Returns 'RAID', 'NVMe', 'HDD', 'VPS', 'Docker', or 'Disque'.
+ */
+function label_from_device(string $devName): string
+{
+    if (preg_match('/^md\d/',    $devName)) return 'RAID';
+    if (preg_match('/^nvme/',    $devName)) return 'NVMe';
+    if (preg_match('/^sd[a-z]/', $devName)) return 'HDD';
+    if (preg_match('/^vd[a-z]/', $devName)) return 'VPS';
+    if ($devName === 'overlay' || $devName === 'overlay2') return 'Docker';
+    if ($devName === 'tmpfs')                               return 'tmpfs';
+    return 'Disque';
+}
+
+/**
+ * Guess a short human label for a filesystem path based on its backing device.
+ * Returns 'RAID', 'NVMe', 'HDD', 'VPS', 'Docker', or 'Disque'.
+ */
+function guess_volume_label(string $path, string $mountsPath = '/proc/mounts'): string
+{
+    return label_from_device(detect_block_device($path, $mountsPath)['prefix']);
+}
+
+/**
+ * Auto-detect unique storage volumes from configured paths.
+ * Deduplicates by device id (stat dev) so the same filesystem appears only once.
+ *
+ * Candidate paths (in order): BASE_PATH, MEDIA_ROOT, NVME_PATH, dirname(DB_PATH).
+ *
+ * Returns each volume with space stats plus internal fields _block_prefix/_raid_disks
+ * (prefixed with _ to signal they are stripped before JSON output by the caller).
+ *
+ * @param string $mountsPath Injectable for tests
+ * @return array<int, array{label: string, total_gb: float, used_gb: float, free_gb: float, _block_prefix: string, _raid_disks: int}>
+ */
+function detect_storage_volumes(string $mountsPath = '/proc/mounts'): array
+{
+    $candidates = [];
+    if (defined('BASE_PATH')  && BASE_PATH  !== '')  $candidates[] = BASE_PATH;
+    if (defined('MEDIA_ROOT') && MEDIA_ROOT !== '' && is_dir(MEDIA_ROOT)) $candidates[] = MEDIA_ROOT;
+    if (defined('NVME_PATH')  && NVME_PATH  !== '' && is_dir(NVME_PATH))  $candidates[] = NVME_PATH;
+    if (defined('DB_PATH')    && DB_PATH    !== '')  $candidates[] = dirname(DB_PATH);
+
+    $seen    = []; // device-id → true
+    $volumes = [];
+    foreach ($candidates as $path) {
+        $real = @realpath($path);
+        if ($real === false || !is_dir($real)) continue;
+        $st = @stat($real);
+        if ($st === false) continue;
+        $dev = $st['dev'];
+        if (isset($seen[$dev])) continue;
+        $seen[$dev] = true;
+
+        $total     = (float)(@disk_total_space($real) ?: 0);
+        $free      = (float)(@disk_free_space($real)  ?: 0);
+        if ($total <= 0.0) continue;
+
+        $blockInfo = detect_block_device($real, $mountsPath);
+
+        $volumes[] = [
+            'label'          => label_from_device($blockInfo['prefix']),
+            'total_gb'       => round($total           / 1073741824, 1),
+            'used_gb'        => round(($total - $free) / 1073741824, 1),
+            'free_gb'        => round($free            / 1073741824, 1),
+            '_block_prefix'  => $blockInfo['prefix'],
+            '_raid_disks'    => $blockInfo['raid_disks'],
+        ];
+    }
+    return $volumes;
+}
+
+/**
  * Parse /proc/diskstats for the first device whose name starts with $prefix.
  * Returns the split fields array or null.
  * @return array<int, string>|null

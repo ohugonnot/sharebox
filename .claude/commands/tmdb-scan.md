@@ -35,6 +35,11 @@ These rules are deterministic — apply them first, no ambiguity:
 - The detection is based on content, not folder name keywords — a folder named anything can qualify.
 - **Only update the parent folder's own row** — never touch child entries. Use `WHERE path = ?` with the exact parent path, never `LIKE '%parent%'` which would cascade to all children and overwrite their individual posters.
 
+**Flat containers (direct video files, no subfolders):**
+- A folder whose children are all video files (not subfolders) pointing to distinct titled works within the same franchise → do NOT treat them as a block. Each file is a separate TMDB entry and must be searched individually.
+- The parent folder can use a representative/collection poster (verified=70–80), but child entries must each be resolved individually — do not inherit the parent's tmdb_id.
+- This applies regardless of how the folder is named: a folder called "Films 1 to N", "Complete Pack", or anything else that contains numbered or titled video files → individual matches required.
+
 **Use parent context instead of standalone search:**
 - If folder name is a bare season/episode code (`S01`, `S02`, `Saison 3`, `Season 4`, `E001`, etc.) with no other title → do NOT search TMDB with that code. Instead:
   - If parent folder is already matched in `folder_posters` → inherit parent's `tmdb_id`, then try `GET /tv/{tmdb_id}/season/{N}` for a season-specific poster; fall back to series poster
@@ -63,7 +68,7 @@ A lock file with a dead PID is stale — proceed immediately. Only wait if PID i
 ### Phase 1: Match pending entries
 
 1. **Read config** — `cd /var/www/sharebox && php -r 'require "config.php"; ...'` to get DB_PATH and TMDB_API_KEY
-2. **Query pending** — `poster_url IS NULL` or `verified = -1` (recheck requests). Ne pas filtrer sur `match_attempts` — le skill doit traiter tout ce qui n'a pas de poster, quelle que soit la valeur de `match_attempts`.
+2. **Query pending** — `(poster_url IS NULL AND ia_checked = 0)` or `verified = -1` (recheck requests). Ne pas filtrer sur `match_attempts` — le skill doit traiter tout ce qui n'a pas de poster, quelle que soit la valeur de `match_attempts`. `verified = -1` ignore `ia_checked` (reset explicite par l'user).
 3. **Apply decision rules above** — skip or inherit before searching
 4. **Extract title** from remaining entries:
    - Strip release tags: `MULTi`, `1080p`, `BluRay`, `x264`, `x265`, `WEB`, `HEVC`, `HDR`, `REMASTERED`, `VOSTFR`, `VFF`, `iNTEGRALE`, group names after `-`
@@ -92,7 +97,7 @@ Before processing the normal queue, query entries where `folder_type='movies'` A
 - If a matching movie or collection exists → update `tmdb_type='movie'`, new poster, appropriate confidence
 - If no movie match but the content is clearly compilations/films of a TV universe → use a TMDB collection if it exists, else keep `tmdb_type='movie'` with the best available poster
 
-Query ALL entries where `(verified < 90 OR verified IS NULL OR verified = 0)` and `poster_url IS NOT NULL AND poster_url != '__none__'`.
+Query ALL entries where `(verified < 90 OR verified IS NULL OR verified = 0) AND ia_checked = 0` and `poster_url IS NOT NULL AND poster_url != '__none__'`. Les entrées avec `ia_checked = 1` sont ignorées sauf si `verified = -1` (reset explicite user).
 
 > The PHP worker sets `verified=60` (raw match) or `verified=70` (bulk auto-verify). All provisional — skill has final authority and sets ≥90%.
 
@@ -109,6 +114,7 @@ Query ALL entries where `(verified < 90 OR verified IS NULL OR verified = 0)` an
 - Matched TMDB entry is a sequel/spin-off of the obvious title → search explicitly for original, compare episode counts
 - **TMDB models sequel as Season N of original series → NOT a false positive, keep tmdb_id, fetch season-specific poster.** Before re-searching, always check the season list of the matched entry (`GET /tv/{tmdb_id}`) — if the sequel title appears as a season name, it's correct.
 - Episode count fits original series (not sequel) → fix to original
+- **Many sibling entries share the same tmdb_id pointing to a collection/saga/anthology** → this is a worker fallback, not a real individual match. Signal: multiple files in the same directory all have the same tmdb_id, and that entry's title contains words like "Saga", "Collection", "Intégrale", "Complete", or is clearly a franchise-level aggregate rather than a specific work. Action: re-search each file individually by its own filename title. The shared collection poster can be kept for the parent directory, but each child needs its own lookup.
 
 **After verification:**
 - Correct match → set **95%**
@@ -175,14 +181,23 @@ $row = $db->query("SELECT path FROM folder_posters WHERE path LIKE '%Disney%Int�
 // use $row['path'] for the exact UPDATE
 ```
 
+**When processing multiple entries from the same parent directory in batch**: never reconstruct paths by string concatenation (`$parentDir . "/" . $filename`). Filenames can contain apostrophes, accents, brackets, and other characters that break shell escaping inside `-r` scripts. Instead, retrieve all matching paths from the DB upfront, then iterate over the returned `path` values:
+```php
+$rows = $db->query("SELECT path FROM folder_posters WHERE path LIKE '%/ParentDir/%'")->fetchAll();
+foreach ($rows as $row) {
+    // use $row['path'] directly — exact bytes from the DB, no reconstruction
+    $stmt->execute([$poster, $tmdbId, $title, $row['path']]);
+}
+```
+
 ### DB update patterns
 
 ```sql
 -- Match found:
-UPDATE folder_posters SET poster_url=?, tmdb_id=?, title=?, overview=?, tmdb_year=?, tmdb_type=?, verified=SCORE, updated_at=datetime('now') WHERE path=?
+UPDATE folder_posters SET poster_url=?, tmdb_id=?, title=?, overview=?, tmdb_year=?, tmdb_type=?, verified=SCORE, ia_checked=1, updated_at=datetime('now') WHERE path=?
 
 -- Skip (automatic — skill decision, re-examinable):
-UPDATE folder_posters SET poster_url='__none__', verified=80, updated_at=datetime('now') WHERE path=?
+UPDATE folder_posters SET poster_url='__none__', verified=80, ia_checked=1, updated_at=datetime('now') WHERE path=?
 -- Skip (human decision via UI — never touch):
 -- poster_url='__none__', verified=100  ← set only by the web interface
 
@@ -190,10 +205,13 @@ UPDATE folder_posters SET poster_url='__none__', verified=80, updated_at=datetim
 UPDATE folder_posters SET match_attempts = 1 WHERE path=?
 
 -- Fix false positive:
-UPDATE folder_posters SET poster_url=?, tmdb_id=?, title=?, overview=?, tmdb_year=?, tmdb_type=?, verified=SCORE, updated_at=datetime('now') WHERE path=?
+UPDATE folder_posters SET poster_url=?, tmdb_id=?, title=?, overview=?, tmdb_year=?, tmdb_type=?, verified=SCORE, ia_checked=1, updated_at=datetime('now') WHERE path=?
 
 -- Bulk confirm same series:
-UPDATE folder_posters SET verified=95 WHERE tmdb_id=? AND path LIKE '%/PARENTDIR/%' AND verified < 90
+UPDATE folder_posters SET verified=95, ia_checked=1 WHERE tmdb_id=? AND path LIKE '%/PARENTDIR/%' AND verified < 90
+
+-- Confirmed as-is (entry reviewed, no change needed — e.g. intentional 70% container):
+UPDATE folder_posters SET ia_checked=1, updated_at=datetime('now') WHERE path=?
 ```
 
 ### Phase 4: Detect and set folder_type
@@ -216,6 +234,7 @@ UPDATE folder_posters SET folder_type = 'movies' WHERE path = ?
   - `poster_url = '__none__'` + `verified = 80` → **automatic skip** (set by skill or worker), re-examinable if rules evolve or content changes
   - When the skill sets `__none__`, always use `verified = 80`, never 100. Only the user (via the web interface) sets 100.
 - **Never re-verify `verified >= 90`** — final. Only reprocess `verified = -1`, `verified < 90`, or `verified IS NULL`. **Exception**: `folder_type='movies'` + `tmdb_type='tv'` is a structural contradiction — always re-examine regardless of verified score.
+- **Never re-verify `ia_checked = 1`** — already confirmed by a previous AI scan. Skip unless `verified = -1` (explicit user reset). After confirming any entry (match or verification), always set `ia_checked = 1`.
 - **Poster URL format**: `https://image.tmdb.org/t/p/w300/POSTER_PATH`
 - **Rate limit**: 50ms between TMDB API calls
 

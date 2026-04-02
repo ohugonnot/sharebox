@@ -135,7 +135,9 @@ class FfmpegHelpersTest extends TestCase
     public function testBuildFfmpegInputArgsBasic(): void
     {
         $result = buildFfmpegInputArgs('/path/to/video.mkv');
-        $this->assertStringStartsWith('ffmpeg', $result);
+        $this->assertStringContainsString('ffmpeg', $result);
+        $this->assertStringContainsString('timeout 2700', $result);
+        $this->assertStringContainsString('ionice', $result);
         $this->assertStringContainsString('-thread_queue_size 512', $result);
         $this->assertStringContainsString('-fflags +genpts+discardcorrupt', $result);
         $this->assertStringContainsString("-i '/path/to/video.mkv'", $result);
@@ -167,7 +169,7 @@ class FfmpegHelpersTest extends TestCase
         $this->assertStringContainsString('-preset ultrafast', $result);
         $this->assertStringContainsString('-crf 23', $result);
         $this->assertStringContainsString('-g 25', $result);
-        $this->assertStringContainsString('-threads 4', $result);
+        $this->assertStringContainsString('-threads 10', $result);
         $this->assertStringContainsString('-c:a aac', $result);
         $this->assertStringContainsString('-ac 2', $result);
         $this->assertStringContainsString('-b:a 192k', $result);

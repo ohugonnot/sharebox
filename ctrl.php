@@ -32,6 +32,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 }
+/**
+ * CPU% moyen depuis le lancement du process (single-pass, non-bloquant).
+ * Retourne null si le PID est invalide ou illisible.
+ */
+function get_pid_cpu(int $pid): ?float
+{
+    $stat = @file_get_contents("/proc/$pid/stat");
+    $uptime_raw = @file_get_contents('/proc/uptime');
+    if ($stat === false || $uptime_raw === false) return null;
+
+    $fields  = explode(' ', $stat);
+    $utime   = (float)($fields[13] ?? 0); // jiffies user
+    $stime   = (float)($fields[14] ?? 0); // jiffies kernel
+    $start   = (float)($fields[21] ?? 0); // starttime en jiffies depuis boot
+
+    static $hz = null;
+    if ($hz === null) $hz = (int)shell_exec('getconf CLK_TCK') ?: 100;
+
+    $uptime     = (float)explode(' ', $uptime_raw)[0];
+    $age_sec    = $uptime - ($start / $hz);
+    if ($age_sec <= 0) return null;
+
+    return round((($utime + $stime) / $hz / $age_sec) * 100, 1);
+}
 
 try {
     switch ($action) {
@@ -323,6 +347,125 @@ try {
                 ON CONFLICT(user, path) DO UPDATE SET watched_at = datetime('now'), duration_sec = :d
             ")->execute([':u' => $currentUser, ':p' => $path, ':d' => $duration]);
             echo json_encode(['ok' => true]);
+            break;
+
+        /**
+         * ACTIVE_STREAMS — Liste les streams actifs (admin only)
+         * Lit les fichiers /tmp/sharebox_stream_*.json écrits par download.php
+         */
+        case 'active_streams':
+            if (($_SESSION['sharebox_role'] ?? '') !== 'admin') {
+                http_response_code(403);
+                echo json_encode(['error' => 'Réservé aux admins']);
+                exit;
+            }
+            // Libère le verrou de session avant usleep() — sinon toutes les requêtes
+            // PHP du navigateur sont bloquées pendant la mesure CPU (500ms).
+            session_write_close();
+
+            $streams = [];
+            $now = time();
+            $db    = get_db();
+            $files = glob('/tmp/sharebox_stream_*.json') ?: [];
+
+            foreach ($files as $file) {
+                $raw = @file_get_contents($file);
+                if ($raw === false) continue;
+                $data = json_decode($raw, true);
+                if (!is_array($data)) continue;
+
+                $lastSeen = isset($data['last_seen']) ? (int)$data['last_seen'] : 0;
+                if ($lastSeen < $now - 120) continue;
+
+                $startTime = isset($data['start_time']) ? strtotime($data['start_time']) : $now;
+                $durationSec = $now - $startTime;
+
+                $cpuPct = null;
+                if (($data['mode'] ?? '') === 'hls' && !empty($data['hls_pid_file'])) {
+                    $pidRaw = @file_get_contents($data['hls_pid_file']);
+                    if ($pidRaw !== false) {
+                        $pid = (int)trim($pidRaw);
+                        if ($pid > 0) $cpuPct = get_pid_cpu($pid);
+                    }
+                }
+
+                $path   = $data['path'] ?? '';
+                $folder = $path ? basename(dirname($path)) : null;
+
+                $user = $data['user'] ?? null;
+                if ((!$user || $user === 'anonymous') && !empty($data['token'])) {
+                    $row = $db->prepare("SELECT name FROM links WHERE token = :t");
+                    $row->execute([':t' => $data['token']]);
+                    $linkName = $row->fetchColumn();
+                    if ($linkName) $user = $linkName;
+                }
+
+                $streams[] = [
+                    'user'         => $user,
+                    'filename'     => $data['filename'] ?? null,
+                    'folder'       => $folder,
+                    'path'         => $path,
+                    'mode'         => $data['mode'] ?? null,
+                    'duration_sec' => $durationSec,
+                    'cpu_pct'      => $cpuPct,
+                ];
+            }
+
+            echo json_encode(['streams' => $streams, 'count' => count($streams)]);
+            break;
+
+        /**
+         * SEARCH — Recherche de fichiers/dossiers sur le disque entier
+         * Paramètre GET : q (termes séparés par espaces, ET logique)
+         * Retourne : tableau de résultats {name, path, type, size}
+         */
+        case 'search':
+            $q = trim($_GET['q'] ?? '');
+            if ($q === '') {
+                echo json_encode(['results' => [], 'query' => '']);
+                break;
+            }
+            if (mb_strlen($q) > 100) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Terme trop long (max 100 caractères)']);
+                exit;
+            }
+
+            $searchBase = BASE_PATH;
+            if (($_SESSION['sharebox_role'] ?? '') !== 'admin'
+                && (int)($_SESSION['sharebox_private'] ?? 0) === 1) {
+                $searchBase = BASE_PATH . ($_SESSION['sharebox_user'] ?? '') . '/';
+            }
+
+            $words = array_values(array_filter(array_map('trim', explode(' ', $q))));
+            if (count($words) > 10) $words = array_slice($words, 0, 10);
+
+            $inameArgs = implode(' ', array_map(
+                fn($w) => '-iname ' . escapeshellarg("*{$w}*"),
+                $words
+            ));
+
+            $cmd = 'timeout 10 find ' . escapeshellarg(rtrim($searchBase, '/'))
+                 . ' -mindepth 1 -maxdepth 8 ' . $inameArgs
+                 . " ! -name '.*' 2>/dev/null | head -150";
+            $output = shell_exec($cmd) ?? '';
+
+            $results = [];
+            $baseLen = strlen(rtrim($searchBase, '/')) + 1;
+            foreach (explode("\n", $output) as $line) {
+                $line = trim($line);
+                if ($line === '') continue;
+                $isDir   = is_dir($line);
+                $relPath = substr($line, $baseLen);
+                $results[] = [
+                    'name' => basename($line),
+                    'path' => $relPath,
+                    'type' => $isDir ? 'folder' : 'file',
+                    'size' => $isDir ? null : @filesize($line),
+                ];
+            }
+
+            echo json_encode(['results' => $results, 'query' => $q]);
             break;
 
         default:

@@ -51,7 +51,7 @@ foreach ($months as $m) {
     }
 }
 
-$total = $rx + $tx;
+$total = $tx; // Seedhost ne compte que l'upload (outgoing) dans le quota
 $pct   = $quota_bytes > 0 ? round($total / $quota_bytes * 100, 2) : 0;
 
 // Days remaining in month

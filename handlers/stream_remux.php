@@ -7,7 +7,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
     header('X-Accel-Buffering: no');
     header('Cache-Control: no-cache');
     header('Accept-Ranges: none');
-    $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+    $logFile = ffmpeg_log_path();
     stream_log('REMUX start | audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
     $cmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
         . $audioMap . ' -dn -c:v copy -c:a aac -ac 2 -b:a 192k'

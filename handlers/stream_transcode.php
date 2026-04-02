@@ -4,12 +4,18 @@ if ($mime && str_starts_with($mime, 'video/')) {
     set_time_limit(0);
     $quality = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
     $quality = validateQuality($quality);
+    $filterMode = isset($_GET['filter']) ? $_GET['filter'] : 'none';
+    $filterMode = validateFilterMode($filterMode);
+    // Auto-détection HDR si aucun filtre spécifié
+    if ($filterMode === 'none' && isHDRFile($db, $resolvedPath)) {
+        $filterMode = 'hdr';
+    }
     $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
     header('Content-Type: video/mp4');
     header('Content-Disposition: inline');
     header('X-Accel-Buffering: no');
     header('Cache-Control: no-cache');
-    $logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+    $logFile = ffmpeg_log_path();
     $ua = $_SERVER['HTTP_USER_AGENT'] ?? '-';
     $isSafari = str_contains($ua, 'Safari') && !str_contains($ua, 'Chrome');
     // Content-Length estimé : Safari coupe la connexion sans ça (pas de progressive download)
@@ -33,11 +39,11 @@ if ($mime && str_starts_with($mime, 'video/')) {
     }
     stream_log('CL=' . ($isSafari && $estimatedCL ? $estimatedCL : 'skip') . ' dur=' . round($probeDuration) . 's rem=' . round($remainingDuration) . 's' . ($isSafari ? ' [Safari]' : '') . ' | UA=' . substr($ua, 0, 80));
     $logLabel = $burnSub >= 0 ? 'TRANSCODE+SUB' : 'TRANSCODE';
-    stream_log($logLabel . ' start | quality=' . $quality . 'p audio=' . $audioTrack . ($burnSub >= 0 ? ' burnSub=' . $burnSub : '') . ' start=' . $startSec . ' | ' . basename($resolvedPath));
-    $fc = buildFilterGraph($quality, $audioTrack, $burnSub);
+    stream_log($logLabel . ' start | quality=' . $quality . 'p filter=' . $filterMode . ' audio=' . $audioTrack . ($burnSub >= 0 ? ' burnSub=' . $burnSub : '') . ' start=' . $startSec . ' | ' . basename($resolvedPath));
+    $fc = buildFilterGraph($quality, $audioTrack, $burnSub, $filterMode);
     $cmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
         . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
-        . buildFfmpegCodecArgs(25) . buildFmp4MuxerArgs()
+        . buildFfmpegCodecArgs(25, $filterMode === 'hdr') . buildFmp4MuxerArgs()
         . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
     [$slotFp, $queued] = acquireStreamSlot();
     if ($queued) { stream_log('TRANSCODE queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }

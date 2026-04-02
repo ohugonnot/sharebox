@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+"""
+nvme-to-raid - Migre les torrents completes "froids" du NVMe vers RAID0.
+
+Criteres de migration :
+  1. Torrent complete sur NVMe + upload moyen < COLD_THRESHOLD_KBPS sur SPEED_WINDOW_H h
+  2. (Pression) espace libre NVMe < NVME_MIN_FREE_GB → eviction par pire ratio
+     efficacite (avg_upload / size_gb) parmi les completes
+
+Migration atomique :
+  pause → rsync vers NAME.nvme-tmp → d.directory.set RAID0 → d.save_full_session
+  → supprime symlink → rename .nvme-tmp → NAME → resume → rm source NVMe
+
+Le symlink RAID_DOWNLOADS/NAME → NVME est cree par rtorrent-check-space a l'ajout.
+Apres migration il est remplace par le vrai dossier. Les paths folder_posters (TMDB)
+sont mis a jour via sudo www-data php pour rester coherents (realpath change apres move).
+"""
+
+import sys
+import os
+import json
+import time
+import shutil
+import subprocess
+from pathlib import Path
+from datetime import datetime
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from rtorrent_scgi import download_list, multicall, scgi_simple
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+def load_conf():
+    path = Path(__file__).parent / 'seedbox.conf'
+    conf = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                k, v = line.split('=', 1)
+                conf[k.strip()] = v.strip()
+    return conf
+
+# Globals initialisés par main() - déclarés ici pour que les fonctions y accèdent
+NVME_DOWNLOADS     = None
+RAID_DOWNLOADS     = None
+NVME_MIN_FREE_GB   = 0
+SPEED_WINDOW_H     = 0
+COLD_THRESHOLD_BPS = 0
+MIN_HISTORY_H      = 0
+STATE_FILE         = ''
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+def log(msg):
+    print(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}', flush=True)
+
+# ── Etat vitesses ─────────────────────────────────────────────────────────────
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_state(state):
+    tmp = STATE_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(state, f)
+    os.replace(tmp, STATE_FILE)
+
+def update_sample(state, hash_, up_total, now):
+    cutoff = now - SPEED_WINDOW_H * 3600
+    entry = state.get(hash_, {'samples': []})
+    entry['samples'] = [s for s in entry['samples'] if s['ts'] >= cutoff]
+    entry['samples'].append({'ts': now, 'up': up_total})
+    state[hash_] = entry
+
+def avg_speed_bps(state, hash_):
+    """Vitesse moyenne en octets/s. None si historique < MIN_HISTORY_H."""
+    samples = state.get(hash_, {}).get('samples', [])
+    if len(samples) < 2:
+        return None
+    oldest = min(samples, key=lambda s: s['ts'])
+    newest = max(samples, key=lambda s: s['ts'])
+    span = newest['ts'] - oldest['ts']
+    if span < MIN_HISTORY_H * 3600:
+        return None
+    delta = newest['up'] - oldest['up']
+    if delta < 0:
+        return None  # up.total remis a zero (redemarrage rtorrent)
+    return delta / span
+
+def purge_state(state, active_hashes):
+    for h in list(state.keys()):
+        if h not in active_hashes:
+            del state[h]
+
+# ── Espace disque ─────────────────────────────────────────────────────────────
+
+def nvme_free_gb():
+    return shutil.disk_usage(NVME_DOWNLOADS).free / (1024 ** 3)
+
+# ── Symlinks ──────────────────────────────────────────────────────────────────
+
+def ensure_symlink(name):
+    """
+    Cree le symlink RAID_DOWNLOADS/name → NVME_DOWNLOADS/name s'il n'existe pas.
+    Appele en debut de run pour les torrents NVMe sans symlink (cas de reprise).
+    """
+    symlink = Path(RAID_DOWNLOADS) / name
+    if not symlink.exists() and not symlink.is_symlink():
+        target = Path(NVME_DOWNLOADS) / name
+        Path(RAID_DOWNLOADS).mkdir(parents=True, exist_ok=True)
+        symlink.symlink_to(target)
+        log(f'  symlink cree (reprise) : {name}')
+
+# ── Migration ─────────────────────────────────────────────────────────────────
+
+def migrate(t):
+    """
+    Deplace un torrent du NVMe vers RAID0.
+    Remplace le symlink RAID_DOWNLOADS/name par le vrai dossier.
+    Retourne True si succes.
+    """
+    name     = t['name']
+    hash_    = t['hash']
+    is_multi = t['is_multi']
+    was_open = t['is_open']   # is_open=1 : torrent ouvert (seed ou pret a seeder)
+
+    src      = Path(NVME_DOWNLOADS) / name
+    dst_tmp  = Path(RAID_DOWNLOADS) / (name + '.nvme-tmp')
+    dst_final = Path(RAID_DOWNLOADS) / name  # actuellement un symlink → NVMe
+
+    if not src.exists():
+        log(f'  WARN source introuvable : {src}')
+        return False
+
+    # Nettoyer un eventuel tmp residuel d'un run precedent
+    if dst_tmp.exists():
+        shutil.rmtree(dst_tmp) if dst_tmp.is_dir() else dst_tmp.unlink()
+
+    Path(RAID_DOWNLOADS).mkdir(parents=True, exist_ok=True)
+
+    log(f'  pause  {name[:70]}')
+    scgi_simple('d.pause', hash_)
+    time.sleep(2)
+
+    try:
+        # 1. rsync vers tmp (pas vers dst_final qui est encore le symlink NVMe)
+        if is_multi:
+            cmd = ['rsync', '-a', '--delete', str(src) + '/', str(dst_tmp) + '/']
+        else:
+            cmd = ['rsync', '-a', str(src), str(dst_tmp)]
+
+        log(f'  rsync  {"multi" if is_multi else "single"} → {dst_tmp.name}')
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f'rsync exit {result.returncode}: {result.stderr.strip()}')
+
+        # 2. Mettre a jour rtorrent pour pointer vers RAID0
+        scgi_simple('d.directory.set', hash_, str(Path(RAID_DOWNLOADS)))
+        scgi_simple('d.save_full_session', hash_)
+
+        # 3. Supprimer le symlink et renommer le tmp → chemin final (atomique)
+        if dst_final.is_symlink():
+            dst_final.unlink()
+        dst_tmp.rename(dst_final)
+
+        # 4. Supprimer la source NVMe
+        if is_multi:
+            shutil.rmtree(src)
+        else:
+            src.unlink()
+
+        size_gb = t['size_bytes'] / (1024 ** 3)
+        log(f'  OK     {name[:70]} ({size_gb:.1f} GB)')
+
+        # Mettre à jour les chemins folder_posters dans la DB ShareBox
+        # (les entrées TMDB utilisent realpath → /mnt/nvme-seedbox/... pendant le symlink)
+        nvme_path = str(src)        # /mnt/nvme-seedbox/.../Name
+        raid_path = str(dst_final)  # /home/storage/.../Name
+        php = (
+            'require "/var/www/sharebox/db.php"; '
+            '$db=get_db(); '
+            '$old=' + repr(nvme_path) + '; $new=' + repr(raid_path) + '; '
+            '$n=$db->prepare("UPDATE folder_posters SET path = :new || SUBSTR(path, LENGTH(:old)+1) '
+            'WHERE path = :old OR path LIKE :pfx")'
+            '->execute([":old"=>$old,":new"=>$new,":pfx"=>$old."/%"]); '
+            'echo $db->query("SELECT changes()")->fetchColumn();'
+        )
+        try:
+            r = subprocess.run(['sudo', '-u', 'www-data', 'php', '-r', php],
+                               capture_output=True, text=True, timeout=10)
+            changed = r.stdout.strip()
+            if r.returncode == 0 and changed:
+                log(f'  DB     folder_posters mis a jour : {changed} entrees')
+            elif r.returncode != 0:
+                log(f'  WARN   DB update echec : {r.stderr.strip()[:100]}')
+        except Exception as e:
+            log(f'  WARN   DB update exception : {e}')
+
+        return True
+
+    except Exception as e:
+        log(f'  ERREUR {name[:70]}: {e}')
+        # Nettoyage du tmp si echec
+        if dst_tmp.exists():
+            shutil.rmtree(dst_tmp) if dst_tmp.is_dir() else dst_tmp.unlink()
+        return False
+
+    finally:
+        if was_open:
+            # d.resume sort le torrent de l'etat pause mis par d.pause
+            scgi_simple('d.resume', hash_)
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    global NVME_DOWNLOADS, RAID_DOWNLOADS, NVME_MIN_FREE_GB
+    global SPEED_WINDOW_H, COLD_THRESHOLD_BPS, MIN_HISTORY_H, STATE_FILE
+
+    conf = load_conf()
+    NVME_DOWNLOADS     = conf['NVME_DOWNLOADS']
+    RAID_DOWNLOADS     = conf['RAID_DOWNLOADS']
+    NVME_MIN_FREE_GB   = int(conf['NVME_MIN_FREE_GB'])
+    SPEED_WINDOW_H     = int(conf['SPEED_WINDOW_H'])
+    COLD_THRESHOLD_BPS = int(conf['COLD_THRESHOLD_KBPS']) * 1024
+    MIN_HISTORY_H      = int(conf['SPEED_MIN_HISTORY_H'])
+    STATE_FILE         = conf['NVME_SPEED_STATE']
+
+    hashes = download_list()
+    if not hashes:
+        log('Aucun torrent')
+        sys.exit(0)
+
+    now   = int(time.time())
+    state = load_state()
+
+    FIELDS = (
+        'd.name',
+        'd.complete',
+        'd.directory',
+        'd.up.total',
+        'd.is_open',
+        'd.is_multi_file',
+        'd.size_bytes',
+        'd.timestamp.finished',
+    )
+    calls = [{'method': m, 'params': [h]} for h in hashes for m in FIELDS]
+    vals  = multicall(calls)
+    N     = len(FIELDS)
+
+    torrents = []
+    for i, h in enumerate(hashes):
+        base = i * N
+        if base + N > len(vals):
+            continue
+        torrents.append({
+            'hash':        h,
+            'name':        vals[base]     or '',
+            'complete':    int(vals[base+1] or 0),
+            'directory':   vals[base+2]   or '',
+            'up_total':    int(vals[base+3] or 0),
+            'is_open':     int(vals[base+4] or 0),
+            'is_multi':    int(vals[base+5] or 0),
+            'size_bytes':  int(vals[base+6] or 0),
+            'ts_finished': int(vals[base+7] or 0),
+        })
+
+    # Completes sur NVMe
+    nvme_done = [t for t in torrents
+                 if t['complete'] and t['directory'].startswith(NVME_DOWNLOADS)]
+
+    # Mise a jour samples de vitesse + assurer symlinks
+    for t in torrents:
+        if t['complete'] and t['directory'].startswith(NVME_DOWNLOADS):
+            update_sample(state, t['hash'], t['up_total'], now)
+            if t['name']:
+                ensure_symlink(t['name'])
+
+    purge_state(state, {t['hash'] for t in torrents})
+    save_state(state)
+
+    if not nvme_done:
+        log('Aucun torrent complete sur NVMe')
+        sys.exit(0)
+
+    log(f'{len(nvme_done)} torrent(s) complete(s) sur NVMe - libre {nvme_free_gb():.1f} GB')
+
+    migrated   = 0
+    cold_hashes = set()
+
+    # ── 1. Migration par vitesse froide ──────────────────────────────────────────
+    for t in nvme_done:
+        avg = avg_speed_bps(state, t['hash'])
+        if avg is None:
+            log(f'  skip   {t["name"][:70]} - historique insuffisant')
+            continue
+        avg_kb = avg / 1024
+        if avg < COLD_THRESHOLD_BPS:
+            log(f'migre (froid) "{t["name"][:60]}" avg={avg_kb:.0f} KB/s')
+            if migrate(t):
+                migrated += 1
+                cold_hashes.add(t['hash'])
+        else:
+            log(f'  chaud  {t["name"][:60]} avg={avg_kb:.0f} KB/s')
+
+    # ── 2. Eviction par pression espace ──────────────────────────────────────────
+    free_gb = nvme_free_gb()
+    if free_gb < NVME_MIN_FREE_GB:
+        log(f'PRESSION NVMe : {free_gb:.1f} GB libre < {NVME_MIN_FREE_GB} GB seuil')
+
+        def efficiency(t):
+            avg = avg_speed_bps(state, t['hash'])
+            if avg is None or t['size_bytes'] == 0:
+                return 0.0
+            return avg / (t['size_bytes'] / (1024 ** 3))
+
+        remaining = [t for t in nvme_done if t['hash'] not in cold_hashes]
+        remaining.sort(key=efficiency)  # pire efficacite en premier
+
+        for t in remaining:
+            free_gb = nvme_free_gb()
+            if free_gb >= NVME_MIN_FREE_GB:
+                break
+            eff = efficiency(t)
+            log(f'migre (pression {free_gb:.1f} GB) "{t["name"][:55]}" eff={eff:.1f} B/s/GB')
+            if migrate(t):
+                migrated += 1
+
+    log(f'DONE - {migrated} torrent(s) migre(s) | NVMe libre {nvme_free_gb():.1f} GB')
+
+
+if __name__ == '__main__':
+    main()

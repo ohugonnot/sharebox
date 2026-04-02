@@ -18,7 +18,7 @@ if ($row = $cached->fetch()) {
 // Pas de cache — extraction complète (le pré-cache background du probe n'a pas encore fini)
 // Le JS affichera "Chargement sous-titres..." en attendant
 stream_log('SUBTITLE extract | track=' . $trackIdx . ' | ' . basename($resolvedPath));
-$logFile = defined('STREAM_LOG') && STREAM_LOG ? STREAM_LOG : '/dev/null';
+$logFile = ffmpeg_log_path();
 ob_start();
 $cmd = 'timeout ' . SUBTITLE_EXTRACT_TIMEOUT . ' ffmpeg -i ' . escapeshellarg($resolvedPath)
     . ' -map 0:s:' . $trackIdx . ' -f webvtt pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
