@@ -22,10 +22,14 @@ const AUTH_FAIL_SLEEP         = 1;              // sleep seconds per failed atte
 // FFmpeg encoding defaults
 const FFMPEG_CRF              = 23;             // x264 quality (lower = better, 18-28 typical)
 const FFMPEG_PRESET           = 'ultrafast';    // x264 preset (ultrafast→veryslow)
-const FFMPEG_THREADS          = 4;              // x264 thread count (half your cores for 2 concurrent)
+const FFMPEG_THREADS          = 10;             // x264 thread count (ajusté pour 48 cores, scheduler répartit auto)
 const FFMPEG_AUDIO_BITRATE    = '192k';         // AAC audio bitrate
 const FFMPEG_AUDIO_CHANNELS   = 2;              // stereo downmix
 const FFMPEG_GOP_SIZE_DEFAULT = 25;             // keyframe interval (frames)
+
+// FFmpeg HDR tonemapping — CPU-intensif, nécessite plus de threads
+const FFMPEG_HDR_THREADS      = 30;             // tonemapping float32 très gourmand (48 cores disponibles)
+const FFMPEG_HDR_CRF          = 26;             // CRF plus élevé = plus rapide (trade-off qualité/perf)
 
 /**
  * Acquire a stream slot using flock — limits concurrent ffmpeg processes.
@@ -266,10 +270,42 @@ function normalize_path(string $path): string {
 function is_path_within(string|false $resolvedPath, string $basePath): bool {
     if ($resolvedPath === false) return false;
     $base = rtrim($basePath, '/');
-    return $resolvedPath === $base || str_starts_with($resolvedPath, $base . '/');
+    if ($resolvedPath === $base || str_starts_with($resolvedPath, $base . '/')) {
+        return true;
+    }
+    // $basePath peut etre un symlink : verifier aussi contre sa cible reelle
+    $realBase = realpath($basePath);
+    if ($realBase !== false) {
+        $realBase = rtrim($realBase, '/');
+        if ($resolvedPath === $realBase || str_starts_with($resolvedPath, $realBase . '/')) {
+            return true;
+        }
+    }
+    // Chemin NVMe : les symlinks dans BASE_PATH peuvent pointer vers NVME_PATH
+    if (defined('NVME_PATH')) {
+        $nvme = rtrim(NVME_PATH, '/');
+        if ($resolvedPath === $nvme || str_starts_with($resolvedPath, $nvme . '/')) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // ── Logging ─────────────────────────────────────────────────────────────────
+
+/**
+ * Retourne le chemin vers ffmpeg_errors.log et rotate si nécessaire (5 MB max, 3 fichiers).
+ * À appeler juste avant chaque invocation ffmpeg pour éviter que stream.log soit pollué.
+ */
+function ffmpeg_log_path(): string {
+    if (!defined('STREAM_LOG') || !STREAM_LOG) return '/dev/null';
+    $logFile = dirname(STREAM_LOG) . '/ffmpeg_errors.log';
+    if (@filesize($logFile) > LOG_ROTATION_SIZE) {
+        for ($r = LOG_ROTATION_COUNT; $r > 1; $r--) @rename($logFile . '.' . ($r - 1), $logFile . '.' . $r);
+        @rename($logFile, $logFile . '.1');
+    }
+    return $logFile;
+}
 
 /**
  * Log avec rotation (5 MB max, 3 fichiers). Channels : stream, poster, app.
@@ -415,21 +451,59 @@ function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx,
 // ── FFmpeg helpers ──────────────────────────────────────────────────────────
 
 const ALLOWED_QUALITIES = [480, 576, 720, 1080];
+const ALLOWED_FILTER_MODES = ['none', 'anime', 'smooth', 'sharp', 'hdr'];
 
 function validateQuality(int $quality): int {
     return in_array($quality, ALLOWED_QUALITIES, true) ? $quality : 720;
 }
 
+function validateFilterMode(string $mode): string {
+    return in_array($mode, ALLOWED_FILTER_MODES, true) ? $mode : 'none';
+}
+
+/**
+ * Détecte automatiquement si un fichier nécessite le filtre HDR→SDR.
+ * @param PDO $db Database connection
+ * @param string $path Chemin absolu du fichier
+ * @return bool True si le fichier est en HDR (smpte2084, arib-std-b67, smpte428)
+ */
+function isHDRFile(PDO $db, string $path): bool {
+    try {
+        $stmt = $db->prepare("SELECT result FROM probe_cache WHERE path = :p");
+        $stmt->execute([':p' => $path]);
+        if ($row = $stmt->fetch()) {
+            $data = json_decode($row['result'], true);
+            $ct = $data['colorTransfer'] ?? '';
+            return in_array($ct, ['smpte2084', 'arib-std-b67', 'smpte428'], true);
+        }
+    } catch (PDOException $e) { /* ignore */ }
+    return false;
+}
+
 /**
  * Construit le filter_complex ffmpeg pour transcode (avec ou sans burn-in sous-titre).
  */
-function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1): string {
+function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1, string $filterMode = 'none'): string {
+    // Construit la chaîne de filtres vidéo selon le mode
+    $scaleFilter = 'scale=-2:\'min(' . $quality . ',ih)\':flags=lanczos';
+    // HDR : downscale dans le premier zscale AVANT conversion float32 (2.6x plus rapide)
+    // Convertit quality (hauteur) en largeur 16:9 pour réduire les pixels avant le pipeline float32
+    $hdrWidth = (int)(ceil($quality * 16 / 9 / 2) * 2); // arrondi pair
+    $videoFilters = match($filterMode) {
+        'hdr'    => 'zscale=w=\'min(' . $hdrWidth . '\\,iw)\':h=-2:t=linear:npl=100:p=bt709,format=gbrpf32le,tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv',
+        'anime'  => $scaleFilter . ',gradfun=1.5:16,unsharp=5:5:0.8:5:5:0.0,hqdn3d=1.5:1.2:3:2.5',
+        'smooth' => $scaleFilter . ',hqdn3d=4:3:6:4.5',
+        'sharp'  => $scaleFilter . ',unsharp=5:5:1.0:5:5:0.4',
+        default  => $scaleFilter,
+    };
+    $videoFilters .= ',format=yuv420p';
+
     if ($burnSub >= 0) {
         return '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];'
-            . '[ov]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];'
+            . '[ov]' . $videoFilters . '[v];'
             . '[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
     }
-    return '"[0:v:0]scale=-2:\'min(' . $quality . ',ih)\',format=yuv420p[v];'
+    return '"[0:v:0]' . $videoFilters . '[v];'
         . '[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
 }
 
@@ -437,15 +511,18 @@ function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1): str
  * Construit les arguments d'entrée ffmpeg communs.
  */
 function buildFfmpegInputArgs(string $filePath, string $seekBefore = ''): string {
-    return 'ffmpeg' . $seekBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
+    return 'timeout 2700 ionice -c 2 -n 0 ffmpeg' . $seekBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
 }
 
 /**
  * Construit les arguments encodeur x264+AAC communs.
  */
-function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT): string {
-    return ' -c:v libx264 -preset ' . FFMPEG_PRESET . ' -crf ' . FFMPEG_CRF
-        . ' -g ' . $gopSize . ' -threads ' . FFMPEG_THREADS
+function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHDR = false): string {
+    $threads = $isHDR ? FFMPEG_HDR_THREADS : FFMPEG_THREADS;
+    $crf = $isHDR ? FFMPEG_HDR_CRF : FFMPEG_CRF;
+    return ' -c:v libx264 -preset ' . FFMPEG_PRESET . ' -crf ' . $crf
+        . ' -g ' . $gopSize . ' -threads ' . $threads
+        . ' -colorspace bt709 -color_primaries bt709 -color_trc bt709'
         . ' -c:a aac -ac ' . FFMPEG_AUDIO_CHANNELS . ' -b:a ' . FFMPEG_AUDIO_BITRATE . ' -shortest';
 }
 

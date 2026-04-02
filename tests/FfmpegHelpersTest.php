@@ -93,6 +93,43 @@ class FfmpegHelpersTest extends TestCase
         $this->assertStringNotContainsString('overlay', $result);
     }
 
+    public function testBuildFilterGraphHdrMode(): void
+    {
+        $result = buildFilterGraph(1080, 0, -1, 'hdr');
+        // Downscale avant le pipeline float32 (width-based, 1080 → 1920)
+        $this->assertStringContainsString('zscale=w=', $result);
+        $this->assertStringContainsString('min(1920', $result);
+        $this->assertStringContainsString('t=linear:npl=100:p=bt709', $result);
+        $this->assertStringContainsString('format=gbrpf32le', $result);
+        $this->assertStringContainsString('tonemap=mobius:desat=0', $result);
+        $this->assertStringContainsString('zscale=t=bt709:m=bt709:r=tv', $result);
+        $this->assertStringContainsString('format=yuv420p', $result);
+        // Pas de scale lanczos séparé (intégré dans zscale)
+        $this->assertStringNotContainsString('lanczos', $result);
+    }
+
+    public function testBuildFilterGraphHdrWidthMapping(): void
+    {
+        // Vérifie que quality (hauteur) → largeur 16:9 correcte
+        $r720 = buildFilterGraph(720, 0, -1, 'hdr');
+        $this->assertStringContainsString('min(1280', $r720);
+
+        $r480 = buildFilterGraph(480, 0, -1, 'hdr');
+        $this->assertStringContainsString('min(854', $r480);
+
+        $r2160 = buildFilterGraph(2160, 0, -1, 'hdr');
+        $this->assertStringContainsString('min(3840', $r2160);
+    }
+
+    public function testBuildFilterGraphHdrWithBurnSub(): void
+    {
+        $result = buildFilterGraph(1080, 0, 0, 'hdr');
+        // Sous-titres PGS : scale2ref + overlay AVANT le pipeline HDR
+        $this->assertStringContainsString('scale2ref', $result);
+        $this->assertStringContainsString('overlay', $result);
+        $this->assertStringContainsString('tonemap=mobius', $result);
+    }
+
     // ── buildFfmpegInputArgs ────────────────────────────────────────────
 
     public function testBuildFfmpegInputArgsBasic(): void
