@@ -10,6 +10,13 @@ if (!defined('RTORRENT_SOCK')) {
     define('RTORRENT_SOCK', '');
 }
 
+function get_user_rtorrent_sock(): string {
+    $user = get_current_user_name();
+    if ($user === null) return RTORRENT_SOCK;
+    $sock = '/var/run/rtorrent/' . $user . '.sock';
+    return file_exists($sock) ? $sock : '';
+}
+
 /**
  * Appel XML-RPC vers rtorrent via socket Unix SCGI.
  * Encode les paramètres en tant que strings (suffisant pour d.multicall2).
@@ -161,5 +168,5 @@ function get_torrents_from_rtorrent(string $sockPath = RTORRENT_SOCK): array
 if (php_sapi_name() !== 'cli') {
     header('Content-Type: application/json');
     header('Cache-Control: no-store');
-    echo json_encode(get_torrents_from_rtorrent());
+    echo json_encode(get_torrents_from_rtorrent(get_user_rtorrent_sock()));
 }
