@@ -130,14 +130,39 @@ class FfmpegHelpersTest extends TestCase
         $this->assertStringContainsString('tonemap=mobius', $result);
     }
 
+    /** @dataProvider filterModeProvider */
+    public function testBuildFilterGraphAllModes(string $mode, string $mustContain, string $mustNotContain = ''): void
+    {
+        $result = buildFilterGraph(720, 0, -1, $mode);
+        $this->assertStringContainsString($mustContain, $result);
+        $this->assertStringContainsString('format=yuv420p', $result);
+        $this->assertStringContainsString('[0:v:0]', $result);
+        if ($mustNotContain) {
+            $this->assertStringNotContainsString($mustNotContain, $result);
+        }
+    }
+
+    public static function filterModeProvider(): array
+    {
+        return [
+            'detail'      => ['detail',      'cas=0.5'],
+            'night'       => ['night',       'eq=gamma=1.4'],
+            'deinterlace' => ['deinterlace', 'bwdif=mode=send_frame'],
+            'anime'       => ['anime',       'deband='],
+            'none'        => ['none',        'lanczos', 'tonemap'],
+        ];
+    }
+
     // ── buildFfmpegInputArgs ────────────────────────────────────────────
 
     public function testBuildFfmpegInputArgsBasic(): void
     {
         $result = buildFfmpegInputArgs('/path/to/video.mkv');
         $this->assertStringContainsString('ffmpeg', $result);
-        $this->assertStringContainsString('timeout 2700', $result);
+        $this->assertStringContainsString('timeout 14400', $result);
         $this->assertStringContainsString('ionice', $result);
+        $this->assertStringContainsString('nice -n 5', $result);
+        $this->assertStringContainsString('-nostdin', $result);
         $this->assertStringContainsString('-thread_queue_size 512', $result);
         $this->assertStringContainsString('-fflags +genpts+discardcorrupt', $result);
         $this->assertStringContainsString("-i '/path/to/video.mkv'", $result);
@@ -167,6 +192,8 @@ class FfmpegHelpersTest extends TestCase
         $result = buildFfmpegCodecArgs();
         $this->assertStringContainsString('-c:v libx264', $result);
         $this->assertStringContainsString('-preset ultrafast', $result);
+        $this->assertStringContainsString('-tune zerolatency', $result);
+        $this->assertStringContainsString('-profile:v main -level 4.1', $result);
         $this->assertStringContainsString('-crf 23', $result);
         $this->assertStringContainsString('-g 25', $result);
         $this->assertStringContainsString('-threads 10', $result);
@@ -190,7 +217,7 @@ class FfmpegHelpersTest extends TestCase
         $result = buildFmp4MuxerArgs();
         $this->assertStringContainsString('-avoid_negative_ts make_zero', $result);
         $this->assertStringContainsString('-start_at_zero', $result);
-        $this->assertStringContainsString('-max_muxing_queue_size 1024', $result);
+        $this->assertStringContainsString('-max_muxing_queue_size 4096', $result);
         $this->assertStringContainsString('-min_frag_duration 300000', $result);
         $this->assertStringContainsString('-movflags frag_keyframe+empty_moov+default_base_moof', $result);
     }

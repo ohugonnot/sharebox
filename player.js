@@ -677,7 +677,7 @@ function plog(tag, msg, data) {
                 // Sélecteur de filtres
                 var lbl4 = document.createElement('label'); lbl4.textContent = 'Filtre :';
                 var sel4 = document.createElement('select'); sel4.className = 'track-select';
-                var filters = [{v:'none',t:'Aucun'},{v:'hdr',t:'HDR→SDR'},{v:'anime',t:'Anime'},{v:'smooth',t:'Lissage'},{v:'sharp',t:'Netteté'}];
+                var filters = [{v:'none',t:'Aucun'},{v:'hdr',t:'HDR→SDR'},{v:'anime',t:'Anime'},{v:'detail',t:'Détail'},{v:'night',t:'Nuit'},{v:'deinterlace',t:'Désentrelacé'}];
                 filters.forEach(function(f) { var o = document.createElement('option'); o.value = f.v; o.textContent = f.t; if (f.v === S.filter) o.selected = true; sel4.appendChild(o); });
                 sel4.addEventListener('change', function() {
                     S.filter = sel4.value || 'none'; S.confirmed = 'transcode';

@@ -225,7 +225,8 @@ if (is_file($resolvedPath)) {
         $hlsQuality  = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
         $hlsBurnSub  = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
         $hlsKey      = md5($resolvedPath . '|' . $hlsQuality . '|' . $audioTrack . '|' . $hlsBurnSub . '|' . $startSec);
-        $hlsPidFile  = sys_get_temp_dir() . '/hls_' . $hlsKey . '/ffmpeg.pid';
+        $hlsBaseDir  = (defined('STREAM_LOG') && STREAM_LOG ? dirname(STREAM_LOG) : sys_get_temp_dir()) . '/hls_cache';
+        $hlsPidFile  = $hlsBaseDir . '/hls_' . $hlsKey . '/ffmpeg.pid';
         write_stream_info([
             'user'         => $_SESSION['sharebox_user'] ?? 'anonymous',
             'filename'     => basename($resolvedPath),
