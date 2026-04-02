@@ -33,7 +33,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
         }
     } catch (PDOException $e) { /* probe cache miss — non-blocking, transcode proceeds */ }
     $remainingDuration = max(0, $probeDuration - $startSec);
-    $estimatedCL = $remainingDuration > 0 ? (int)($estimatedBps * $remainingDuration / 8 * 1.2) : 0;
+    $estimatedCL = $remainingDuration > 0 ? (int)($estimatedBps * $remainingDuration / 8 * 1.5) : 0;
     if ($estimatedCL > 0 && $isSafari) {
         header('Content-Length: ' . $estimatedCL);
     }
@@ -47,6 +47,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
         . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
     [$slotFp, $queued] = acquireStreamSlot();
     if ($queued) { stream_log('TRANSCODE queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }
+    register_shutdown_function(function() use (&$slotFp) { releaseStreamSlot($slotFp); });
     warmFileCache($resolvedPath);
     passthru($cmd);
     releaseStreamSlot($slotFp);

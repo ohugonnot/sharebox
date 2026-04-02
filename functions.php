@@ -58,9 +58,11 @@ function acquireStreamSlot(): array {
     exit;
 }
 
-function releaseStreamSlot(mixed $fp): void {
+function releaseStreamSlot(mixed &$fp): void {
+    if (!is_resource($fp)) return;
     flock($fp, LOCK_UN);
     fclose($fp);
+    $fp = null;
 }
 
 /**
@@ -451,7 +453,7 @@ function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx,
 // ── FFmpeg helpers ──────────────────────────────────────────────────────────
 
 const ALLOWED_QUALITIES = [480, 576, 720, 1080];
-const ALLOWED_FILTER_MODES = ['none', 'anime', 'smooth', 'sharp', 'hdr'];
+const ALLOWED_FILTER_MODES = ['none', 'anime', 'detail', 'night', 'deinterlace', 'hdr'];
 
 function validateQuality(int $quality): int {
     return in_array($quality, ALLOWED_QUALITIES, true) ? $quality : 720;
@@ -491,9 +493,10 @@ function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1, stri
     $hdrWidth = (int)(ceil($quality * 16 / 9 / 2) * 2); // arrondi pair
     $videoFilters = match($filterMode) {
         'hdr'    => 'zscale=w=\'min(' . $hdrWidth . '\\,iw)\':h=-2:t=linear:npl=100:p=bt709,format=gbrpf32le,tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv',
-        'anime'  => $scaleFilter . ',gradfun=1.5:16,unsharp=5:5:0.8:5:5:0.0,hqdn3d=1.5:1.2:3:2.5',
-        'smooth' => $scaleFilter . ',hqdn3d=4:3:6:4.5',
-        'sharp'  => $scaleFilter . ',unsharp=5:5:1.0:5:5:0.4',
+        'anime'       => $scaleFilter . ',deband=1thr=0.04:2thr=0.04:3thr=0.04:4thr=0.04,unsharp=5:5:0.7:5:5:0.0',
+        'detail'      => $scaleFilter . ',cas=0.5',
+        'night'       => $scaleFilter . ',eq=gamma=1.4:brightness=0.05:contrast=1.1',
+        'deinterlace' => 'bwdif=mode=send_frame:parity=auto:deint=all,' . $scaleFilter,
         default  => $scaleFilter,
     };
     $videoFilters .= ',format=yuv420p';
@@ -511,7 +514,7 @@ function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1, stri
  * Construit les arguments d'entrée ffmpeg communs.
  */
 function buildFfmpegInputArgs(string $filePath, string $seekBefore = ''): string {
-    return 'timeout 2700 ionice -c 2 -n 0 ffmpeg' . $seekBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
+    return 'timeout 14400 ionice -c 2 -n 0 nice -n 5 ffmpeg -nostdin' . $seekBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
 }
 
 /**
@@ -520,7 +523,8 @@ function buildFfmpegInputArgs(string $filePath, string $seekBefore = ''): string
 function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHDR = false): string {
     $threads = $isHDR ? FFMPEG_HDR_THREADS : FFMPEG_THREADS;
     $crf = $isHDR ? FFMPEG_HDR_CRF : FFMPEG_CRF;
-    return ' -c:v libx264 -preset ' . FFMPEG_PRESET . ' -crf ' . $crf
+    return ' -c:v libx264 -preset ' . FFMPEG_PRESET . ' -tune zerolatency -crf ' . $crf
+        . ' -profile:v main -level 4.1'
         . ' -g ' . $gopSize . ' -threads ' . $threads
         . ' -colorspace bt709 -color_primaries bt709 -color_trc bt709'
         . ' -c:a aac -ac ' . FFMPEG_AUDIO_CHANNELS . ' -b:a ' . FFMPEG_AUDIO_BITRATE . ' -shortest';
@@ -531,7 +535,7 @@ function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHD
  */
 function buildFmp4MuxerArgs(): string {
     return ' -avoid_negative_ts make_zero -start_at_zero'
-        . ' -max_muxing_queue_size 1024 -min_frag_duration 300000'
+        . ' -max_muxing_queue_size 4096 -min_frag_duration 300000'
         . ' -movflags frag_keyframe+empty_moov+default_base_moof';
 }
 
