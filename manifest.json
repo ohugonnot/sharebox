@@ -2,6 +2,7 @@
   "name": "ShareBox",
   "short_name": "ShareBox",
   "start_url": "/share/",
+  "scope": "/",
   "display": "fullscreen",
   "orientation": "any",
   "background_color": "#0c0e14",
