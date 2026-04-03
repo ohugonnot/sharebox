@@ -191,23 +191,41 @@ class FfmpegHelpersTest extends TestCase
     {
         $result = buildFfmpegCodecArgs();
         $this->assertStringContainsString('-c:v libx264', $result);
-        $this->assertStringContainsString('-preset ultrafast', $result);
-        $this->assertStringContainsString('-tune zerolatency', $result);
-        $this->assertStringContainsString('-profile:v main -level 4.1', $result);
-        $this->assertStringContainsString('-crf 23', $result);
-        $this->assertStringContainsString('-g 25', $result);
-        $this->assertStringContainsString('-threads 10', $result);
+        $this->assertStringContainsString('-preset medium', $result);
+        $this->assertStringContainsString('-tune film', $result);
+        $this->assertStringContainsString('-profile:v high -level 4.1', $result);
+        $this->assertStringContainsString('-crf 20', $result);
+        $this->assertStringContainsString('-g 250', $result);
+        $this->assertStringContainsString('-threads 12', $result);
+        $this->assertStringContainsString('-bf 3', $result);
+        $this->assertStringContainsString('-refs 4', $result);
         $this->assertStringContainsString('-c:a aac', $result);
         $this->assertStringContainsString('-ac 2', $result);
         $this->assertStringContainsString('-b:a 192k', $result);
         $this->assertStringContainsString('-shortest', $result);
+        $this->assertStringNotContainsString('force_key_frames', $result);
     }
 
     public function testBuildFfmpegCodecArgsCustomGop(): void
     {
         $result = buildFfmpegCodecArgs(50);
         $this->assertStringContainsString('-g 50', $result);
-        $this->assertStringNotContainsString('-g 25', $result);
+        $this->assertStringNotContainsString('-g 250', $result);
+    }
+
+    public function testBuildFfmpegCodecArgsHLS(): void
+    {
+        $result = buildFfmpegCodecArgs(96, false, true);
+        $this->assertStringContainsString('-preset slow', $result);
+        $this->assertStringContainsString('-g 96', $result);
+        $this->assertStringContainsString('-force_key_frames', $result);
+    }
+
+    public function testBuildFfmpegCodecArgsHDR(): void
+    {
+        $result = buildFfmpegCodecArgs(250, true, false);
+        $this->assertStringContainsString('-threads 24', $result);
+        $this->assertStringContainsString('-crf 20', $result);
     }
 
     // ── buildFmp4MuxerArgs ──────────────────────────────────────────────

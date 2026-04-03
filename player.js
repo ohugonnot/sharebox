@@ -87,7 +87,9 @@ function plog(tag, msg, data) {
     var isIOS = (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream)
              || (/^Mac/.test(navigator.platform || '') && navigator.maxTouchPoints > 1);
     var isSafari = /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent);
-    var useHLS = isIOS;
+    // HLS uniquement pour Safari réel sur iOS (pas Chrome DevTools émulation mobile)
+    // Chrome avec UA iPhone a toujours window.chrome défini ; sur vrai iOS tous les browsers sont WebKit
+    var useHLS = isIOS && isSafari;
     function buildUrl(mode, audio, startSec) {
         if (mode === 'native') return base + '?' + pp + 'stream=1';
         // Sur Safari iOS, remplacer transcode par HLS
@@ -292,8 +294,11 @@ function plog(tag, msg, data) {
         // HEVC : natif seulement si le navigateur supporte HEVC ET audio compatible
         // FLAC/AC3/DTS/TrueHD → transcode (le navigateur ne décode pas ces audios)
         if (c === 'hevc') {
-            var hevcSupported = canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"');
-            if (d.isMP4 && hevcSupported && nativeAudio) return 'native';
+            var hevcSupported = canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"')
+                || canPlay('video/webm; codecs="hvc1"') || canPlay('video/x-matroska; codecs="hvc1"');
+            if (hevcSupported && nativeAudio && (d.isMP4 || d.isMKV)) return 'native';
+            // Tenter natif d'abord (cascade native→transcode si échec) plutôt que transcoder d'office
+            if (nativeAudio && (d.isMP4 || d.isMKV)) return 'native';
             return 'transcode';
         }
         return 'transcode';
@@ -648,7 +653,10 @@ function plog(tag, msg, data) {
                     }
                 }
             }
-            trackBar.append(lbl, sel);
+            var grpAudio = document.createElement('div'); grpAudio.className = 'track-group';
+            grpAudio.append(lbl, sel);
+            var sepA = document.createElement('div'); sepA.className = 'track-sep';
+            trackBar.append(sepA, grpAudio);
         }
         if (d.videoHeight > 0) {
             S.videoHeight = d.videoHeight;
@@ -673,7 +681,8 @@ function plog(tag, msg, data) {
                     hint.textContent = 'Transcodage ' + S.quality + 'p...'; hint.className = 'player-hint transcoding';
                     saveCfg(); startStream(realTime());
                 });
-                trackBar.append(lbl3, sel3);
+                var grpVideo = document.createElement('div'); grpVideo.className = 'track-group';
+                grpVideo.append(lbl3, sel3);
                 // Sélecteur de filtres
                 var lbl4 = document.createElement('label'); lbl4.textContent = 'Filtre :';
                 var sel4 = document.createElement('select'); sel4.className = 'track-select'; sel4.title = 'Filtre';
@@ -685,7 +694,9 @@ function plog(tag, msg, data) {
                     hint.textContent = 'Changement de filtre...'; hint.className = 'player-hint transcoding';
                     saveCfg(); startStream(realTime());
                 });
-                trackBar.append(lbl4, sel4);
+                grpVideo.append(lbl4, sel4);
+                var sepV = document.createElement('div'); sepV.className = 'track-sep';
+                trackBar.append(sepV, grpVideo);
             }
         }
         if (d.subtitles && d.subtitles.length) {
@@ -721,7 +732,10 @@ function plog(tag, msg, data) {
                 lsSet(subKey, idx);
                 Subs.load(idx);
             });
-            trackBar.append(lbl2, selSub);
+            var grpSub = document.createElement('div'); grpSub.className = 'track-group';
+            grpSub.append(lbl2, selSub);
+            var sepS = document.createElement('div'); sepS.className = 'track-sep';
+            trackBar.append(sepS, grpSub);
         }
         if (hasControls) trackBar.style.display = 'flex';
     }
@@ -916,7 +930,9 @@ function plog(tag, msg, data) {
             if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 0.1); return; }
             hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(realTime());
         });
-        trackBar.appendChild(resyncBtn);
+        var grpPlayback = document.createElement('div'); grpPlayback.className = 'track-group';
+        grpPlayback.appendChild(resyncBtn);
+        trackBar.appendChild(grpPlayback);
         // Badge mode courant — cliquable pour forcer un mode
         modeBtn = document.createElement('span');
         modeBtn.title = 'Cliquer pour changer le mode de lecture';
@@ -943,7 +959,7 @@ function plog(tag, msg, data) {
             });
             hint.textContent = ''; updateModeUI(); saveCfg(); startStream(pos);
         });
-        trackBar.appendChild(modeBtn); trackBar.style.display = 'flex';
+        grpPlayback.appendChild(modeBtn); trackBar.style.display = 'flex';
         // Overlay raccourcis clavier (touche ?)
         var kbStyle = document.createElement('style');
         kbStyle.textContent = '#kb-overlay{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}#kb-overlay.hidden{display:none}#kb-card{background:#1a1d28;border:1px solid rgba(255,255,255,.1);border-radius:10px;padding:1.5rem 2rem;min-width:270px}#kb-card h3{font-size:.8rem;font-weight:700;color:#8b90a0;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.85rem}.kb-row{display:flex;align-items:center;justify-content:space-between;padding:.27rem 0;border-bottom:1px solid rgba(255,255,255,.055);font-size:.81rem;gap:1.2rem}.kb-row:last-child{border-bottom:none}.kb-key{font-family:monospace;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:4px;padding:.13rem .48rem;font-size:.72rem;color:#e8eaf0;white-space:nowrap;flex-shrink:0}.kb-desc{color:#8b90a0}';
