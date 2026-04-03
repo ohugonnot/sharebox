@@ -136,6 +136,10 @@ session_write_close();
 
 // Sous-chemin dans le dossier partagé (pour la navigation)
 $subPath = $_GET['p'] ?? '';
+// Fix double-encoding: if path still contains %XX after PHP's auto-decode, decode once more
+if (str_contains($subPath, '%')) {
+    $subPath = rawurldecode($subPath);
+}
 
 // Calculer le chemin réel demandé
 $basePath = rtrim($link['path'], '/');

@@ -175,10 +175,17 @@ if (isset($_GET['posters'])) {
     $result = array_merge($result, $cached);
 
     // ── INSERT all uncached folders as NULL (no TMDB calls, instant) ──
+    // Skip folders too close to BASE_PATH (e.g. user home dirs at depth 1)
+    $minDepth = defined('TMDB_MIN_DEPTH') ? (int)TMDB_MIN_DEPTH : 0;
     if (!empty($uncached)) {
+        $baseTrim = rtrim(BASE_PATH, '/');
         try { $db->beginTransaction(); } catch (PDOException $e) {}
         foreach ($uncached as $f) {
             $fullPath = realpath($resolvedPath . '/' . $f) ?: ($resolvedPath . '/' . $f);
+            // Depth = number of path segments below BASE_PATH
+            $rel = ltrim(str_replace($baseTrim, '', $fullPath), '/');
+            $depth = substr_count($rel, '/') + 1;
+            if ($depth < $minDepth) continue;
             try {
                 $db->prepare("INSERT OR IGNORE INTO folder_posters (path) VALUES (:p)")->execute([':p' => $fullPath]);
             } catch (PDOException $e) {}
@@ -505,17 +512,16 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 // ── Reload all posters in current directory ──
 if (isset($_GET['tmdb_reload']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
-        // Supprimer toutes les entrées sauf __none__ humain (verified=100) pour ce dossier
-        // __none__ automatique (verified<100) est supprimé aussi pour permettre une re-détection
-        $stmt = $db->prepare("DELETE FROM folder_posters WHERE path LIKE :prefix AND NOT (poster_url = '__none__' AND verified = 100)");
+        // Reset children only — keep parent entry intact so propagation still works
+        $stmt = $db->prepare("UPDATE folder_posters SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, match_attempts = 0, updated_at = datetime('now') WHERE path LIKE :prefix AND NOT (poster_url = '__none__' AND verified = 100)");
         $stmt->execute([':prefix' => $resolvedPath . '/%']);
-        $deleted = $stmt->rowCount();
-        // Supprimer aussi l'entrée du dossier lui-même (pour re-fetch le parent)
-        $stmt2 = $db->prepare("DELETE FROM folder_posters WHERE path = :p AND NOT (poster_url = '__none__' AND verified = 100)");
-        $stmt2->execute([':p' => $resolvedPath]);
-        $deleted += $stmt2->rowCount();
-        poster_log('RELOAD all | ' . basename($resolvedPath) . ' | deleted=' . $deleted . ' entries');
-        echo json_encode(['success' => true, 'deleted' => $deleted]);
+        $reset = $stmt->rowCount();
+        poster_log('RELOAD all | ' . basename($resolvedPath) . ' | reset=' . $reset . ' children (parent kept)');
+        // Launch worker in background to rematch
+        $script = realpath(__DIR__ . '/../tools/tmdb-worker.php');
+        $logFile = dirname(DB_PATH) . '/tmdb-worker.log';
+        shell_exec(sprintf('nohup /usr/bin/php %s --cron >> %s 2>&1 </dev/null &', escapeshellarg($script), escapeshellarg($logFile)));
+        echo json_encode(['success' => true, 'reset' => $reset]);
     } catch (PDOException $e) {
         poster_log('RELOAD error | ' . basename($resolvedPath) . ' → ' . $e->getMessage());
         http_response_code(500);

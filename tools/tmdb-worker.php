@@ -24,7 +24,66 @@ if (!$TMDB_API_KEY) {
 
 $VIDEO_EXTS = ['mp4','mkv','avi','m4v','mov','wmv','flv','webm','ts','m2ts','mpg','mpeg'];
 
-$db = get_db();
+// Two separate connections: reader (shared lock) and writer (exclusive lock).
+// SQLite WAL can't promote shared→exclusive on the same connection when a
+// statement cursor is still open, causing "database is locked" on every UPDATE.
+$dbOpts = [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC];
+$dbRead = new PDO('sqlite:' . DB_PATH, null, null, $dbOpts);
+$dbRead->exec('PRAGMA journal_mode=WAL');
+$dbRead->exec('PRAGMA busy_timeout = 10000');
+
+$db = new PDO('sqlite:' . DB_PATH, null, null, $dbOpts);
+$db->exec('PRAGMA journal_mode=WAL');
+$db->exec('PRAGMA busy_timeout = 30000');
+
+// ── Phase 0: Discover folders recursively and populate folder_posters ──
+// Crawls BASE_PATH, respects TMDB_MIN_DEPTH and HIDDEN_DIRS.
+// Only inserts folders that don't already exist in the DB.
+function discover_folders(PDO $db): int {
+    $basePath = rtrim(BASE_PATH, '/');
+    $minDepth = defined('TMDB_MIN_DEPTH') ? (int)TMDB_MIN_DEPTH : 0;
+    $hiddenDirs = defined('HIDDEN_DIRS') ? HIDDEN_DIRS : [];
+    $inserted = 0;
+
+    $stmt = $db->prepare("INSERT OR IGNORE INTO folder_posters (path) VALUES (:p)");
+
+    $iter = new RecursiveIteratorIterator(
+        new RecursiveCallbackFilterIterator(
+            new RecursiveDirectoryIterator($basePath, FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS),
+            function (SplFileInfo $current, string $key, RecursiveDirectoryIterator $iterator) use ($hiddenDirs) {
+                if (!$current->isDir()) return false;
+                if (in_array($current->getFilename(), $hiddenDirs, true)) return false;
+                if ($current->getFilename()[0] === '.') return false;
+                return true;
+            }
+        ),
+        RecursiveIteratorIterator::SELF_FIRST
+    );
+
+    $batch = 0;
+    // No explicit transaction — autocommit avoids WAL lock contention
+    foreach ($iter as $dir) {
+        $path = $dir->getRealPath() ?: $dir->getPathname();
+        $rel = ltrim(str_replace($basePath, '', $path), '/');
+        $depth = substr_count($rel, '/') + 1;
+        if ($depth < $minDepth) continue;
+
+        try {
+            $stmt->execute([':p' => $path]);
+            if ($stmt->rowCount() > 0) $inserted++;
+        } catch (PDOException $e) {}
+
+        // (autocommit per INSERT — no batching needed)
+    }
+    // (autocommit — no explicit commit needed)
+
+    return $inserted;
+}
+
+$discovered = discover_folders($db);
+if ($discovered > 0) {
+    ai_log("DISCOVER | $discovered new folders found in " . BASE_PATH);
+}
 
 // ── Single lock file shared with web handler ──
 // Web handler checks this file to know if worker is running.
@@ -58,7 +117,7 @@ do {
     // Touch lock to reset mtime — prevents stale detection during legitimate long runs
     @touch($cronLock);
 
-    $rows = $db->query("SELECT rowid, path FROM folder_posters WHERE poster_url IS NULL AND (match_attempts IS NULL OR match_attempts = 0)")->fetchAll();
+    $rows = $dbRead->query("SELECT rowid, path FROM folder_posters WHERE poster_url IS NULL AND (match_attempts IS NULL OR match_attempts = 0)")->fetchAll();
     $pendingCount = count($rows);
     ai_log('SCAN start | pending=' . $pendingCount);
 
@@ -97,7 +156,7 @@ do {
     };
 
     // Filter: skip directories without media content
-    try { $db->beginTransaction(); } catch (PDOException $e) {}
+    // No explicit transaction — autocommit avoids WAL lock contention
     foreach ($byDir as $dir => $names) {
         if (!is_dir($dir)) { unset($byDir[$dir]); continue; }
         $items = @scandir($dir);
@@ -123,7 +182,7 @@ do {
             unset($byDir[$dir]);
         }
     }
-    try { $db->commit(); } catch (PDOException $e) {}
+    // (autocommit — no explicit commit needed)
 
     $totalFound = 0;
     $totalProcessed = 0;
@@ -133,7 +192,7 @@ do {
     // try TMDB company search (e.g., "Disney", "DreamWorks" folders)
     foreach ($byDir as $dir => &$names) {
         // Check if parent is a movies folder
-        $stmtType = $db->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
+        $stmtType = $dbRead->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
         $stmtType->execute([':p' => $dir]);
         $typeRow = $stmtType->fetch();
         $isMoviesFolder = ($typeRow && ($typeRow['folder_type'] ?? 'series') === 'movies');
@@ -244,7 +303,7 @@ do {
         // Exception: bare season/episode codes (S01, Saison 3, etc.) — leave match_attempts=0
         // so propagation can handle them once the parent is matched.
         if ($noTitle) {
-            try { $db->beginTransaction(); } catch (PDOException $e) {}
+            // No explicit transaction — autocommit avoids WAL lock contention
             foreach ($noTitle as $n) {
                 if (preg_match('/^(s\d{1,2}|saison\s*\d+|season\s*\d+|e\d{2,4})$/i', trim($n))) {
                     // Bare season/episode code — skip silently, propagation will handle
@@ -259,7 +318,7 @@ do {
                     }
                 }
             }
-            try { $db->commit(); } catch (PDOException $e) {}
+            // (autocommit — no explicit commit needed)
         }
 
         $totalFound += $found;
@@ -268,7 +327,7 @@ do {
     }
 
     // Auto-verify: entries in same dir with same tmdb_id (>3 = clearly same show)
-    $unverified = $db->query("SELECT path, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0 OR verified = 60)")->fetchAll();
+    $unverified = $dbRead->query("SELECT path, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0 OR verified = 60)")->fetchAll();
     $byDirTmdb = [];
     foreach ($unverified as $row) {
         $dir = dirname($row['path']);
@@ -294,14 +353,14 @@ do {
 
     // Propagate: if a parent folder is matched, apply its poster to unmatched children
     $propagated = 0;
-    $parentRows = $db->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type, tmdb_rating FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchAll();
+    $parentRows = $dbRead->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type, tmdb_rating FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchAll();
     $parentMap = [];
     foreach ($parentRows as $pr) {
         $parentMap[$pr['path']] = $pr;
     }
-    $stillPending = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
+    $stillPending = $dbRead->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
 
-    try { $db->beginTransaction(); } catch (PDOException $e) {}
+    // No explicit transaction — autocommit avoids WAL lock contention
     foreach ($stillPending as $childPath) {
         $parentPath = dirname($childPath);
         if (isset($parentMap[$parentPath])) {
@@ -315,7 +374,7 @@ do {
             }
         }
     }
-    try { $db->commit(); } catch (PDOException $e) { ai_log('DB error (propagate commit): ' . $e->getMessage()); }
+    // (autocommit — no explicit commit needed)
 
     if ($propagated > 0) ai_log('PROPAGATE | ' . $propagated . ' entries inherited from parent folder');
 
@@ -323,9 +382,84 @@ do {
 
 } while (true); // loop until no more pending entries
 
+// ── Final propagation pass (runs even when nothing was pending) ──
+$parentRows = $dbRead->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type, tmdb_rating FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchAll();
+$parentMap = [];
+foreach ($parentRows as $pr) $parentMap[$pr['path']] = $pr;
+$stillPending = $dbRead->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
+$finalPropagated = 0;
+foreach ($stillPending as $childPath) {
+    $parentPath = dirname($childPath);
+    if (isset($parentMap[$parentPath])) {
+        $p = $parentMap[$parentPath];
+        try {
+            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 75, updated_at = datetime('now') WHERE path = ?")
+               ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath]);
+            $finalPropagated++;
+        } catch (PDOException $e) {}
+    }
+}
+if ($finalPropagated > 0) ai_log('FINAL PROPAGATE | ' . $finalPropagated . ' entries inherited from parent folder');
+
+// ── Season poster lookup (runs once after all matching is done) ──
+// For TV entries with season-numbered subfolders, fetch season-specific poster from TMDB
+$seasonUpdated = 0;
+$seasonRows = $dbRead->query("
+    SELECT fp.path, fp.tmdb_id, fp.poster_url
+    FROM folder_posters fp
+    WHERE fp.tmdb_type = 'tv' AND fp.tmdb_id IS NOT NULL AND fp.poster_url IS NOT NULL AND fp.poster_url != '__none__'
+")->fetchAll();
+
+foreach ($seasonRows as $sr) {
+    $dirPath = $sr['path'];
+    if (!is_dir($dirPath)) continue;
+    $children = @scandir($dirPath);
+    if (!$children) continue;
+
+    foreach ($children as $child) {
+        if ($child[0] === '.' || !is_dir($dirPath . '/' . $child)) continue;
+
+        // Extract season number from folder name
+        $seasonNum = null;
+        if (preg_match('/(?:^|\.)S(\d{1,2})(?:\.|$)/i', $child, $m)) {
+            $seasonNum = (int)$m[1];
+        } elseif (preg_match('/(?:saison|season)\s*(\d+)/i', $child, $m)) {
+            $seasonNum = (int)$m[1];
+        }
+        if ($seasonNum === null) continue;
+
+        $childPath = realpath($dirPath . '/' . $child) ?: ($dirPath . '/' . $child);
+
+        // Check if this child is in DB with the same tmdb_id as parent
+        $childRow = $dbRead->prepare("SELECT poster_url FROM folder_posters WHERE path = ? AND tmdb_id = ?");
+        $childRow->execute([$childPath, $sr['tmdb_id']]);
+        $existing = $childRow->fetch();
+        if (!$existing) continue;
+
+        // Fetch season-specific poster from TMDB
+        $seasonUrl = "https://api.themoviedb.org/3/tv/{$sr['tmdb_id']}/season/{$seasonNum}?api_key={$TMDB_API_KEY}&language=fr";
+        $seasonData = tmdb_fetch($seasonUrl, $ctx);
+        usleep(50000); // rate limit
+
+        if ($seasonData && !empty($seasonData['poster_path'])) {
+            $seasonPoster = 'https://image.tmdb.org/t/p/w300' . $seasonData['poster_path'];
+            if ($seasonPoster !== $existing['poster_url']) {
+                try {
+                    $db->prepare("UPDATE folder_posters SET poster_url = ?, updated_at = datetime('now') WHERE path = ?")
+                       ->execute([$seasonPoster, $childPath]);
+                    $seasonUpdated++;
+                } catch (PDOException $e) {
+                    ai_log('DB error (season poster): ' . $e->getMessage());
+                }
+            }
+        }
+    }
+}
+if ($seasonUpdated > 0) ai_log('SEASON | ' . $seasonUpdated . ' entries got season-specific poster');
+
 // ── Checkpoint WAL + backup DB after scan ──
 // Ensures the backup captures the post-scan state, not the pre-scan NULL state.
-$db->exec('PRAGMA wal_checkpoint(TRUNCATE)');
+try { $db->exec('PRAGMA wal_checkpoint(PASSIVE)'); } catch (PDOException $e) { ai_log('CHECKPOINT skip: ' . $e->getMessage()); }
 $dbFile = DB_PATH;
 $backupFile = dirname($dbFile) . '/share.db.bak';
 if (filesize($dbFile) > 4096) {
