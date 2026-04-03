@@ -278,7 +278,7 @@ if (is_dir($resolvedPath)) {
     }
 
     // TMDB poster endpoints (search, batch, set)
-    if (isset($_GET['posters']) || isset($_GET['tmdb_search']) || isset($_GET['tmdb_set']) || isset($_GET['folder_type_set']) || isset($_GET['ai_recheck']) || isset($_GET['tmdb_reload'])) {
+    if (isset($_GET['posters']) || isset($_GET['tmdb_search']) || isset($_GET['tmdb_set']) || isset($_GET['folder_type_set']) || isset($_GET['ai_recheck']) || isset($_GET['tmdb_reload']) || isset($_GET['web_search']) || isset($_GET['web_poster_save'])) {
         require __DIR__ . '/handlers/tmdb.php';
     }
 
@@ -545,6 +545,13 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .poster-modal-info { position:absolute; bottom:0; left:0; right:0; padding:.4rem .5rem; background:rgba(0,0,0,.72); backdrop-filter:blur(4px); text-align:center; font-size:.78rem; color:#fff; font-weight:700; line-height:1.3; text-shadow:0 1px 2px rgba(0,0,0,.5); overflow-wrap:break-word; word-break:break-word; text-wrap:balance; }
 .poster-modal-close { margin-top:1rem; padding:.5rem .8rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:transparent; color:var(--text-secondary); font-family:var(--font-sans); font-size:.82rem; cursor:pointer; width:100%; }
 .poster-modal-close:hover { background:rgba(255,255,255,.05); color:var(--text-primary); }
+.poster-modal-more { grid-column:1/-1; text-align:center; padding:.9rem; cursor:pointer; color:var(--accent); border:1px dashed rgba(240,160,48,.3); border-radius:var(--radius-sm); font-size:.82rem; font-weight:600; transition:background .15s; }
+.poster-modal-more:hover { background:rgba(240,160,48,.08); }
+.poster-modal-item.poster-portrait { border-color:rgba(76,175,80,.45); }
+.poster-modal-item.poster-portrait::after { content:'2:3'; position:absolute; top:.3rem; right:.3rem; background:rgba(76,175,80,.85); color:#fff; font-size:.6rem; font-weight:700; padding:.1rem .35rem; border-radius:.2rem; line-height:1.3; }
+.poster-modal-item.poster-loading img { filter:brightness(.4); }
+.poster-modal-item.poster-loading::before { content:''; position:absolute; top:50%; left:50%; width:1.5rem; height:1.5rem; margin:-.75rem 0 0 -.75rem; border:2px solid rgba(255,255,255,.3); border-top-color:var(--accent); border-radius:50%; animation:spin .6s linear infinite; z-index:2; }
+@keyframes spin { to { transform:rotate(360deg); } }
 .grid-card-letter { font-family:var(--font-sans); font-weight:700; font-size:3rem; color:rgba(255,255,255,.18); text-transform:uppercase; user-select:none; }
 .grid-card-icon { position:absolute; top:.7rem; right:.7rem; opacity:.25; }
 .grid-card-label { padding:.4rem .5rem; background:rgba(0,0,0,.72); text-align:center; height:3rem; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
@@ -1185,9 +1192,9 @@ function reloadAllPosters() {
             });
     }
     fetchPosters();
-    // Safety poll toutes les 30s — capte les nouveaux téléchargements sans recharger la page
+    // Safety poll toutes les 30s — seulement s'il y a des posters pending
     setInterval(function() {
-        if (!document.hidden && !fetchPosters.inFlight) {
+        if (!document.hidden && !fetchPosters.inFlight && fetchPosters.pending) {
             fetchPosters.polls = 0;
             fetchPosters();
         }
@@ -1217,7 +1224,7 @@ function openPosterPicker(folderName) {
     var searchInput = document.createElement('input');
     searchInput.className = 'search-box';
     searchInput.style.cssText = 'flex:1;width:auto';
-    searchInput.placeholder = 'Rechercher sur TMDB...';
+    searchInput.placeholder = 'Rechercher...';
     // Nettoyer le nom pour la recherche : retirer extension, tags techniques, crochets, tirets de release
     var cleanName = folderName.replace(/\.(mkv|avi|mp4|m4v|mov|wmv|flv|webm|ts|m2ts|mpg|mpeg)$/i, '');
     cleanName = cleanName.replace(/[\[\(].*?[\]\)]/g, ''); // [Torrent911], (2024), etc.
@@ -1226,15 +1233,15 @@ function openPosterPicker(folderName) {
     cleanName = cleanName.replace(/\b(x264|x265|h264|h265|HEVC|AVC|AAC|AC3|DTS|FLAC|10bit|HDR|HDR10|SDR|2160p|1080p|720p|480p|4K|UHD)\b.*/i, '');
     cleanName = cleanName.replace(/[-._]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
     searchInput.value = cleanName || folderName;
-    // Type toggle : Tous / Séries / Films / Studios
+    // Type toggle : Tous / Séries / Films / Web
     var typeRow = document.createElement('div');
     typeRow.style.cssText = 'display:flex;gap:.3rem;margin-bottom:.5rem';
     var currentType = 'multi';
-    ['multi', 'tv', 'movie', 'company'].forEach(function(t) {
+    ['multi', 'tv', 'movie', 'web'].forEach(function(t) {
         var btn = document.createElement('button');
         btn.className = 'poster-modal-close';
         btn.style.cssText = 'flex:1;margin:0;padding:.25rem .4rem;font-size:.72rem;' + (t === 'multi' ? 'background:rgba(240,160,48,.15);border-color:var(--accent);color:var(--accent);' : '');
-        btn.textContent = t === 'multi' ? 'Tous' : (t === 'tv' ? 'S\u00e9ries' : (t === 'movie' ? 'Films' : 'Studios'));
+        btn.textContent = t === 'multi' ? 'Tous' : (t === 'tv' ? 'S\u00e9ries' : (t === 'movie' ? 'Films' : 'Web'));
         btn.dataset.tmdbType = t;
         btn.onclick = function() {
             currentType = t;
@@ -1278,20 +1285,93 @@ function openPosterPicker(folderName) {
     document.body.appendChild(modal);
     searchInput.focus();
     searchInput.select();
+    var webAllResults = [], webOffset = 0;
     function doSearch(query) {
+        grid.innerHTML = '';
         grid.textContent = 'Recherche...';
-        var url = BASE_URL + '?' + SUB_PATH + 'tmdb_search=' + encodeURIComponent(query) + '&tmdb_type=' + currentType;
+        var url;
+        if (currentType === 'web') {
+            url = BASE_URL + '?' + SUB_PATH + 'web_search=' + encodeURIComponent(query);
+        } else {
+            url = BASE_URL + '?' + SUB_PATH + 'tmdb_search=' + encodeURIComponent(query) + '&tmdb_type=' + currentType;
+        }
         fetch(url, {credentials:'same-origin'})
             .then(function(r){ return r.json(); })
-            .then(function(results){ renderResults(results, folderName, modal, grid); })
-            .catch(function(){ grid.textContent = 'Erreur de recherche'; });
+            .then(function(results){
+                grid.innerHTML = '';
+                if (currentType === 'web') {
+                    webAllResults = results;
+                    webOffset = 0;
+                    showWebPage();
+                } else {
+                    renderResults(results, folderName, modal, grid);
+                }
+            })
+            .catch(function(){ grid.innerHTML = ''; grid.textContent = 'Erreur de recherche'; });
+    }
+    function showWebPage() {
+        var oldMore = grid.querySelector('.poster-modal-more');
+        if (oldMore) oldMore.remove();
+        if (!webAllResults.length && webOffset === 0) {
+            grid.textContent = 'Aucun résultat. Essayez un autre nom.';
+            return;
+        }
+        var page = webAllResults.slice(webOffset, webOffset + 12);
+        webOffset += page.length;
+        page.forEach(function(r) {
+            var item = document.createElement('div');
+            item.className = 'poster-modal-item';
+            if (r.portrait) item.classList.add('poster-portrait');
+            var img = document.createElement('img');
+            img.src = r.poster;
+            img.alt = r.title;
+            img.loading = 'lazy';
+            item.appendChild(img);
+            var info = document.createElement('div');
+            info.className = 'poster-modal-info';
+            info.textContent = r.title;
+            item.onclick = function(){
+                if (item.classList.contains('poster-loading')) return;
+                item.classList.add('poster-loading');
+                info.textContent = 'Téléchargement...';
+                fetch(BASE_URL + '?' + SUB_PATH + 'web_poster_save=1', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({image_url: r.poster_w300})
+                })
+                .then(function(resp){ return resp.json(); })
+                .then(function(data){
+                    if (data.poster_url) {
+                        selectPoster(folderName, data.poster_url, 0, r.title, r.overview || '', null, 0);
+                        modal.remove();
+                    } else {
+                        item.classList.remove('poster-loading');
+                        info.textContent = data.error || 'Erreur';
+                    }
+                })
+                .catch(function(){
+                    item.classList.remove('poster-loading');
+                    info.textContent = 'Erreur réseau';
+                });
+            };
+            item.appendChild(info);
+            grid.appendChild(item);
+        });
+        if (webOffset < webAllResults.length) {
+            var remaining = webAllResults.length - webOffset;
+            var more = document.createElement('div');
+            more.className = 'poster-modal-more';
+            more.textContent = 'Voir plus (' + remaining + ' images)';
+            more.onclick = function(){ showWebPage(); };
+            grid.appendChild(more);
+        }
     }
     searchBtn.onclick = function(){ doSearch(searchInput.value); };
     searchInput.addEventListener('keydown', function(e){ if (e.key === 'Enter') doSearch(searchInput.value); });
     doSearch(folderName);
 }
 function renderResults(results, folderName, modal, grid) {
-    grid.textContent = '';
     if (!results.length) { grid.textContent = 'Aucun résultat. Essayez un autre nom.'; return; }
     results.forEach(function(r){
         var item = document.createElement('div');
@@ -1517,27 +1597,24 @@ function requestAIRecheck(name) {
     }).then(function(r){ return r.json(); }).then(function(d){
         if (d.success) {
             var card = document.querySelector('.grid-card[data-folder="'+CSS.escape(name)+'"]');
-            if (card) {
-                // Retirer le poster et ajouter le badge AI pending
-                card.classList.remove('has-poster');
-                var bg = card.querySelector('.grid-card-bg');
-                if (bg) bg.style.backgroundImage = '';
-                var oldOv = card.querySelector('.grid-card-overview');
-                if (oldOv) oldOv.remove();
-                if (!card.querySelector('.grid-card-ai-pending')) {
-                    var ai = document.createElement('div');
-                    ai.className = 'grid-card-ai-pending';
-                    var aiSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
-                    aiSvg.setAttribute('viewBox','0 0 24 24'); aiSvg.setAttribute('fill','none');
-                    aiSvg.setAttribute('stroke','currentColor'); aiSvg.setAttribute('stroke-width','2');
-                    var aiPath = document.createElementNS('http://www.w3.org/2000/svg','path');
-                    aiPath.setAttribute('d','M21 12a9 9 0 11-6.22-8.57');
-                    aiSvg.appendChild(aiPath);
-                    var aiText = document.createElement('span');
-                    aiText.textContent = 'V\u00e9rification IA\nen attente';
-                    ai.appendChild(aiSvg); ai.appendChild(aiText);
-                    card.appendChild(ai);
-                }
+            if (card && !card.querySelector('.grid-card-ai-pending')) {
+                var ai = document.createElement('div');
+                ai.className = 'grid-card-ai-pending';
+                var aiSvg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+                aiSvg.setAttribute('viewBox','0 0 24 24'); aiSvg.setAttribute('fill','none');
+                aiSvg.setAttribute('stroke','currentColor'); aiSvg.setAttribute('stroke-width','2');
+                var aiPath = document.createElementNS('http://www.w3.org/2000/svg','path');
+                aiPath.setAttribute('d','M21 12a9 9 0 11-6.22-8.57');
+                aiSvg.appendChild(aiPath);
+                var aiText = document.createElement('span');
+                aiText.textContent = 'V\u00e9rification IA\nau prochain scan';
+                ai.appendChild(aiSvg); ai.appendChild(aiText);
+                card.appendChild(ai);
+                // Masquer le spinner après 3s — le badge reste mais sans animation
+                setTimeout(function() {
+                    aiSvg.style.animation = 'none';
+                    aiSvg.style.opacity = '0.5';
+                }, 3000);
             }
         }
     }).catch(function(){});

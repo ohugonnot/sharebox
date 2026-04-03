@@ -275,6 +275,29 @@ if ($action !== '') {
                 ]);
                 break;
 
+            case 'tmdb_scan_log':
+                $logFile = dirname(DB_PATH) . '/tmdb-worker.log';
+                $offset = (int)($_GET['offset'] ?? 0);
+                if (!file_exists($logFile)) { echo json_encode(['lines' => [], 'next_offset' => 0, 'done' => true]); break; }
+                $size = filesize($logFile);
+                $lines = [];
+                if ($offset < $size) {
+                    $fh = fopen($logFile, 'r');
+                    fseek($fh, $offset);
+                    $chunk = fread($fh, min(32768, $size - $offset));
+                    fclose($fh);
+                    $lines = array_filter(explode("\n", $chunk), fn($l) => trim($l) !== '');
+                    $offset = $size;
+                }
+                $lockFile = dirname(DB_PATH) . '/sharebox_tmdb_cron.lock';
+                $running = false;
+                if (file_exists($lockFile)) {
+                    $pid = (int)@file_get_contents($lockFile);
+                    $running = $pid > 0 && is_dir("/proc/$pid");
+                }
+                echo json_encode(['lines' => array_values($lines), 'next_offset' => $offset, 'done' => !$running]);
+                break;
+
             case 'tmdb_scan':
                 // Launch tmdb-worker.php in background
                 $lockFile = dirname(DB_PATH) . '/sharebox_tmdb_cron.lock';
@@ -307,11 +330,12 @@ if ($action !== '') {
                         break;
                     }
                 }
-                // Rate limit : 1 scan par heure
-                if (file_exists($tsFile)) {
+                // Rate limit configurable (0 = pas de cooldown)
+                $cooldownSec = defined('AI_SCAN_COOLDOWN') ? AI_SCAN_COOLDOWN : 3600;
+                if ($cooldownSec > 0 && file_exists($tsFile)) {
                     $elapsed = time() - (int)file_get_contents($tsFile);
-                    if ($elapsed < 3600) {
-                        $wait = 3600 - $elapsed;
+                    if ($elapsed < $cooldownSec) {
+                        $wait = $cooldownSec - $elapsed;
                         $min  = ceil($wait / 60);
                         echo json_encode(['ok' => false, 'message' => "Scan IA disponible dans $min min"]);
                         break;
@@ -346,10 +370,11 @@ if ($action !== '') {
                 $resultFile = __DIR__ . '/data/ai-scan-result.json';
                 $lastResult = file_exists($resultFile) ? json_decode(file_get_contents($resultFile), true) : null;
                 $tsFile     = __DIR__ . '/data/ai-scan-last-launch.txt';
+                $cooldownSec = defined('AI_SCAN_COOLDOWN') ? AI_SCAN_COOLDOWN : 3600;
                 $cooldown   = 0;
-                if (file_exists($tsFile)) {
+                if ($cooldownSec > 0 && file_exists($tsFile)) {
                     $elapsed  = time() - (int)file_get_contents($tsFile);
-                    $cooldown = max(0, 3600 - $elapsed);
+                    $cooldown = max(0, $cooldownSec - $elapsed);
                 }
                 $aiAvailable = file_exists('/usr/local/bin/sharebox-tmdb-ai-scan');
                 // Live progress: count ia_checked entries (updated by Claude in real-time)
@@ -1116,6 +1141,13 @@ if ($action !== '') {
                     </div>
                     <div id="tmdb-bar-label" style="font-size:.72rem;color:var(--text-muted);margin-top:.3rem"></div>
                 </div>
+                <div id="tmdb-scan-panel" style="display:none;margin-top:1rem">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem">
+                        <span style="font-size:.72rem;color:var(--text-muted)">Log TMDB</span>
+                        <button onclick="closeTmdbPanel()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:.8rem;padding:0">&times;</button>
+                    </div>
+                    <div id="tmdb-scan-log" style="background:#0c0e14;border:1px solid var(--border);border-radius:var(--radius-sm);padding:.6rem .8rem;height:250px;overflow-y:auto;font-family:monospace;font-size:.75rem;color:#cdd6f4;white-space:pre-wrap;word-break:break-all;line-height:1.5"></div>
+                </div>
                 <div id="ai-scan-panel" style="display:none;margin-top:1rem">
                     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem">
                         <span style="font-size:.72rem;color:var(--text-muted)">Log IA</span>
@@ -1631,19 +1663,59 @@ async function loadTmdbStatus() {
             }
         } else {
             btn.textContent = pending > 0 ? 'Scan TMDB (' + pending + ')' : 'Scan TMDB';
-            btn.disabled = pending === 0 && failed === 0;
+            btn.disabled = false;
         }
     } catch(e) {}
 }
+
+var tmdbLogTimer = null;
 
 async function launchTmdbScan() {
     const btn = document.getElementById('tmdb-scan-btn');
     btn.textContent = 'Lancement...';
     btn.disabled = true;
+    // Capturer la taille actuelle du log pour ne montrer que les nouvelles lignes
+    const pre = await fetch('/share/admin.php?action=tmdb_scan_log&offset=999999999').then(r => r.json()).catch(() => ({}));
+    const startOffset = pre.next_offset || 0;
     const res = await api('tmdb_scan', {});
     if (res.error) { toast(res.error, false); btn.disabled = false; btn.textContent = 'Scan TMDB'; return; }
     toast(res.message);
-    setTimeout(loadTmdbStatus, 2000);
+    // Ouvrir le panel de log
+    const panel = document.getElementById('tmdb-scan-panel');
+    const log = document.getElementById('tmdb-scan-log');
+    panel.style.display = '';
+    log.textContent = '── Scan TMDB démarré ──\n';
+    pollTmdbLog(startOffset);
+}
+
+function appendTmdbLog(text) {
+    const log = document.getElementById('tmdb-scan-log');
+    if (!log) return;
+    log.textContent += text;
+    log.scrollTop = log.scrollHeight;
+}
+
+async function pollTmdbLog(offset) {
+    try {
+        const res = await fetch('/share/admin.php?action=tmdb_scan_log&offset=' + offset);
+        const data = await res.json();
+        if (data.lines && data.lines.length) {
+            appendTmdbLog(data.lines.join('\n') + '\n');
+        }
+        if (data.done) {
+            appendTmdbLog('\n── Scan TMDB terminé ──\n');
+            loadTmdbStatus();
+            return;
+        }
+        tmdbLogTimer = setTimeout(function() { pollTmdbLog(data.next_offset); }, 2000);
+    } catch(e) {
+        tmdbLogTimer = setTimeout(function() { pollTmdbLog(offset); }, 3000);
+    }
+}
+
+function closeTmdbPanel() {
+    clearTimeout(tmdbLogTimer);
+    document.getElementById('tmdb-scan-panel').style.display = 'none';
 }
 
 // ── AI scan ──
