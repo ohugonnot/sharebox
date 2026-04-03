@@ -145,7 +145,12 @@ function updateDisk(d) {
         volumes.forEach(function(vol, i) {
             const pct   = (vol.used_gb || 0) / (vol.total_gb || 1) * 100;
             const color = colorByThreshold(pct, 80, 93);
-            const unit  = fmtGbUnit(vol.total_gb || 0);
+            const totalGb = vol.total_gb || 0;
+            const usedGb  = vol.used_gb  || 0;
+            const isTB    = totalGb >= 1000;
+            const unit    = isTB ? 'TB' : 'GB';
+            const usedStr = isTB ? (usedGb / 1000).toFixed(1) : Math.round(usedGb).toString();
+            const totStr  = isTB ? (totalGb / 1000).toFixed(1) : Math.round(totalGb).toString();
 
             if (i > 0) {
                 const sep = document.createElement('div');
@@ -162,7 +167,7 @@ function updateDisk(d) {
 
             const main = document.createElement('div');
             main.className = 'dash-metric-main';
-            main.textContent = fmtGbVal(vol.used_gb || 0) + '\u00a0/\u00a0' + fmtGbVal(vol.total_gb || 0) + '\u00a0' + unit;
+            main.textContent = usedStr + '\u00a0/\u00a0' + totStr + '\u00a0' + unit;
             wrap.appendChild(main);
 
             const sub = document.createElement('div');

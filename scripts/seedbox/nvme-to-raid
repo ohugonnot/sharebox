@@ -149,10 +149,12 @@ def migrate(t):
 
     try:
         # 1. rsync vers tmp (pas vers dst_final qui est encore le symlink NVMe)
+        # ionice -c3 (idle) + --bwlimit=150000 KB/s pour ne pas saturer le NVMe
+        # et déclencher le bug SocketManager libtorrent 0.16.8 (FDS > 2500 → crash)
         if is_multi:
-            cmd = ['rsync', '-a', '--delete', str(src) + '/', str(dst_tmp) + '/']
+            cmd = ['ionice', '-c3', 'rsync', '-a', '--bwlimit=150000', '--delete', str(src) + '/', str(dst_tmp) + '/']
         else:
-            cmd = ['rsync', '-a', str(src), str(dst_tmp)]
+            cmd = ['ionice', '-c3', 'rsync', '-a', '--bwlimit=150000', str(src), str(dst_tmp)]
 
         log(f'  rsync  {"multi" if is_multi else "single"} → {dst_tmp.name}')
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -334,4 +336,13 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    lock = Path('/tmp/nvme-to-raid.lock')
+    if lock.exists():
+        pid = lock.read_text().strip()
+        if Path(f'/proc/{pid}').exists():
+            sys.exit(0)  # migration déjà en cours
+    lock.write_text(str(os.getpid()))
+    try:
+        main()
+    finally:
+        lock.unlink(missing_ok=True)

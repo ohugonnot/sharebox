@@ -6,6 +6,7 @@ Lancé par cron → /var/www/sharebox/data/logs/rtorrent-stats.log
 """
 import sys
 import os
+import sqlite3
 import subprocess
 import json
 import xml.etree.ElementTree as ET
@@ -17,12 +18,14 @@ from rtorrent_scgi import scgi_call, download_list, multicall
 LOG_FILE   = '/var/www/sharebox/data/logs/rtorrent-stats.log'
 CRASH_LOG  = '/var/www/sharebox/data/logs/rtorrent-crashes.log'
 STATE_FILE = '/var/www/sharebox/data/rtorrent-snapshot-state.json'
+STATS_DB   = '/var/www/sharebox/data/torrent-stats.db'
 NVME_MOUNT = '/mnt/nvme-seedbox'
 RT_USER    = 'ropixv2'
 RT_SERVICE = 'rtorrent@ropixv2.service'
 
 FIELDS = ['d.name', 'd.up.rate', 'd.peers_connected', 'd.ratio',
-          'd.is_active', 'd.complete', 'd.directory']
+          'd.is_active', 'd.complete', 'd.directory',
+          'd.up.total', 'd.size_bytes', 'd.timestamp.finished']
 N = len(FIELDS)
 
 
@@ -43,22 +46,30 @@ def get_torrent_stats():
             base = i * N
             if base + N - 1 >= len(flat):
                 break
-            name      = flat[base]
-            up_bytes  = int(flat[base + 1] or 0)
-            peers     = int(flat[base + 2] or 0)
-            ratio_raw = int(flat[base + 3] or 0)
-            active    = flat[base + 4] == '1'
-            complete  = flat[base + 5] == '1'
-            directory = flat[base + 6] or ''
+            name        = flat[base]
+            up_bytes    = int(flat[base + 1] or 0)
+            peers       = int(flat[base + 2] or 0)
+            ratio_raw   = int(flat[base + 3] or 0)
+            active      = flat[base + 4] == '1'
+            complete    = flat[base + 5] == '1'
+            directory   = flat[base + 6] or ''
+            up_total    = int(flat[base + 7] or 0)
+            size_bytes  = int(flat[base + 8] or 0)
+            finished_ts = int(flat[base + 9] or 0)
             torrents.append({
-                'name':     name[:50],
-                'up_kbps':  up_bytes // 1024,
-                'peers':    peers,
-                'ratio':    ratio_raw / 1000.0,
-                'seeding':  active and complete,
-                'active':   active,
-                'complete': complete,
-                'location': 'NVME' if NVME_MOUNT in directory else 'RAID',
+                'hash':        h,
+                'name':        name[:50],
+                'up_kbps':     up_bytes // 1024,
+                'up_rate':     up_bytes,
+                'peers':       peers,
+                'ratio':       ratio_raw / 1000.0,
+                'seeding':     active and complete,
+                'active':      active,
+                'complete':    complete,
+                'location':    'nvme' if NVME_MOUNT in directory else 'raid',
+                'up_total':    up_total,
+                'size_bytes':  size_bytes,
+                'finished_ts': finished_ts,
             })
         return torrents
     except Exception:
@@ -138,6 +149,83 @@ def append_log(path, line):
         f.write(line + '\n')
 
 
+def init_stats_db(db):
+    db.executescript("""
+        CREATE TABLE IF NOT EXISTS torrent_meta (
+            hash        TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            size_bytes  INTEGER NOT NULL DEFAULT 0,
+            location    TEXT DEFAULT 'unknown',
+            finished_ts INTEGER DEFAULT 0,
+            up_last     INTEGER NOT NULL DEFAULT 0,
+            ts_last     INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS torrent_hourly (
+            hash      TEXT NOT NULL,
+            hour_ts   INTEGER NOT NULL,
+            up_bytes  INTEGER NOT NULL DEFAULT 0,
+            rate_bps  REAL DEFAULT 0,
+            peers_avg REAL DEFAULT 0,
+            location  TEXT DEFAULT 'unknown',
+            PRIMARY KEY (hash, hour_ts)
+        );
+        CREATE INDEX IF NOT EXISTS idx_hourly_hash ON torrent_hourly(hash);
+        CREATE INDEX IF NOT EXISTS idx_hourly_ts   ON torrent_hourly(hour_ts);
+    """)
+
+
+def update_stats_db(torrents, now):
+    hour_ts = (now // 3600) * 3600
+    db = sqlite3.connect(STATS_DB)
+    db.execute('PRAGMA journal_mode=WAL')
+    db.execute('PRAGMA synchronous=NORMAL')
+    init_stats_db(db)
+
+    for t in torrents:
+        if not t['complete']:
+            continue
+        hash_ = t['hash']
+        row = db.execute(
+            'SELECT up_last FROM torrent_meta WHERE hash=?', (hash_,)
+        ).fetchone()
+
+        delta_up = 0
+        if row is not None:
+            delta = t['up_total'] - row[0]
+            if delta >= 0:
+                delta_up = delta
+
+        db.execute("""
+            INSERT INTO torrent_meta(hash, name, size_bytes, location, finished_ts, up_last, ts_last)
+            VALUES (?,?,?,?,?,?,?)
+            ON CONFLICT(hash) DO UPDATE SET
+                name=excluded.name, size_bytes=excluded.size_bytes,
+                location=excluded.location, finished_ts=excluded.finished_ts,
+                up_last=excluded.up_last, ts_last=excluded.ts_last
+        """, (hash_, t['name'], t['size_bytes'], t['location'],
+              t['finished_ts'], t['up_total'], now))
+
+        if delta_up > 0:
+            db.execute("""
+                INSERT INTO torrent_hourly(hash, hour_ts, up_bytes, rate_bps, peers_avg, location)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(hash, hour_ts) DO UPDATE SET
+                    up_bytes  = up_bytes + excluded.up_bytes,
+                    rate_bps  = (rate_bps + excluded.rate_bps) / 2.0,
+                    peers_avg = (peers_avg + excluded.peers_avg) / 2.0,
+                    location  = excluded.location
+            """, (hash_, hour_ts, delta_up, t['up_rate'], t['peers'], t['location']))
+
+    cutoff = now - 90 * 86400
+    db.execute('DELETE FROM torrent_hourly WHERE hour_ts < ?', (cutoff,))
+    db.commit()
+    db.close()
+    try:
+        os.chmod(STATS_DB, 0o644)
+    except OSError:
+        pass
+
+
 def main():
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     state = load_state()
@@ -180,8 +268,14 @@ def main():
     for t in top:
         if t['up_kbps'] > 0:
             append_log(LOG_FILE,
-                f"{now_str} | TOP  [{t['location']}] {t['name']:<40} "
+                f"{now_str} | TOP  [{t['location'].upper()}] {t['name']:<40} "
                 f"up={t['up_kbps']}KB/s peers={t['peers']} ratio={t['ratio']:.2f}")
+
+    # ── Stats long-terme (torrent-stats.db) ──────────────────────────────────────
+    try:
+        update_stats_db(torrents, int(datetime.now().timestamp()))
+    except Exception as e:
+        pass  # ne jamais faire planter le snapshot à cause des stats
 
     # ── Mise à jour état ─────────────────────────────────────────────────────────
     save_state({

@@ -22,7 +22,7 @@ throttle.max_peers.seed.set = 500
 throttle.min_peers.seed.set = 20
 throttle.min_peers.normal.set = 40
 
-network.max_open_files.set = 2048
+network.max_open_files.set = 4096
 network.max_open_sockets.set = 1500
 network.http.max_open.set = 60
 network.http.max_host_connections.set = 4
@@ -38,7 +38,7 @@ pieces.preload.type.set = 1
 pieces.preload.min_size.set = 262144
 pieces.preload.min_rate.set = 51200
 
-dht.mode.set = auto
+dht.mode.set = on
 dht.port.set = {{PEER_PORT}}
 protocol.pex.set = yes
 protocol.encryption.set = allow_incoming,enable_retry,prefer_plaintext
