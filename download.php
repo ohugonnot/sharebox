@@ -375,8 +375,10 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
     $folders = [];
     $files = [];
 
+    $hiddenDirs = defined('HIDDEN_DIRS') ? HIDDEN_DIRS : [];
     foreach ($items as $item) {
         if ($item === '.' || $item === '..' || $item[0] === '.') continue;
+        if (in_array($item, $hiddenDirs, true)) continue;
         $fullItem = $dirPath . '/' . $item;
         if (is_dir($fullItem)) {
             $folders[] = ['name' => $item, 'has_video' => dir_has_video($fullItem)];

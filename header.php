@@ -25,12 +25,14 @@ $header_back     ??= false;
         <?php endif; ?>
         <?php if ($header_back): ?>
             <a href="/share/" style="color:var(--text-secondary);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm)">← Fichiers</a>
-        <?php else: ?>
+        <?php elseif (($_SESSION['sharebox_role'] ?? '') === 'admin'): ?>
             <a href="/share/admin.php" style="color:var(--accent);font-size:.8rem;text-decoration:none;padding:.3rem .6rem;border:1px solid rgba(240,160,48,.2);border-radius:var(--radius-sm)">Admin</a>
         <?php endif; ?>
         <span style="display:inline-flex;align-items:center;gap:.5rem;padding:.3rem .6rem;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:.8rem">
             <span style="color:var(--text-secondary)"><?= htmlspecialchars(get_current_user_name() ?? '') ?></span>
-            <a href="/share/logout.php" style="color:var(--text-muted);text-decoration:none">Logout</a>
+            <?php if (!defined('TRUSTED_AUTH_HEADER') || TRUSTED_AUTH_HEADER === ''): ?>
+                <a href="/share/logout.php" style="color:var(--text-muted);text-decoration:none">Logout</a>
+            <?php endif; ?>
         </span>
     </div>
 </header>

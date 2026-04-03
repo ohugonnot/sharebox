@@ -151,17 +151,17 @@ function afficher_liens(): void {
 <div class="app">
     <?php include __DIR__ . '/header.php'; ?>
 
-    <?php include __DIR__ . '/dashboard.php'; ?>
+    <?php if (($_SESSION['sharebox_role'] ?? '') === 'admin'): ?>
+        <?php include __DIR__ . '/dashboard.php'; ?>
+        <section class="section">
+            <div class="section-header">Liens actifs</div>
+            <div id="links-container">
+                <?php afficher_liens(); ?>
+            </div>
+        </section>
+    <?php endif; ?>
 
     <section class="section">
-        <div class="section-header">Liens actifs</div>
-        <div id="links-container">
-            <?php afficher_liens(); ?>
-        </div>
-    </section>
-
-    <section class="section">
-        <div class="section-header">Parcourir les fichiers</div>
         <div id="breadcrumb" class="breadcrumb"></div>
         <div class="panel">
             <div class="file-filter-wrap">

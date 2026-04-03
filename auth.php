@@ -6,26 +6,82 @@
  */
 
 require_once __DIR__ . '/db.php';
+require_once __DIR__ . '/functions.php';
 
 function require_auth(): void {
     if (session_status() === PHP_SESSION_NONE) {
         session_start();
     }
+
+    // ── Trusted header auth (Apache Digest, reverse proxy, etc.) ────────
+    if (defined('TRUSTED_AUTH_HEADER') && TRUSTED_AUTH_HEADER !== '') {
+        $remoteUser = $_SERVER[TRUSTED_AUTH_HEADER] ?? '';
+        if ($remoteUser !== '') {
+            // Sanitize username
+            $remoteUser = preg_replace('/[^a-z0-9_-]/i', '', $remoteUser);
+
+            // If session already set for this user, nothing to do
+            if (($_SESSION['sharebox_user'] ?? '') === $remoteUser) {
+                return;
+            }
+
+            // Auto-provision user in DB if not exists
+            $db = get_db();
+            $stmt = $db->prepare("SELECT * FROM users WHERE username = ?");
+            $stmt->execute([$remoteUser]);
+            $user = $stmt->fetch();
+
+            $isAdmin = defined('ADMIN_USER') && $remoteUser === ADMIN_USER;
+
+            if (!$user) {
+                // Auto-create user — admin if ADMIN_USER matches, else regular user
+                $role = $isAdmin ? 'admin' : 'user';
+                $db->prepare("INSERT INTO users (username, password_hash, role, private) VALUES (?, ?, ?, 0)")
+                   ->execute([$remoteUser, password_hash(bin2hex(random_bytes(16)), PASSWORD_BCRYPT), $role]);
+                $stmt = $db->prepare("SELECT * FROM users WHERE username = ?");
+                $stmt->execute([$remoteUser]);
+                $user = $stmt->fetch();
+            }
+
+            // Create session
+            session_regenerate_id(true);
+            $_SESSION['sharebox_user'] = $user['username'];
+            $_SESSION['sharebox_role'] = $user['role'];
+            $_SESSION['sharebox_private'] = (int)($user['private'] ?? 0);
+            $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+
+            log_activity('login_trusted', $user['username'], $_SERVER['REMOTE_ADDR'] ?? null,
+                        'header=' . TRUSTED_AUTH_HEADER);
+            return;
+        }
+    }
+
+    // ── Standard session check ──────────────────────────────────────────
     if (empty($_SESSION['sharebox_user'])) {
         header('Location: /share/login.php');
         exit;
     }
 }
 
-function get_current_user_name(): ?string {
-    return $_SESSION['sharebox_user'] ?? null;
-}
-
 function is_logged_in(): bool {
     if (session_status() === PHP_SESSION_NONE) {
         session_start();
     }
+
+    // Trusted header: auto-provision session if not set
+    if (defined('TRUSTED_AUTH_HEADER') && TRUSTED_AUTH_HEADER !== '') {
+        $remoteUser = $_SERVER[TRUSTED_AUTH_HEADER] ?? '';
+        if ($remoteUser !== '' && empty($_SESSION['sharebox_user'])) {
+            require_auth(); // This will create the session
+            return true;
+        }
+    }
+
     return !empty($_SESSION['sharebox_user']);
+}
+
+function get_current_user_name(): ?string {
+    return $_SESSION['sharebox_user'] ?? null;
 }
 
 /**
