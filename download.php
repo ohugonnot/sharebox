@@ -226,9 +226,11 @@ if (is_file($resolvedPath)) {
     // Safari refuse le streaming fMP4 progressif (broken pipe) — HLS est le seul format
     // que Safari iOS supporte nativement pour le streaming adaptatif.
     if (isset($_GET['stream']) && $_GET['stream'] === 'hls') {
-        $hlsQuality  = isset($_GET['quality']) ? (int)$_GET['quality'] : 720;
+        $hlsQuality  = validateQuality(isset($_GET['quality']) ? (int)$_GET['quality'] : 720);
         $hlsBurnSub  = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
-        $hlsKey      = md5($resolvedPath . '|' . $hlsQuality . '|' . $audioTrack . '|' . $hlsBurnSub . '|' . $startSec);
+        $hlsFilterMode = validateFilterMode(isset($_GET['filter']) ? $_GET['filter'] : 'none');
+        if ($hlsFilterMode === 'none' && isHDRFile($db, $resolvedPath)) $hlsFilterMode = 'hdr';
+        $hlsKey      = md5($resolvedPath . '|' . $hlsQuality . '|' . $audioTrack . '|' . $hlsBurnSub . '|' . $startSec . '|' . $hlsFilterMode);
         $hlsBaseDir  = (defined('STREAM_LOG') && STREAM_LOG ? dirname(STREAM_LOG) : sys_get_temp_dir()) . '/hls_cache';
         $hlsPidFile  = $hlsBaseDir . '/hls_' . $hlsKey . '/ffmpeg.pid';
         write_stream_info([
@@ -1805,10 +1807,10 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
                 <div class="seek-tooltip" id="seek-tooltip"></div>
             </div>
             <div class="ctrl-row" id="ctrl-row" style="display:none">
-                <div class="ctrl-spacer"></div>
                 <button class="ctrl-play" id="play-btn" title="Lecture / Pause">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
                 </button>
+                <div class="ctrl-spacer"></div>
                 <div class="vol-wrap">
                     <button class="ctrl-mute" id="mute-btn" title="Muet / Son">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>

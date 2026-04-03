@@ -21,7 +21,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
     // Content-Length estimé : Safari coupe la connexion sans ça (pas de progressive download)
     // Chrome/Firefox n'en ont pas besoin et un CL trop grand cause un stall en fin de stream
     // (le navigateur attend des octets qui ne viendront jamais après la fin du transcode)
-    $estimatedBitrates = [480 => 1800000, 576 => 2500000, 720 => 4000000, 1080 => 8000000];
+    $estimatedBitrates = [480 => 2500000, 576 => 3500000, 720 => 5500000, 1080 => 10000000];
     $estimatedBps = ($estimatedBitrates[$quality] ?? 4000000) + 192000;
     $probeDuration = 0;
     try {
@@ -43,7 +43,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
     $fc = buildFilterGraph($quality, $audioTrack, $burnSub, $filterMode);
     $cmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
         . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
-        . buildFfmpegCodecArgs(25, $filterMode === 'hdr') . buildFmp4MuxerArgs()
+        . buildFfmpegCodecArgs(250, $filterMode === 'hdr', false) . buildFmp4MuxerArgs()
         . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
     [$slotFp, $queued] = acquireStreamSlot();
     if ($queued) { stream_log('TRANSCODE queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }

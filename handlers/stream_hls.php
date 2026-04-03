@@ -47,12 +47,18 @@ if ($mime && str_starts_with($mime, 'video/')) {
 
     // Lancer ffmpeg HLS si pas déjà actif
     $needStart = !is_dir($hlsDir);
-    // Si le dossier existe mais ffmpeg est mort, relancer
-    if (!$needStart && is_file($pidFile)) {
-        $pid = (int)file_get_contents($pidFile);
-        if ($pid > 0 && !file_exists('/proc/' . $pid)) {
-            array_map('unlink', glob($hlsDir . '/*'));
+    if (!$needStart) {
+        if (!is_file($pidFile)) {
+            // Dossier zombie (pas de PID file) — nettoyer et relancer
+            array_map('unlink', glob($hlsDir . '/{*,.*}', GLOB_BRACE));
             $needStart = true;
+        } else {
+            // Si le dossier existe mais ffmpeg est mort, relancer
+            $pid = (int)file_get_contents($pidFile);
+            if ($pid > 0 && !file_exists('/proc/' . $pid)) {
+                array_map('unlink', glob($hlsDir . '/*'));
+                $needStart = true;
+            }
         }
     }
 
@@ -72,7 +78,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
 
         $ffmpegCmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
             . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
-            . buildFfmpegCodecArgs(50, $filterMode === 'hdr')
+            . buildFfmpegCodecArgs(96, $filterMode === 'hdr', true)
             . ' -f hls -hls_time 4 -hls_list_size 0 -hls_playlist_type event'
             . ' -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
             . ' -hls_flags append_list'
@@ -127,7 +133,9 @@ if ($mime && str_starts_with($mime, 'video/')) {
     $m3u8Content = file_get_contents($m3u8);
     $baseStreamUrl = '/dl/' . $token . '?' . ($subPath ? 'p=' . rawurlencode($subPath) . '&' : '')
         . 'stream=hls&audio=' . $audioTrack . '&quality=' . $quality
-        . ($burnSub >= 0 ? '&burnSub=' . $burnSub : '');
+        . ($burnSub >= 0 ? '&burnSub=' . $burnSub : '')
+        . ($startSec > 0 ? '&start=' . $startSec : '')
+        . ($filterMode !== 'none' ? '&filter=' . rawurlencode($filterMode) : '');
     $m3u8Rewritten = preg_replace('/^(seg\d+\.ts)$/m', $baseStreamUrl . '&seg=$1', $m3u8Content);
 
     header('Content-Type: application/vnd.apple.mpegurl');

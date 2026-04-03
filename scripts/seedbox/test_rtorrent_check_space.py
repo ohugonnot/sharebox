@@ -3,7 +3,7 @@
 Tests unitaires pour rtorrent-check-space.
 
 Lance avec : python3 test_rtorrent_check_space.py
-Aucune connexion rtorrent necessaire — scgi_call est mocke.
+Aucune connexion rtorrent necessaire.
 Le systeme de fichiers tmp est reel pour verifier les symlinks.
 """
 
@@ -33,22 +33,7 @@ def _load_check_space():
 _mod = _load_check_space()
 
 HASH = 'AABBCCDD1122334455667788AABBCCDD11223344'
-
-
-def _xml_str(value):
-    return (
-        '<?xml version="1.0"?><methodResponse><params><param>'
-        f'<value><string>{value}</string></value>'
-        '</param></params></methodResponse>'
-    )
-
-
-def _xml_i8(value):
-    return (
-        '<?xml version="1.0"?><methodResponse><params><param>'
-        f'<value><i8>{value}</i8></value>'
-        '</param></params></methodResponse>'
-    )
+GB = 1024 ** 3
 
 
 class TestCheckSpace(unittest.TestCase):
@@ -63,125 +48,97 @@ class TestCheckSpace(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
 
-    def _run(self, torrent_name, size_bytes, nvme_free_bytes, margin_gb=50):
-        """Lance check_space avec scgi_call mocke et disk_usage mocke."""
-        responses = {
-            'd.size_bytes': _xml_i8(size_bytes),
-            'd.name':       _xml_str(torrent_name),
-        }
-
-        def fake_scgi_call(xml):
-            for method, resp in responses.items():
-                if f'<methodName>{method}</methodName>' in xml:
-                    return resp
-            return '<methodResponse/>'
-
-        captured_scgi = []
-        def fake_scgi_simple(method, *args):
-            captured_scgi.append((method,) + args)
-            return '<methodResponse/>'
-
+    def _run(self, name, size_bytes, nvme_free_bytes, is_multi=0, margin_gb=50):
         usage = types.SimpleNamespace(free=nvme_free_bytes, used=0, total=nvme_free_bytes)
+        with patch('shutil.disk_usage', return_value=usage):
+            result = _mod.check_space(HASH, name, size_bytes, is_multi,
+                                      self.nvme, self.raid, margin_gb)
+        return result
 
-        with patch.object(_mod, 'scgi_call', side_effect=fake_scgi_call), \
-             patch.object(_mod, 'scgi_simple', side_effect=fake_scgi_simple), \
-             patch('shutil.disk_usage', return_value=usage):
-            result = _mod.check_space(HASH, self.nvme, self.raid, margin_gb)
+    # ── Cas NVMe (assez de place) ────────────────────────────────────────────
 
-        return result, captured_scgi
+    def test_nvme_returns_nvme_path(self):
+        """Assez de place : retourne le chemin NVMe."""
+        result = self._run('Mon.Film.2023.1080p', 10 * GB, 500 * GB)
+        self.assertEqual(result, self.nvme)
 
-    # ── Cas NVMe ──────────────────────────────────────────────────────────────
-
-    def test_nvme_symlink_created(self):
-        """Assez de place sur NVMe : symlink RAID/name -> NVMe/name cree."""
+    def test_nvme_symlink_raid_to_nvme(self):
+        """Assez de place : symlink RAID/name -> NVMe/name."""
         name = 'Mon.Film.2023.1080p'
-        free = 500 * 1024**3   # 500 GB libre
-        size = 10  * 1024**3   # 10 GB torrent
+        self._run(name, 10 * GB, 500 * GB)
 
-        result, scgi = self._run(name, size, free, margin_gb=50)
-
-        self.assertEqual(result, 'nvme')
         symlink = Path(self.raid) / name
         self.assertTrue(symlink.is_symlink())
         self.assertEqual(symlink.readlink(), Path(self.nvme) / name)
-        # Aucun appel SCGI (pas de redirection vers RAID)
-        self.assertEqual(scgi, [])
 
     def test_nvme_symlink_not_duplicated(self):
-        """Symlink deja existant : pas recree, pas d'erreur."""
+        """Symlink deja existant : pas recree."""
         name = 'Serie.S01'
         symlink = Path(self.raid) / name
         symlink.symlink_to(Path(self.nvme) / name)
 
-        result, _ = self._run(name, 1 * 1024**3, 500 * 1024**3)
+        result = self._run(name, 1 * GB, 500 * GB)
 
-        self.assertEqual(result, 'nvme')
-        self.assertTrue(symlink.is_symlink())  # toujours la, pas ecrase
+        self.assertEqual(result, self.nvme)
+        self.assertTrue(symlink.is_symlink())
 
     def test_nvme_empty_name_no_symlink(self):
-        """Nom vide (metadata pas encore chargee) : pas de symlink, pas d'erreur."""
-        result, scgi = self._run('', 10 * 1024**3, 500 * 1024**3)
-
-        self.assertEqual(result, 'nvme')
-        # Aucun symlink cree dans raid
+        """Nom vide : retourne NVMe, pas de symlink."""
+        result = self._run('', 10 * GB, 500 * GB)
+        self.assertEqual(result, self.nvme)
         self.assertEqual(os.listdir(self.raid), [])
-        self.assertEqual(scgi, [])
 
-    # ── Cas RAID ──────────────────────────────────────────────────────────────
+    def test_nvme_exact_limit(self):
+        """Exactement a la limite : NVMe accepte."""
+        result = self._run('Film.Limite', 50 * GB, 50 * GB + 50 * GB, margin_gb=50)
+        self.assertEqual(result, self.nvme)
 
-    def test_raid_when_nvme_full(self):
-        """Pas assez de place NVMe : d.directory.set + d.save_full_session appeles."""
+    # ── Cas RAID (pas assez de place) ────────────────────────────────────────
+
+    def test_raid_returns_raid_path(self):
+        """Pas assez de place : retourne le chemin RAID."""
+        result = self._run('Gros.Film.4K', 80 * GB, 100 * GB, margin_gb=50)
+        self.assertEqual(result, self.raid)
+
+    def test_raid_no_symlink_on_nvme(self):
+        """Pas assez de place : aucun symlink cree sur NVMe."""
         name = 'Gros.Film.4K'
-        free = 100 * 1024**3   # 100 GB libre
-        size = 80  * 1024**3   # 80 GB + 50 GB marge = 130 GB > 100 GB
+        self._run(name, 80 * GB, 100 * GB, margin_gb=50)
+        self.assertFalse((Path(self.nvme) / name).is_symlink())
 
-        result, scgi = self._run(name, size, free, margin_gb=50)
-
-        self.assertEqual(result, 'raid')
-        methods = [s[0] for s in scgi]
-        self.assertIn('d.directory.set', methods)
-        self.assertIn('d.save_full_session', methods)
-        # d.directory.set pointe vers RAID
-        dir_set = next(s for s in scgi if s[0] == 'd.directory.set')
-        self.assertEqual(dir_set[2], self.raid)
-        # Aucun symlink cree
-        self.assertEqual(os.listdir(self.raid), [])
-
-    def test_raid_exact_limit(self):
-        """Exactement a la limite (libre == besoin) : NVMe accepte."""
-        size = 50 * 1024**3
-        free = 50 * 1024**3 + 50 * 1024**3  # size + margin exactement
-
-        result, _ = self._run('Film.Limite', size, free, margin_gb=50)
-        self.assertEqual(result, 'nvme')
+    def test_raid_no_symlink_on_raid(self):
+        """Pas assez de place : aucun symlink cree sur RAID."""
+        name = 'Gros.Film.4K'
+        self._run(name, 80 * GB, 100 * GB, margin_gb=50)
+        self.assertFalse((Path(self.raid) / name).exists())
 
     def test_raid_one_byte_short(self):
-        """Un octet manquant par rapport a la marge : RAID."""
-        size = 50 * 1024**3
-        free = 50 * 1024**3 + 50 * 1024**3 - 1  # un octet de moins
+        """Un octet manquant : RAID."""
+        result = self._run('Film.Limite', 50 * GB, 50 * GB + 50 * GB - 1, margin_gb=50)
+        self.assertEqual(result, self.raid)
 
-        result, _ = self._run('Film.Limite', size, free, margin_gb=50)
-        self.assertEqual(result, 'raid')
+    def test_raid_empty_name(self):
+        """Nom vide + pas de place : retourne RAID."""
+        result = self._run('', 80 * GB, 100 * GB)
+        self.assertEqual(result, self.raid)
 
     # ── Robustesse ────────────────────────────────────────────────────────────
 
-    def test_no_unicode_in_output(self):
-        """Aucun caractere non-ASCII dans la sortie (evite crash latin-1 rtorrent)."""
+    def test_no_unicode_in_stderr_nvme(self):
+        """Aucun caractere non-ASCII dans les logs NVMe."""
         import io
         buf = io.StringIO()
-        with patch('sys.stdout', buf):
-            self._run('Film.Test', 10 * 1024**3, 500 * 1024**3)
-        output = buf.getvalue()
-        self.assertTrue(output.isascii(), f'Caractere non-ASCII dans : {output!r}')
+        with patch('sys.stderr', buf):
+            self._run('Film.Test', 10 * GB, 500 * GB)
+        self.assertTrue(buf.getvalue().isascii())
 
-    def test_no_unicode_in_output_raid(self):
-        """Meme verification pour la branche RAID."""
+    def test_no_unicode_in_stderr_raid(self):
+        """Aucun caractere non-ASCII dans les logs RAID."""
         import io
         buf = io.StringIO()
-        with patch('sys.stdout', buf):
-            self._run('Film.Test', 80 * 1024**3, 100 * 1024**3, margin_gb=50)
-        output = buf.getvalue()
-        self.assertTrue(output.isascii(), f'Caractere non-ASCII dans : {output!r}')
+        with patch('sys.stderr', buf):
+            self._run('Film.Test', 80 * GB, 100 * GB, margin_gb=50)
+        self.assertTrue(buf.getvalue().isascii())
 
 
 if __name__ == '__main__':

@@ -20,16 +20,17 @@ const AUTH_LOCKOUT_SLEEP      = 3;              // sleep seconds on lockout
 const AUTH_FAIL_SLEEP         = 1;              // sleep seconds per failed attempt
 
 // FFmpeg encoding defaults
-const FFMPEG_CRF              = 23;             // x264 quality (lower = better, 18-28 typical)
-const FFMPEG_PRESET           = 'ultrafast';    // x264 preset (ultrafast→veryslow)
-const FFMPEG_THREADS          = 10;             // x264 thread count (ajusté pour 48 cores, scheduler répartit auto)
+const FFMPEG_CRF              = 20;             // x264 quality (lower = better, 18-28 typical)
+const FFMPEG_PRESET           = 'medium';       // x264 preset transcode progressif (temps réel 720p/1080p@24fps avec 12 threads)
+const FFMPEG_PRESET_HLS       = 'slow';         // x264 preset HLS (async, pré-généré en arrière-plan)
+const FFMPEG_THREADS          = 12;             // x264 thread count (4 streams × 12 = 48 cores)
 const FFMPEG_AUDIO_BITRATE    = '192k';         // AAC audio bitrate
 const FFMPEG_AUDIO_CHANNELS   = 2;              // stereo downmix
-const FFMPEG_GOP_SIZE_DEFAULT = 25;             // keyframe interval (frames)
+const FFMPEG_GOP_SIZE_DEFAULT = 250;            // keyframe interval transcode (10s@25fps)
 
 // FFmpeg HDR tonemapping — CPU-intensif, nécessite plus de threads
-const FFMPEG_HDR_THREADS      = 30;             // tonemapping float32 très gourmand (48 cores disponibles)
-const FFMPEG_HDR_CRF          = 26;             // CRF plus élevé = plus rapide (trade-off qualité/perf)
+const FFMPEG_HDR_THREADS      = 24;             // tonemapping float32 gourmand (marge pour OS et autres streams)
+const FFMPEG_HDR_CRF          = 20;             // aligné avec SDR (le tonemapping domine le CPU, pas l'encodage)
 
 /**
  * Acquire a stream slot using flock — limits concurrent ffmpeg processes.
@@ -366,7 +367,7 @@ function tmdb_fetch(string $url, $ctx, int $maxRetries = 2): ?array {
             if ($status === 429) {
                 // Rate limited — check Retry-After or wait 2s
                 $wait = 2;
-                foreach ($http_response_header ?? [] as $h) {
+                foreach ($http_response_header as $h) {
                     if (stripos($h, 'retry-after:') === 0) {
                         $wait = min(5, max(1, (int)trim(substr($h, 12))));
                     }
@@ -597,14 +598,20 @@ function buildFfmpegInputArgs(string $filePath, string $seekBefore = ''): string
 /**
  * Construit les arguments encodeur x264+AAC communs.
  */
-function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHDR = false): string {
+function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHDR = false, bool $isHLS = false): string {
     $threads = $isHDR ? FFMPEG_HDR_THREADS : FFMPEG_THREADS;
     $crf = $isHDR ? FFMPEG_HDR_CRF : FFMPEG_CRF;
-    return ' -c:v libx264 -preset ' . FFMPEG_PRESET . ' -tune zerolatency -crf ' . $crf
-        . ' -profile:v main -level 4.1'
+    $preset = $isHLS ? FFMPEG_PRESET_HLS : FFMPEG_PRESET;
+    $args = ' -c:v libx264 -preset ' . $preset . ' -tune film -crf ' . $crf
+        . ' -profile:v high -level 4.1'
+        . ' -bf 3 -refs 4'
         . ' -g ' . $gopSize . ' -threads ' . $threads
         . ' -colorspace bt709 -color_primaries bt709 -color_trc bt709'
         . ' -c:a aac -ac ' . FFMPEG_AUDIO_CHANNELS . ' -b:a ' . FFMPEG_AUDIO_BITRATE . ' -shortest';
+    if ($isHLS) {
+        $args .= ' -force_key_frames "expr:gte(t,n_forced*4)"';
+    }
+    return $args;
 }
 
 /**

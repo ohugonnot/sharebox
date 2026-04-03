@@ -268,10 +268,14 @@ function guess_volume_label(string $path, string $mountsPath = '/proc/mounts'): 
 function detect_storage_volumes(string $mountsPath = '/proc/mounts'): array
 {
     $candidates = [];
-    if (defined('BASE_PATH')  && BASE_PATH  !== '')  $candidates[] = BASE_PATH;
-    if (defined('MEDIA_ROOT') && MEDIA_ROOT !== '' && is_dir(MEDIA_ROOT)) $candidates[] = MEDIA_ROOT;
-    if (defined('NVME_PATH')  && NVME_PATH  !== '' && is_dir(NVME_PATH))  $candidates[] = NVME_PATH;
-    if (defined('DB_PATH')    && DB_PATH    !== '')  $candidates[] = dirname(DB_PATH);
+    $bp = defined('BASE_PATH')  ? BASE_PATH  : '';
+    $mr = defined('MEDIA_ROOT') ? MEDIA_ROOT : '';
+    $np = defined('NVME_PATH')  ? NVME_PATH  : '';
+    $dp = defined('DB_PATH')    ? DB_PATH    : '';
+    if ($bp !== '')                       $candidates[] = $bp;
+    if ($mr !== '' && is_dir($mr))        $candidates[] = $mr;
+    if ($np !== '' && is_dir($np))        $candidates[] = $np;
+    if ($dp !== '')                       $candidates[] = dirname($dp);
 
     $seen    = []; // device-id → true
     $volumes = [];
