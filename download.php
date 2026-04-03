@@ -466,8 +466,6 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .search-box { padding:.3rem .65rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.03); color:var(--text-primary); font-family:var(--font-sans); font-size:.8rem; outline:none; transition:border-color .15s; width:175px; }
 .search-box:focus { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
 .search-box::placeholder { color:var(--text-muted); }
-.search-all-label { display:inline-flex; align-items:center; gap:.3rem; font-size:.78rem; color:var(--text-muted); cursor:pointer; white-space:nowrap; user-select:none; }
-.search-all-label input { accent-color:var(--accent); cursor:pointer; }
 .btn-search-go { display:inline-flex; align-items:center; gap:.3rem; padding:.28rem .65rem; border:none; border-radius:var(--radius-sm); background:var(--accent); color:var(--bg-deep); font-family:var(--font-sans); font-size:.78rem; font-weight:700; cursor:pointer; transition:background .15s; white-space:nowrap; }
 .btn-search-go:hover { background:#ffc060; }
 .btn-search-go.hidden { display:none; }
@@ -602,14 +600,15 @@ HTML;
         if ($totalItems >= 10) {
             $baseUrlJs = htmlspecialchars(json_encode($baseUrl), ENT_QUOTES);
             $subPathJs = htmlspecialchars(json_encode($subPath), ENT_QUOTES);
+            echo '<div style="position:relative;display:inline-flex;align-items:center">';
             echo '<input class="search-box" id="main-search" type="text" placeholder="Rechercher..." '
-               . 'oninput="document.getElementById(\'cb-all\').checked?null:filtrer(this.value)" '
-               . 'onkeydown="if(event.key===\'Enter\'&&document.getElementById(\'cb-all\').checked){event.preventDefault();lancerRechercheGlobale(BASE_URL,SUB_PATH)}">';
-            echo '<label class="search-all-label" title="Chercher dans tous les sous-dossiers">'
-               . '<input type="checkbox" id="cb-all" onchange="toggleSearchMode()"> Tout</label>';
-            echo '<button class="btn-search-go hidden" id="search-go-btn" onclick="lancerRechercheGlobale(BASE_URL,SUB_PATH)">'
+               . 'oninput="filtrer(this.value);document.getElementById(\'search-go-btn\').classList.toggle(\'hidden\',!this.value.trim())" '
+               . 'onkeydown="if(event.key===\'Enter\'&&this.value.trim()){event.preventDefault();lancerRechercheGlobale(BASE_URL,SUB_PATH)}">';
+            echo '<button class="btn-search-go hidden" id="search-go-btn" onclick="lancerRechercheGlobale(BASE_URL,SUB_PATH)" '
+               . 'title="Rechercher dans tous les sous-dossiers" style="margin-left:.3rem">'
                . '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
-               . ' Rechercher</button>';
+               . ' Tout</button>';
+            echo '</div>';
         }
 
         // Toggle grille/liste (si dossiers présents)
@@ -951,14 +950,6 @@ function lancerRechercheGlobale(baseUrl, subPath) {
     var url = baseUrl + '?q=' + encodeURIComponent(q);
     if (subPath) url += '&p=' + encodeURIComponent(subPath);
     window.location = url;
-}
-function toggleSearchMode() {
-    var checked = document.getElementById('cb-all').checked;
-    var btn = document.getElementById('search-go-btn');
-    var input = document.getElementById('main-search');
-    btn.classList.toggle('hidden', !checked);
-    input.placeholder = checked ? 'Rechercher dans tout…' : 'Rechercher...';
-    if (!checked) filtrer(input.value);
 }
 function filtrer(q) {
     q = q.toLowerCase();
@@ -1785,6 +1776,7 @@ function afficher_search_results(string $basePath, string $token, string $shareN
     $shareNameHtml = htmlspecialchars($shareName);
     $queryHtml = htmlspecialchars($query);
     $baseUrl = '/dl/' . htmlspecialchars($token);
+    $baseUrlJs = json_encode($baseUrl, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
     $subPathJs = json_encode($subPath, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
     $backUrl = $subPath ? $baseUrl . '?p=' . rawurlencode($subPath) : $baseUrl;
 
@@ -1837,8 +1829,8 @@ function afficher_search_results(string $basePath, string $token, string $shareN
 .search-box { padding:.3rem .65rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.03); color:var(--text-primary); font-family:var(--font-sans); font-size:.8rem; outline:none; transition:border-color .15s; width:200px; }
 .search-box:focus { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
 .search-box::placeholder { color:var(--text-muted); }
-.search-all-label { display:inline-flex; align-items:center; gap:.3rem; font-size:.78rem; color:var(--text-muted); cursor:pointer; white-space:nowrap; user-select:none; }
-.search-all-label input { accent-color:var(--accent); cursor:pointer; }
+.btn-search-go { display:inline-flex; align-items:center; gap:.3rem; padding:.28rem .65rem; border:none; border-radius:var(--radius-sm); background:var(--accent); color:var(--bg-deep); font-family:var(--font-sans); font-size:.78rem; font-weight:700; cursor:pointer; transition:background .15s; white-space:nowrap; }
+.btn-search-go:hover { background:#ffc060; }
 .btn-zip { display:inline-flex; align-items:center; gap:.35rem; padding:.38rem .85rem; border:none; border-radius:var(--radius-sm); background:var(--accent); color:var(--bg-deep); font-family:var(--font-sans); font-size:.82rem; font-weight:700; cursor:pointer; text-decoration:none; transition:all .15s; white-space:nowrap; }
 .btn-zip:hover { background:#ffc060; }
 .search-back { display:inline-flex; align-items:center; gap:.35rem; font-size:.82rem; color:var(--accent); text-decoration:none; margin-bottom:.9rem; }
@@ -1882,8 +1874,11 @@ function afficher_search_results(string $basePath, string $token, string $shareN
     <div class="toolbar">
         <span class="toolbar-info">{$totalFound} résultat(s) pour &ldquo;{$queryHtml}&rdquo;</span>
         <input class="search-box" id="main-search" type="text" placeholder="Nouvelle recherche…" value="{$queryHtml}"
-               onkeydown="if(event.key==='Enter'){event.preventDefault();var q=this.value.trim();if(q)window.location='{$baseUrl}?q='+encodeURIComponent(q)+({$subPathJs}?'&p='+encodeURIComponent({$subPathJs}):'');}">
-        <label class="search-all-label"><input type="checkbox" checked disabled> Tout</label>
+               onkeydown="if(event.key==='Enter'){event.preventDefault();doSearch();}">
+        <button class="btn-search-go" onclick="doSearch()" title="Rechercher">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </button>
+        <script>function doSearch(){var q=document.getElementById('main-search').value.trim();if(!q)return;var u={$baseUrlJs}+'?q='+encodeURIComponent(q);var p={$subPathJs};if(p)u+='&p='+encodeURIComponent(p);window.location=u;}</script>
     </div>
 HTML;
 
@@ -1914,45 +1909,99 @@ HTML;
         echo '</div>';
     }
 
-    // ── Liste de fichiers ──
+    // ── Fichiers : grille avec posters si disponibles, sinon liste ──
     if (!empty($fileLines)) {
-        echo '<div class="files-label">Fichiers</div>';
-        echo '<div class="panel">';
-        foreach (array_values($fileLines) as $idx => $path) {
-            $name    = basename($path);
-            $relPath = substr($path, $baseLen);
-            $fileUrl = $baseUrl . '?p=' . rawurlencode($relPath);
-            $ext     = strtolower(pathinfo($name, PATHINFO_EXTENSION));
-            $sizeRaw = @filesize($path);
-            $sizeStr = '';
-            if ($sizeRaw !== false) {
-                if ($sizeRaw >= 1073741824) $sizeStr = round($sizeRaw/1073741824,1).' GB';
-                elseif ($sizeRaw >= 1048576) $sizeStr = round($sizeRaw/1048576,1).' MB';
-                elseif ($sizeRaw >= 1024) $sizeStr = round($sizeRaw/1024).' KB';
-                else $sizeStr = $sizeRaw.' B';
-            }
-            $parentPath = htmlspecialchars(dirname($relPath) === '.' ? '' : dirname($relPath));
-
-            $iconType = match(true) {
-                in_array($ext, ['mkv','mp4','avi','mov','wmv','m4v','ts','iso']) => 'vid',
-                in_array($ext, ['mp3','flac','aac','ogg','wav','m4a'])           => 'aud',
-                in_array($ext, ['jpg','jpeg','png','gif','webp','svg'])           => 'img',
-                in_array($ext, ['zip','rar','7z','tar','gz'])                    => 'arc',
-                default => 'file',
-            };
-            $svgIcon = match($iconType) {
-                'vid'  => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg>',
-                'aud'  => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#ab47bc"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
-                default => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-            };
-            echo '<a class="row" href="' . $fileUrl . '">';
-            echo '<div class="row-icon ' . $iconType . '">' . $svgIcon . '</div>';
-            echo '<div class="row-name"><div>' . htmlspecialchars($name) . '</div>'
-               . ($parentPath ? '<div class="row-path">' . $parentPath . '</div>' : '') . '</div>';
-            if ($sizeStr) echo '<span class="row-size">' . $sizeStr . '</span>';
-            echo '</a>';
+        // Fetch posters pour les fichiers
+        $filePosterMap = [];
+        if (!empty($fileLines)) {
+            $phs = implode(',', array_fill(0, count($fileLines), '?'));
+            $stmt = $db->prepare("SELECT path, poster_url, tmdb_rating FROM folder_posters WHERE path IN ($phs) AND poster_url IS NOT NULL AND poster_url != ''");
+            $stmt->execute(array_values($fileLines));
+            foreach ($stmt->fetchAll() as $row) $filePosterMap[$row['path']] = $row;
         }
-        echo '</div>';
+
+        // Séparer fichiers avec poster (grille) et sans poster (liste)
+        $videoExts = ['mkv','mp4','avi','mov','wmv','m4v','ts'];
+        $gridFiles = [];
+        $listFiles = [];
+        foreach ($fileLines as $path) {
+            $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            if (isset($filePosterMap[$path]) && in_array($ext, $videoExts)) {
+                $gridFiles[] = $path;
+            } else {
+                $listFiles[] = $path;
+            }
+        }
+
+        // Grille de fichiers avec posters
+        if (!empty($gridFiles)) {
+            echo '<div class="files-label">Fichiers</div>';
+            echo '<div class="grid-wrap">';
+            foreach (array_values($gridFiles) as $idx => $path) {
+                $name     = basename($path);
+                $relPath  = substr($path, $baseLen);
+                $fileUrl  = $baseUrl . '?p=' . rawurlencode($relPath);
+                $nameHtml = pathinfo($name, PATHINFO_FILENAME);
+                $nameHtml = htmlspecialchars($nameHtml);
+                $parentRel = dirname($relPath);
+                $pathHtml = htmlspecialchars($parentRel === '.' ? '' : $parentRel);
+                $color    = $cardColors[($idx + count($dirLines)) % count($cardColors)];
+                $letter   = mb_strtoupper(mb_substr($name, 0, 1));
+                $poster   = $filePosterMap[$path];
+                $bgStyle  = ' style="background-image:url(' . htmlspecialchars($poster['poster_url'], ENT_QUOTES) . ')"';
+                $rating   = isset($poster['tmdb_rating']) && $poster['tmdb_rating'] >= 1
+                    ? '<div class="grid-card-rating">&#9733; ' . number_format((float)$poster['tmdb_rating'], 1) . '</div>'
+                    : '';
+                $pathLabel = $pathHtml ? '<div class="grid-card-path">' . $pathHtml . '</div>' : '';
+                echo '<a class="grid-card has-poster" href="' . $fileUrl . '" style="background:' . $color . '">';
+                echo '<div class="grid-card-bg"' . $bgStyle . '><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
+                echo $rating;
+                echo '<div class="grid-card-label"><div class="grid-card-title">' . $nameHtml . '</div>' . $pathLabel . '</div>';
+                echo '</a>';
+            }
+            echo '</div>';
+        }
+
+        // Liste classique pour les fichiers sans poster
+        if (!empty($listFiles)) {
+            if (empty($gridFiles)) echo '<div class="files-label">Fichiers</div>';
+            echo '<div class="panel">';
+            foreach ($listFiles as $path) {
+                $name    = basename($path);
+                $relPath = substr($path, $baseLen);
+                $fileUrl = $baseUrl . '?p=' . rawurlencode($relPath);
+                $ext     = strtolower(pathinfo($name, PATHINFO_EXTENSION));
+                $sizeRaw = @filesize($path);
+                $sizeStr = '';
+                if ($sizeRaw !== false) {
+                    if ($sizeRaw >= 1073741824) $sizeStr = round($sizeRaw/1073741824,1).' GB';
+                    elseif ($sizeRaw >= 1048576) $sizeStr = round($sizeRaw/1048576,1).' MB';
+                    elseif ($sizeRaw >= 1024) $sizeStr = round($sizeRaw/1024).' KB';
+                    else $sizeStr = $sizeRaw.' B';
+                }
+                $parentRel = dirname($relPath);
+                $parentPath = htmlspecialchars($parentRel === '.' ? '' : $parentRel);
+                $iconType = match(true) {
+                    in_array($ext, ['mkv','mp4','avi','mov','wmv','m4v','ts','iso']) => 'vid',
+                    in_array($ext, ['mp3','flac','aac','ogg','wav','m4a'])           => 'aud',
+                    in_array($ext, ['jpg','jpeg','png','gif','webp','svg'])           => 'img',
+                    in_array($ext, ['zip','rar','7z','tar','gz'])                    => 'arc',
+                    default => 'file',
+                };
+                $svgIcon = match($iconType) {
+                    'vid'  => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg>',
+                    'aud'  => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#ab47bc"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+                    default => '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+                };
+                echo '<a class="row" href="' . $fileUrl . '">';
+                echo '<div class="row-icon ' . $iconType . '">' . $svgIcon . '</div>';
+                echo '<div class="row-name"><div>' . htmlspecialchars($name) . '</div>'
+                   . ($parentPath ? '<div class="row-path">' . $parentPath . '</div>' : '') . '</div>';
+                if ($sizeStr) echo '<span class="row-size">' . $sizeStr . '</span>';
+                echo '</a>';
+            }
+            echo '</div>';
+        }
     }
 
     if (empty($dirLines) && empty($fileLines)) {

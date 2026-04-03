@@ -972,6 +972,7 @@ if ($action !== '') {
             letter-spacing: .08em; text-transform: uppercase;
         }
     </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -982,6 +983,7 @@ if ($action !== '') {
         <?php if ($isAdmin): ?>
         <button class="tab-btn active" onclick="switchTab('utilisateurs')">Utilisateurs</button>
         <button class="tab-btn" onclick="switchTab('activite')">Activité</button>
+        <button class="tab-btn" onclick="switchTab('statistiques')">Statistiques</button>
         <button class="tab-btn" onclick="switchTab('systeme')">Système</button>
         <?php endif; ?>
         <button class="tab-btn <?= $isAdmin ? '' : 'active' ?>" onclick="switchTab('compte')">Mon compte</button>
@@ -1085,13 +1087,72 @@ if ($action !== '') {
                 </div>
             </div>
         </div>
+
+    </div>
+    <?php endif; ?>
+
+    <!-- ══════ Onglet Statistiques ══════ -->
+    <?php if ($isAdmin): ?>
+    <div id="tab-statistiques" class="tab-panel">
         <div class="card">
-            <div class="card-header">
-                <div class="card-title">Maintenance</div>
+            <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
+                <div class="card-title">Upload par torrent</div>
+                <div style="display:flex;gap:.5rem;align-items:center">
+                    <span style="font-size:.8rem;color:var(--text-dim)">Période :</span>
+                    <?php foreach (['7d'=>'7 jours','30d'=>'30 jours','90d'=>'90 jours'] as $r=>$l): ?>
+                    <button class="btn btn-ghost seed-range-btn" data-range="<?= $r ?>"
+                            style="font-size:.78rem;padding:.25rem .7rem"
+                            onclick="seedSetRange('<?= $r ?>')"><?= $l ?></button>
+                    <?php endforeach; ?>
+                    <span id="seed-loading" style="font-size:.78rem;color:var(--text-dim);margin-left:.3rem;display:none">Chargement…</span>
+                </div>
             </div>
-            <div style="padding:1rem 1.4rem;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap">
-                <button class="btn btn-ghost" id="purge-btn" onclick="purgeExpired()">Purger les liens expirés</button>
-                <span id="purge-result" style="font-size:.82rem;color:var(--text-dim)"></span>
+
+            <!-- Lifecycle scatter -->
+            <div style="padding:.8rem 1.4rem .4rem">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+                    <div id="seed-chart-desc" style="font-size:.78rem;color:var(--text-dim)">Cycle de vie — âge vs vitesse d'upload (chaque point = un torrent)</div>
+                    <div style="display:flex;gap:.3rem">
+                        <button class="btn btn-ghost seed-metric-btn active" data-metric="speed" onclick="seedSetMetric('speed')" style="font-size:.72rem;padding:.2rem .55rem">Vitesse</button>
+                        <button class="btn btn-ghost seed-metric-btn" data-metric="volume" onclick="seedSetMetric('volume')" style="font-size:.72rem;padding:.2rem .55rem">Volume</button>
+                    </div>
+                </div>
+                <div style="position:relative;height:240px"><canvas id="seed-lifecycle-chart"></canvas></div>
+            </div>
+
+            <!-- Table top uploaders + pager -->
+            <div style="padding:.6rem 1.4rem 0;overflow-x:auto">
+                <table class="user-table" id="seed-table" style="font-size:.8rem">
+                    <thead><tr>
+                        <th style="text-align:left">Torrent</th>
+                        <th>Loc</th>
+                        <th style="cursor:pointer" onclick="seedSort('total_up')">Total ↕</th>
+                        <th style="cursor:pointer" onclick="seedSort('avg_rate_kbps')">Moy KB/s ↕</th>
+                        <th style="cursor:pointer" onclick="seedSort('size_bytes')">Taille ↕</th>
+                        <th>Âge</th>
+                    </tr></thead>
+                    <tbody id="seed-tbody"><tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:1.5rem">En attente de données…</td></tr></tbody>
+                </table>
+            </div>
+            <div id="seed-pager" style="padding:.5rem 1.4rem 1rem;display:flex;justify-content:space-between;align-items:center"></div>
+        </div>
+
+        <!-- Modal chart torrent individuel -->
+        <div id="seed-modal" class="modal-overlay" onclick="if(event.target===this)closeSeedModal()" style="display:none">
+            <div style="background:var(--bg-card);border:1px solid var(--border-strong);border-radius:16px;max-width:780px;width:95%;padding:1.4rem">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+                    <div id="seed-modal-title" style="font-weight:600;font-size:.95rem;color:var(--text)"></div>
+                    <button class="btn btn-ghost" onclick="closeSeedModal()" style="padding:.2rem .6rem;font-size:.85rem">✕</button>
+                </div>
+                <div style="display:flex;gap:.5rem;margin-bottom:.8rem">
+                    <?php foreach (['7d'=>'7j','30d'=>'30j','90d'=>'90j'] as $r=>$l): ?>
+                    <button class="btn btn-ghost seed-chart-range-btn" data-range="<?= $r ?>"
+                            style="font-size:.75rem;padding:.2rem .55rem"
+                            onclick="seedLoadChart(seedModalHash,'<?= $r ?>')"><?= $l ?></button>
+                    <?php endforeach; ?>
+                    <span id="seed-modal-meta" style="font-size:.75rem;color:var(--text-dim);margin-left:.5rem;align-self:center"></span>
+                </div>
+                <div style="position:relative;height:240px"><canvas id="seed-torrent-chart"></canvas></div>
             </div>
         </div>
     </div>
@@ -1639,24 +1700,6 @@ function closeAiPanel() {
     document.getElementById('ai-scan-panel').style.display = 'none';
 }
 
-async function purgeExpired() {
-    const btn = document.getElementById('purge-btn');
-    const result = document.getElementById('purge-result');
-    btn.disabled = true;
-    btn.textContent = 'Purge…';
-    try {
-        const res = await api('purge_expired', {});
-        if (res.error) { toast(res.error, false); }
-        else {
-            const msg = res.deleted === 0 ? 'Aucun lien expiré.' : res.deleted + ' lien(s) supprimé(s).';
-            result.textContent = msg;
-            toast(msg);
-        }
-    } finally {
-        btn.disabled = false;
-        btn.textContent = 'Purger les liens expirés';
-    }
-}
 
 let activityOffset = 0;
 let activityDebounceTimer = null;
@@ -1884,6 +1927,9 @@ function switchTab(name) {
         populateActivityUserFilter().then(() => loadRecentActivity());
         loadEvents();
     }
+    if (name === 'statistiques' && typeof seedInit === 'function') {
+        seedInit();
+    }
 }
 
 // Init
@@ -1900,6 +1946,257 @@ setInterval(loadActiveStreams, 10000);
 <?php endif; ?>
 initAccordion('activite-recente', false);
 initAccordion('evenements-systeme', false);
+
+// ── Seed Stats ────────────────────────────────────────────────────────────────
+<?php if ($isAdmin): ?>
+(function() {
+    const BASE = 'api/torrent_stats.php';
+    let seedRange  = localStorage.getItem('seed_range') || '7d';
+    let seedSortBy = 'total_up';
+    let seedData   = [];
+    let lifecycleChart = null;
+    let torrentChart   = null;
+    window.seedModalHash = null;
+
+    function fmtBytes(b) {
+        if (b >= 1e12) return (b/1e12).toFixed(2) + ' TB';
+        if (b >= 1e9)  return (b/1e9).toFixed(2) + ' GB';
+        if (b >= 1e6)  return (b/1e6).toFixed(1) + ' MB';
+        return (b/1024).toFixed(0) + ' KB';
+    }
+    function fmtAge(ts) {
+        if (!ts) return '—';
+        const d = Math.floor((Date.now()/1000 - ts) / 86400);
+        return d < 1 ? '<1j' : d + 'j';
+    }
+
+    function seedSetRange(r) {
+        seedRange = r;
+        localStorage.setItem('seed_range', r);
+        document.querySelectorAll('.seed-range-btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.range === r));
+        loadSeedList();
+        renderLifecycle();
+    }
+    window.seedSetRange = seedSetRange;
+
+    function seedSort(col) {
+        seedSortBy = col;
+        renderSeedTable();
+    }
+    window.seedSort = seedSort;
+
+    const SEED_PER_PAGE = 20;
+    let seedPage = 0;
+
+    function renderSeedTable() {
+        // Filtrer les torrents sans upload sur la période
+        const active = [...seedData].filter(t => t.total_up > 0);
+        const sorted = active.sort((a, b) => (b[seedSortBy] ?? 0) - (a[seedSortBy] ?? 0));
+        const tbody = document.getElementById('seed-tbody');
+        if (!sorted.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-dim);padding:1.5rem">Aucune donnée — attendez quelques runs du cron (5 min)</td></tr>';
+            renderSeedPager(0, 0);
+            return;
+        }
+        const totalPages = Math.ceil(sorted.length / SEED_PER_PAGE);
+        if (seedPage >= totalPages) seedPage = totalPages - 1;
+        const start = seedPage * SEED_PER_PAGE;
+        const page  = sorted.slice(start, start + SEED_PER_PAGE);
+        tbody.innerHTML = page.map(t => {
+            const locBadge = t.location === 'nvme'
+                ? '<span class="badge-admin" style="font-size:.7rem">NVMe</span>'
+                : '<span class="badge-user"  style="font-size:.7rem">RAID</span>';
+            return `<tr style="cursor:pointer" onclick="openSeedModal('${t.hash}','${t.name.replace(/'/g,"\\'")}')">
+                <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${t.name}">${t.name}</td>
+                <td style="text-align:center">${locBadge}</td>
+                <td style="text-align:right">${fmtBytes(t.total_up)}</td>
+                <td style="text-align:right">${t.avg_rate_kbps} KB/s</td>
+                <td style="text-align:right">${fmtBytes(t.size_bytes)}</td>
+                <td style="text-align:right">${fmtAge(t.finished_ts)}</td>
+            </tr>`;
+        }).join('');
+        renderSeedPager(sorted.length, totalPages);
+    }
+
+    function renderSeedPager(total, totalPages) {
+        let el = document.getElementById('seed-pager');
+        if (!el) return;
+        if (totalPages <= 1) { el.innerHTML = total ? `<span style="font-size:.75rem;color:var(--text-dim)">${total} torrents actifs</span>` : ''; return; }
+        const btns = [];
+        for (let i = 0; i < totalPages; i++) {
+            const cls = i === seedPage ? 'active' : '';
+            btns.push(`<button class="btn btn-ghost ${cls}" style="font-size:.72rem;padding:.15rem .5rem;min-width:1.6rem" onclick="seedGoPage(${i})">${i + 1}</button>`);
+        }
+        el.innerHTML = `<span style="font-size:.75rem;color:var(--text-dim)">${total} torrents actifs</span><span style="display:flex;gap:.25rem">${btns.join('')}</span>`;
+    }
+
+    window.seedGoPage = function(p) { seedPage = p; renderSeedTable(); };
+
+    function loadSeedList() {
+        document.getElementById('seed-loading').style.display = '';
+        fetch(`${BASE}?action=list&range=${seedRange}`)
+            .then(r => r.json())
+            .then(j => {
+                seedData = j.data || [];
+                renderSeedTable();
+                document.getElementById('seed-loading').style.display = 'none';
+            })
+            .catch(() => { document.getElementById('seed-loading').style.display = 'none'; });
+
+        fetch(`${BASE}?action=lifecycle`)
+            .then(r => r.json())
+            .then(j => renderLifecycle(j.data || []));
+    }
+
+    let lifecycleAllData = [];
+    let seedMetric = localStorage.getItem('seed_metric') || 'speed';
+
+    function seedSetMetric(m) {
+        seedMetric = m;
+        localStorage.setItem('seed_metric', m);
+        document.querySelectorAll('.seed-metric-btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.metric === m));
+        renderLifecycle();
+    }
+    window.seedSetMetric = seedSetMetric;
+
+    function renderLifecycle(data) {
+        if (data) lifecycleAllData = data;
+        const ctx = document.getElementById('seed-lifecycle-chart');
+        if (!ctx) return;
+        if (lifecycleChart) lifecycleChart.destroy();
+        const rangeDays = parseInt(seedRange) || 30;
+        const isSpeed = seedMetric === 'speed';
+        const filtered = lifecycleAllData.filter(d => d.age_days != null && d.age_days <= rangeDays);
+        const nvme = filtered.filter(d => d.location === 'nvme');
+        const raid = filtered.filter(d => d.location !== 'nvme');
+        const mkPts = arr => arr.map(d => ({
+            x: d.age_days,
+            y: isSpeed ? d.avg_rate_kbps : d.total_up / 1e9,
+            label: d.name,
+            raw_up: d.total_up,
+            raw_rate: d.avg_rate_kbps
+        }));
+        const desc = document.getElementById('seed-chart-desc');
+        if (desc) desc.textContent = isSpeed
+            ? 'Cycle de vie — âge vs vitesse moyenne (chaque point = un torrent)'
+            : 'Cycle de vie — âge vs volume uploadé (chaque point = un torrent)';
+        const yLabel = isSpeed ? 'Moy KB/s' : 'Upload (GB)';
+        const tooltipFn = isSpeed
+            ? ctx => `${ctx.raw.label}: ${ctx.raw.raw_rate} KB/s (${ctx.raw.x}j)`
+            : ctx => `${ctx.raw.label}: ${fmtBytes(ctx.raw.raw_up)} (${ctx.raw.x}j)`;
+        lifecycleChart = new Chart(ctx, {
+            type: 'scatter',
+            data: {
+                datasets: [
+                    { label: 'NVMe', data: mkPts(nvme), backgroundColor: 'rgba(240,160,48,.85)', pointRadius: 6 },
+                    { label: 'RAID', data: mkPts(raid), backgroundColor: 'rgba(100,140,200,.7)', pointRadius: 5 },
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                animation: false,
+                plugins: {
+                    legend: { labels: { color: '#aaa', font: { size: 11 } } },
+                    tooltip: { callbacks: { label: tooltipFn } }
+                },
+                scales: {
+                    x: { title: { display: true, text: 'Âge (jours)', color: '#777' }, ticks: { color: '#777' }, grid: { color: '#222' }, max: rangeDays },
+                    y: { title: { display: true, text: yLabel, color: '#777' }, ticks: { color: '#777' }, grid: { color: '#222' }, min: 0 }
+                }
+            }
+        });
+    }
+
+    window.openSeedModal = function(hash, name) {
+        window.seedModalHash = hash;
+        document.getElementById('seed-modal-title').textContent = name;
+        document.getElementById('seed-modal').style.display = 'flex';
+        document.querySelectorAll('.seed-chart-range-btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.range === seedRange));
+        seedLoadChart(hash, seedRange);
+    };
+    window.closeSeedModal = function() {
+        document.getElementById('seed-modal').style.display = 'none';
+    };
+
+    window.seedLoadChart = function(hash, range) {
+        if (!hash) return;
+        document.querySelectorAll('.seed-chart-range-btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.range === range));
+        fetch(`${BASE}?action=chart&hash=${hash}&range=${range}`)
+            .then(r => r.json())
+            .then(j => renderTorrentChart(j));
+    };
+
+    function renderTorrentChart(j) {
+        const ctx = document.getElementById('seed-torrent-chart');
+        if (!ctx) return;
+        if (torrentChart) torrentChart.destroy();
+        const pts  = j.points || [];
+        const meta = j.meta   || {};
+        const totalUp = pts.reduce((s, p) => s + p.up_bytes, 0);
+        document.getElementById('seed-modal-meta').textContent =
+            `${fmtBytes(meta.size_bytes || 0)} · ${fmtBytes(totalUp)} uploadé sur la période`;
+        const labels = pts.map(p => {
+            const d = new Date(p.ts * 1000);
+            return j.bucket >= 86400
+                ? d.toLocaleDateString('fr-FR', {day:'2-digit', month:'2-digit'})
+                : d.toLocaleString('fr-FR', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'});
+        });
+        const upData = pts.map(p => +(p.up_bytes / 1048576).toFixed(2)); // MB
+        const gradient = ctx.getContext('2d').createLinearGradient(0, 0, 0, 240);
+        gradient.addColorStop(0, 'rgba(240,160,48,.35)');
+        gradient.addColorStop(1, 'rgba(240,160,48,.02)');
+        torrentChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: 'Upload (MB)',
+                    data: upData,
+                    borderColor: '#f0a030',
+                    backgroundColor: gradient,
+                    borderWidth: 1.5,
+                    pointRadius: pts.length > 72 ? 0 : 2,
+                    fill: true,
+                    tension: 0.3,
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                animation: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { label: c => fmtBytes(c.raw * 1048576) + ' uploadé' } }
+                },
+                scales: {
+                    x: { ticks: { color: '#777', maxTicksLimit: 10, font: { size: 10 } }, grid: { color: '#1a1a1a' } },
+                    y: { ticks: { color: '#777', font: { size: 10 } }, grid: { color: '#222' }, min: 0 }
+                }
+            }
+        });
+    }
+
+    // Init — charge les données au premier affichage de l'onglet
+    document.querySelectorAll('.seed-range-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.range === seedRange));
+    document.querySelectorAll('.seed-metric-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.metric === seedMetric));
+    let seedLoaded = false;
+    window.seedInit = function() {
+        if (seedLoaded) return;
+        seedLoaded = true;
+        loadSeedList();
+    };
+
+    // Si l'onglet est déjà actif au moment où ce script s'exécute (navigation directe via #statistiques)
+    if (document.getElementById('tab-statistiques')?.classList.contains('active')) {
+        window.seedInit();
+    }
+})();
+<?php endif; ?>
 </script>
 </body>
 </html>

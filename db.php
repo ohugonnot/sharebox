@@ -38,6 +38,15 @@ function get_db(): PDO {
     ];
     foreach ($statements as $s) $db->query($s);
 
+    // Purge auto des liens expirés (max 1x/heure, via fichier sentinel)
+    if ($dbExisted) {
+        $purgeFlag = sys_get_temp_dir() . '/sharebox_purge_links';
+        if (!file_exists($purgeFlag) || (time() - filemtime($purgeFlag)) > 3600) {
+            $db->exec("DELETE FROM links WHERE expires_at IS NOT NULL AND expires_at != '' AND expires_at < datetime('now')");
+            touch($purgeFlag);
+        }
+    }
+
     // Safety: auto-backup après ouverture (max 1h).
     // PASSIVE : ne bloque ni readers ni writers (contrairement à TRUNCATE/FULL qui
     // bloquent tous les nouveaux writers et peuvent provoquer des "database is locked"
