@@ -20,7 +20,9 @@ const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content ||
 
 // Au chargement de la page
 document.addEventListener('DOMContentLoaded', () => {
-    navigateTo('');
+    const params = new URLSearchParams(window.location.search);
+    const openPath = params.get('open') || '';
+    navigateTo(openPath);
 });
 
 /**

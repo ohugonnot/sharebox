@@ -6,6 +6,10 @@ vendor/
 composer.lock
 /composer
 __pycache__/
+node_modules/
+package-lock.json
+playwright-report/
+test-results/
 
 # Dev files
 CLAUDE.md

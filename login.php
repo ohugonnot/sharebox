@@ -6,6 +6,14 @@
 require_once __DIR__ . '/auth.php';
 require_once __DIR__ . '/functions.php';
 
+// Trusted header auth — skip login form entirely
+if (defined('TRUSTED_AUTH_HEADER') && TRUSTED_AUTH_HEADER !== ''
+    && !empty($_SERVER[TRUSTED_AUTH_HEADER])) {
+    require_auth(); // will auto-provision session
+    header('Location: /share/');
+    exit;
+}
+
 ensure_admin_exists();
 
 if (is_logged_in()) {
