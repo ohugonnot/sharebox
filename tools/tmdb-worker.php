@@ -111,13 +111,13 @@ fwrite($cronFp, (string)getmypid());
 fflush($cronFp);
 
 // ── Main loop: process until nothing left ──
-$prevPendingCount = -1;
+$prevPendingCount = '';
 $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
 do {
     // Touch lock to reset mtime — prevents stale detection during legitimate long runs
     @touch($cronLock);
 
-    $rows = $dbRead->query("SELECT rowid, path FROM folder_posters WHERE poster_url IS NULL AND (match_attempts IS NULL OR match_attempts = 0)")->fetchAll();
+    $rows = $dbRead->query("SELECT rowid, path, match_attempts FROM folder_posters WHERE poster_url IS NULL AND (match_attempts IS NULL OR match_attempts < 3)")->fetchAll();
     $pendingCount = count($rows);
     ai_log('SCAN start | pending=' . $pendingCount);
 
@@ -127,20 +127,27 @@ do {
     }
 
     // Safety: if count didn't decrease since last pass, we're stuck — exit
-    if ($pendingCount === $prevPendingCount) {
-        ai_log('SCAN stuck — pending count unchanged (' . $pendingCount . '), exiting to avoid infinite loop');
+    // With progressive retry (match_attempts 0→1→2), pending count may stay the same
+    // between passes, so also track the sum of match_attempts to detect progress.
+    $attemptsSum = 0;
+    foreach ($rows as $r) $attemptsSum += (int)($r['match_attempts'] ?? 0);
+    $attemptsKey = $pendingCount . ':' . $attemptsSum;
+    if ($attemptsKey === $prevPendingCount) {
+        ai_log('SCAN stuck — pending=' . $pendingCount . ' attempts_sum=' . $attemptsSum . ', exiting to avoid infinite loop');
         break;
     }
-    $prevPendingCount = $pendingCount;
+    $prevPendingCount = $attemptsKey;
 
-    // Group by parent directory, keep rowid for DB writes
+    // Group by parent directory, keep rowid + attempt level for DB writes
     $byDir = [];
     $rowIds = [];
+    $rowAttempts = [];
     foreach ($rows as $row) {
         $dir = dirname($row['path']);
         $name = basename($row['path']);
         $byDir[$dir][] = $name;
         $rowIds[$dir . chr(0) . $name] = (int)$row['rowid'];
+        $rowAttempts[$dir . chr(0) . $name] = (int)($row['match_attempts'] ?? 0);
     }
 
     $getRowId = function(string $dir, string $name) use (&$rowIds): ?int {
@@ -235,43 +242,140 @@ do {
     }
     unset($names); // Break reference
 
+    // ── Build parent context map: if parent already matched, use its title for child searches ──
+    $parentContext = [];
+    foreach (array_keys($byDir) as $dir) {
+        $stmtP = $dbRead->prepare("SELECT tmdb_id, title, tmdb_type FROM folder_posters WHERE path = :p AND poster_url IS NOT NULL AND poster_url != '__none__'");
+        $stmtP->execute([':p' => $dir]);
+        $pRow = $stmtP->fetch();
+        if ($pRow) {
+            $parentContext[$dir] = $pRow;
+        }
+    }
+
     foreach ($byDir as $dir => $names) {
         if (empty($names)) continue; // Skip if all entries were company matches
         ai_log('SCAN | dir=' . basename($dir) . ' entries=' . count($names));
+
+        // Detect if dir has season-like subfolders → prefer TV results
+        $preferTv = false;
+        $dirItems = @scandir($dir);
+        if ($dirItems) {
+            foreach ($dirItems as $di) {
+                if ($di[0] === '.' || !is_dir($dir . '/' . $di)) continue;
+                if (preg_match('/^(s\d{1,2}|saison|season|saga|arc|part)/i', $di)) {
+                    $preferTv = true;
+                    break;
+                }
+            }
+        }
+        // Also prefer TV if parent is matched as TV
+        if (isset($parentContext[$dir]) && ($parentContext[$dir]['tmdb_type'] ?? '') === 'tv') {
+            $preferTv = true;
+        }
 
         // Group files by extracted title to deduplicate TMDB calls
         $titleToFiles = [];
         $noTitle = [];
         foreach ($names as $n) {
             $meta = extract_title_year($n);
-            if (!$meta['title']) { $noTitle[] = $n; continue; }
+            $attempt = $rowAttempts[$dir . chr(0) . $n] ?? 0;
+
+            if (!$meta['title']) {
+                // Try parent context for entries with no extractable title
+                if (isset($parentContext[$dir])) {
+                    // Use parent title + child name as combined search
+                    $childClean = preg_replace('/[._\[\](){}]+/', ' ', $n);
+                    $childClean = preg_replace('/\b(multi|vff|bluray|1080p|2160p|x264|x265|hevc)\b.*/i', '', $childClean);
+                    $childClean = trim($childClean);
+                    if ($childClean !== '' && !preg_match('/^(s\d{1,2}|saison\s*\d+|season\s*\d+|e\d{2,4}|saga\s*\d+|arc\s*\d+|part\s*\d+)$/i', $childClean)) {
+                        $combined = $parentContext[$dir]['title'] . ' ' . $childClean;
+                        $meta = ['title' => $combined, 'year' => null];
+                    }
+                }
+                if (!$meta['title']) { $noTitle[] = $n; continue; }
+            }
+
             $key = $meta['title'] . '|' . ($meta['year'] ?? '');
-            $titleToFiles[$key][] = ['name' => $n, 'title' => $meta['title'], 'year' => $meta['year']];
+            $titleToFiles[$key][] = ['name' => $n, 'title' => $meta['title'], 'year' => $meta['year'], 'attempt' => $attempt];
         }
 
         $found = 0;
         foreach ($titleToFiles as $key => $files) {
             $first = $files[0];
-            $result = tmdb_fetch("https://api.themoviedb.org/3/search/multi?api_key={$TMDB_API_KEY}&query=" . urlencode($first['title']) . "&language=fr&page=1", $ctx);
+            $attempt = $first['attempt'];
+            $searchTitle = $first['title'];
+            $searchYear = $first['year'];
 
-            $match = null;
-            if ($result && !empty($result['results'])) {
-                foreach ($result['results'] as $r) {
-                    if (!empty($r['poster_path'])) {
-                        $match = [
-                            'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
-                            'id' => $r['id'] ?? null,
-                            'title' => $r['title'] ?? $r['name'] ?? null,
-                            'overview' => $r['overview'] ?? null,
-                            'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
-                            'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
-                            'rating' => round((float)($r['vote_average'] ?? 0), 1),
-                        ];
-                        break;
-                    }
+            // Per-entry TV preference: if the folder name itself contains S01-S99 pattern
+            $entryPreferTv = $preferTv || preg_match('/\bS\d{1,2}\b/i', $first['name']);
+
+            // ── Retry strategy based on attempt level ──
+            // Attempt 0: full title, FR, multi+tv candidates
+            // Attempt 1: short title (first half of words), FR, multi+tv+movie
+            // Attempt 2: full title, no language (English fallback)
+            if ($attempt === 1) {
+                $words = explode(' ', $searchTitle);
+                if (count($words) > 2) {
+                    $searchTitle = implode(' ', array_slice($words, 0, (int)ceil(count($words) / 2)));
                 }
             }
-            usleep(50000); // TMDB rate limit
+
+            $candidates = [];
+            if ($attempt <= 1) {
+                $candidates = tmdb_search_candidates($searchTitle, $searchYear, $TMDB_API_KEY, $ctx, 8);
+            } else {
+                // Attempt 2: English fallback — direct fetch without language param
+                $encoded = urlencode($searchTitle);
+                $urls = [
+                    "https://api.themoviedb.org/3/search/multi?api_key={$TMDB_API_KEY}&query={$encoded}&page=1",
+                ];
+                foreach ($urls as $u) {
+                    $data = tmdb_fetch($u, $ctx);
+                    if ($data && !empty($data['results'])) {
+                        foreach ($data['results'] as $r) {
+                            if (empty($r['poster_path'])) continue;
+                            $candidates[] = [
+                                'id' => $r['id'],
+                                'title' => $r['title'] ?? $r['name'] ?? '?',
+                                'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
+                                'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
+                                'overview' => substr($r['overview'] ?? '', 0, 150),
+                                'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
+                                'rating' => round((float)($r['vote_average'] ?? 0), 1),
+                                'vote_count' => (int)($r['vote_count'] ?? 0),
+                            ];
+                            if (count($candidates) >= 8) break;
+                        }
+                    }
+                    usleep(50000);
+                }
+            }
+
+            // ── Score candidates and pick best ──
+            $bestMatch = null;
+            $bestScore = 0;
+            foreach ($candidates as $c) {
+                $score = tmdb_score_candidate($first['title'], $first['year'], $c, $entryPreferTv);
+                if ($score > $bestScore) {
+                    $bestScore = $score;
+                    $bestMatch = $c;
+                }
+            }
+
+            $verified = tmdb_score_to_verified($bestScore);
+            $match = null;
+            if ($bestMatch && $verified > 0) {
+                $match = [
+                    'poster' => $bestMatch['poster'],
+                    'id' => $bestMatch['id'],
+                    'title' => $bestMatch['title'],
+                    'overview' => $bestMatch['overview'] ?? null,
+                    'year' => $bestMatch['year'],
+                    'type' => $bestMatch['type'],
+                    'rating' => $bestMatch['rating'] ?? 0,
+                ];
+            }
 
             foreach ($files as $f) {
                 $rowId = $getRowId($dir, $f['name']);
@@ -279,15 +383,19 @@ do {
                 if ($match) {
                     $found++;
                     try {
-                        $db->prepare("UPDATE folder_posters SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = 60, tmdb_year = :y, tmdb_type = :mt, tmdb_rating = :r, updated_at = datetime('now') WHERE rowid = :id")
-                           ->execute([':id' => $rowId, ':u' => $match['poster'], ':i' => $match['id'], ':t' => $match['title'], ':o' => $match['overview'], ':y' => $match['year'], ':mt' => $match['type'], ':r' => $match['rating']]);
+                        // Worker-matched entries: set ia_checked=1 to avoid permanent "IA pending" spinner.
+                        // The verified score (40/60/80) already tells /tmdb-scan which entries need review.
+                        $db->prepare("UPDATE folder_posters SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, verified = :v, tmdb_year = :y, tmdb_type = :mt, tmdb_rating = :r, ia_checked = 1, updated_at = datetime('now') WHERE rowid = :id")
+                           ->execute([':id' => $rowId, ':u' => $match['poster'], ':i' => $match['id'], ':t' => $match['title'], ':o' => $match['overview'], ':v' => $verified, ':y' => $match['year'], ':mt' => $match['type'], ':r' => $match['rating']]);
                     } catch (PDOException $e) {
                         ai_log('DB error (match write): ' . $e->getMessage());
                     }
                 } else {
+                    // Increment match_attempts for next retry pass
+                    $nextAttempt = $attempt + 1;
                     try {
-                        $db->prepare("UPDATE folder_posters SET match_attempts = 1 WHERE rowid = :id")
-                           ->execute([':id' => $rowId]);
+                        $db->prepare("UPDATE folder_posters SET match_attempts = :a WHERE rowid = :id")
+                           ->execute([':id' => $rowId, ':a' => $nextAttempt]);
                     } catch (PDOException $e) {
                         ai_log('DB error (attempts inc): ' . $e->getMessage());
                     }
@@ -295,30 +403,29 @@ do {
             }
 
             if ($match) {
-                ai_log('MATCH | "' . $first['title'] . '" x' . count($files) . ' -> ' . $match['title'] . ' (id=' . $match['id'] . ')');
+                ai_log('MATCH | "' . $first['title'] . '" x' . count($files) . ' -> ' . $match['title'] . ' (id=' . $match['id'] . ' score=' . $bestScore . ' verified=' . $verified . ')');
+            } elseif ($candidates) {
+                ai_log('WEAK  | "' . $first['title'] . '" best_score=' . $bestScore . ' (below threshold, attempt=' . ($attempt+1) . ')');
             }
         }
 
         // Increment attempts for entries with no extractable title
-        // Exception: bare season/episode codes (S01, Saison 3, etc.) — leave match_attempts=0
-        // so propagation can handle them once the parent is matched.
+        // Exception: bare season/episode codes (S01, Saison 3, etc.) — leave for propagation
         if ($noTitle) {
-            // No explicit transaction — autocommit avoids WAL lock contention
             foreach ($noTitle as $n) {
-                if (preg_match('/^(s\d{1,2}|saison\s*\d+|season\s*\d+|e\d{2,4})$/i', trim($n))) {
-                    // Bare season/episode code — skip silently, propagation will handle
-                    continue;
+                if (preg_match('/^(s\d{1,2}|saison\s*\d+|season\s*\d+|e\d{2,4}|saga\s*\d+|arc\s*\d+|part\s*\d+|partie\s*\d+)$/i', trim($n))) {
+                    continue; // propagation will handle
                 }
                 $rid = $getRowId($dir, $n);
                 if ($rid) {
+                    $curAttempt = $rowAttempts[$dir . chr(0) . $n] ?? 0;
                     try {
-                        $db->prepare("UPDATE folder_posters SET match_attempts = 1 WHERE rowid = :id")->execute([':id' => $rid]);
+                        $db->prepare("UPDATE folder_posters SET match_attempts = :a WHERE rowid = :id")->execute([':id' => $rid, ':a' => $curAttempt + 1]);
                     } catch (PDOException $e) {
                         ai_log('DB error (no-title inc): ' . $e->getMessage());
                     }
                 }
             }
-            // (autocommit — no explicit commit needed)
         }
 
         $totalFound += $found;
@@ -352,29 +459,35 @@ do {
     if ($autoVerified > 0) ai_log('AUTO-VERIFY | ' . $autoVerified . ' entries (>3 same tmdb_id in same dir)');
 
     // Propagate: if a parent folder is matched, apply its poster to unmatched children
+    // Use $db (writer) to see current verified scores — $dbRead has stale WAL snapshot
     $propagated = 0;
-    $parentRows = $dbRead->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type, tmdb_rating FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchAll();
+    $parentRows = $db->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type, tmdb_rating FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND verified >= 60")->fetchAll();
     $parentMap = [];
     foreach ($parentRows as $pr) {
         $parentMap[$pr['path']] = $pr;
     }
-    $stillPending = $dbRead->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
+    // Use writer connection ($db) for propagation reads — $dbRead may have a stale WAL snapshot
+    // and miss entries that were just matched in this same pass, causing propagation to overwrite
+    // good matches with weaker parent matches.
+    $stillPending = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
 
-    // No explicit transaction — autocommit avoids WAL lock contention
     foreach ($stillPending as $childPath) {
         $parentPath = dirname($childPath);
         if (isset($parentMap[$parentPath])) {
             $p = $parentMap[$parentPath];
             try {
-                $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 75, updated_at = datetime('now') WHERE path = ?")
+                // Only propagate to entries that truly have no poster — the WHERE clause ensures
+                // we don't overwrite a match set earlier in this same pass.
+                $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 75, updated_at = datetime('now') WHERE path = ? AND poster_url IS NULL")
                    ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath]);
-                $propagated++;
+                if ($db->prepare("SELECT changes()")->execute() && $db->query("SELECT changes()")->fetchColumn() > 0) {
+                    $propagated++;
+                }
             } catch (PDOException $e) {
                 ai_log('DB error (propagate): ' . $e->getMessage());
             }
         }
     }
-    // (autocommit — no explicit commit needed)
 
     if ($propagated > 0) ai_log('PROPAGATE | ' . $propagated . ' entries inherited from parent folder');
 
@@ -383,17 +496,18 @@ do {
 } while (true); // loop until no more pending entries
 
 // ── Final propagation pass (runs even when nothing was pending) ──
-$parentRows = $dbRead->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type, tmdb_rating FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchAll();
+// Use $db (writer) to get current state — $dbRead may have stale WAL snapshot
+$parentRows = $db->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type, tmdb_rating FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND verified >= 60")->fetchAll();
 $parentMap = [];
 foreach ($parentRows as $pr) $parentMap[$pr['path']] = $pr;
-$stillPending = $dbRead->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
+$stillPending = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
 $finalPropagated = 0;
 foreach ($stillPending as $childPath) {
     $parentPath = dirname($childPath);
     if (isset($parentMap[$parentPath])) {
         $p = $parentMap[$parentPath];
         try {
-            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 75, updated_at = datetime('now') WHERE path = ?")
+            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 75, updated_at = datetime('now') WHERE path = ? AND poster_url IS NULL")
                ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath]);
             $finalPropagated++;
         } catch (PDOException $e) {}
@@ -401,14 +515,18 @@ foreach ($stillPending as $childPath) {
 }
 if ($finalPropagated > 0) ai_log('FINAL PROPAGATE | ' . $finalPropagated . ' entries inherited from parent folder');
 
-// ── Season poster lookup (runs once after all matching is done) ──
-// For TV entries with season-numbered subfolders, fetch season-specific poster from TMDB
+// ── Season/Saga poster lookup (runs once after all matching is done) ──
+// For TV entries with season-numbered or saga/arc subfolders, fetch season-specific poster from TMDB
 $seasonUpdated = 0;
-$seasonRows = $dbRead->query("
+// Use $db (writer) to see entries propagated earlier in this run — $dbRead has stale WAL snapshot
+$seasonRows = $db->query("
     SELECT fp.path, fp.tmdb_id, fp.poster_url
     FROM folder_posters fp
     WHERE fp.tmdb_type = 'tv' AND fp.tmdb_id IS NOT NULL AND fp.poster_url IS NOT NULL AND fp.poster_url != '__none__'
 ")->fetchAll();
+
+// Cache TMDB season lists per tmdb_id to avoid redundant API calls
+$tmdbSeasonCache = [];
 
 foreach ($seasonRows as $sr) {
     $dirPath = $sr['path'];
@@ -419,22 +537,75 @@ foreach ($seasonRows as $sr) {
     foreach ($children as $child) {
         if ($child[0] === '.' || !is_dir($dirPath . '/' . $child)) continue;
 
-        // Extract season number from folder name
+        // Extract season number from folder name (classic patterns)
         $seasonNum = null;
+        $sagaName = null;
         if (preg_match('/(?:^|\.)S(\d{1,2})(?:\.|$)/i', $child, $m)) {
             $seasonNum = (int)$m[1];
         } elseif (preg_match('/(?:saison|season)\s*(\d+)/i', $child, $m)) {
             $seasonNum = (int)$m[1];
+        } elseif (preg_match('/(?:saga|arc|part|partie)\s*(\d+)(?:\s*[-–:]\s*(.+))?/i', $child, $m)) {
+            // Saga/Arc pattern: "Saga 03 - Skypiea", "Arc 1 - East Blue", "Part 2"
+            $sagaNum = (int)$m[1];
+            $sagaName = isset($m[2]) ? trim($m[2]) : null;
+        } elseif (preg_match('/(?:saga|arc|part|partie)\s*[-–:]\s*(.+)/i', $child, $m)) {
+            // Named saga without number: "Arc Skypiea", "Saga Alabasta"
+            $sagaName = trim($m[1]);
         }
-        if ($seasonNum === null) continue;
+
+        if ($seasonNum === null && !isset($sagaNum) && $sagaName === null) continue;
 
         $childPath = realpath($dirPath . '/' . $child) ?: ($dirPath . '/' . $child);
 
         // Check if this child is in DB with the same tmdb_id as parent
-        $childRow = $dbRead->prepare("SELECT poster_url FROM folder_posters WHERE path = ? AND tmdb_id = ?");
+        $childRow = $db->prepare("SELECT poster_url FROM folder_posters WHERE path = ? AND tmdb_id = ?");
         $childRow->execute([$childPath, $sr['tmdb_id']]);
         $existing = $childRow->fetch();
         if (!$existing) continue;
+
+        // For saga/arc folders, resolve to TMDB season number via name matching
+        if ($seasonNum === null && (isset($sagaNum) || $sagaName !== null)) {
+            $tmdbId = $sr['tmdb_id'];
+            if (!isset($tmdbSeasonCache[$tmdbId])) {
+                $showUrl = "https://api.themoviedb.org/3/tv/{$tmdbId}?api_key={$TMDB_API_KEY}&language=fr";
+                $showData = tmdb_fetch($showUrl, $ctx);
+                usleep(50000);
+                $tmdbSeasonCache[$tmdbId] = $showData['seasons'] ?? [];
+            }
+            $tmdbSeasons = $tmdbSeasonCache[$tmdbId];
+
+            // Try name similarity matching first
+            if ($sagaName) {
+                $bestSim = 0;
+                $bestSeason = null;
+                $normSaga = mb_strtolower($sagaName);
+                foreach ($tmdbSeasons as $ts) {
+                    $tsName = mb_strtolower($ts['name'] ?? '');
+                    if ($tsName === '') continue;
+                    similar_text($normSaga, $tsName, $pct);
+                    if ($pct > $bestSim && $pct > 40) {
+                        $bestSim = $pct;
+                        $bestSeason = $ts['season_number'];
+                    }
+                }
+                if ($bestSeason !== null) {
+                    $seasonNum = $bestSeason;
+                    ai_log('SAGA->SEASON | "' . $child . '" matched to season ' . $seasonNum . ' by name (sim=' . round($bestSim) . '%)');
+                }
+            }
+
+            // Fallback: sequential mapping (Saga 1 → Season 1, etc.)
+            if ($seasonNum === null && isset($sagaNum)) {
+                // Filter out specials (season 0)
+                $realSeasons = array_filter($tmdbSeasons, fn($s) => ($s['season_number'] ?? 0) > 0);
+                if ($sagaNum <= count($realSeasons)) {
+                    $seasonNum = $sagaNum;
+                    ai_log('SAGA->SEASON | "' . $child . '" sequential fallback to season ' . $seasonNum);
+                }
+            }
+
+            if ($seasonNum === null) continue; // Could not resolve saga to season
+        }
 
         // Fetch season-specific poster from TMDB
         $seasonUrl = "https://api.themoviedb.org/3/tv/{$sr['tmdb_id']}/season/{$seasonNum}?api_key={$TMDB_API_KEY}&language=fr";
@@ -455,7 +626,7 @@ foreach ($seasonRows as $sr) {
         }
     }
 }
-if ($seasonUpdated > 0) ai_log('SEASON | ' . $seasonUpdated . ' entries got season-specific poster');
+if ($seasonUpdated > 0) ai_log('SEASON | ' . $seasonUpdated . ' entries got season-specific poster (incl. saga/arc)');
 
 // ── Checkpoint WAL + backup DB after scan ──
 // Ensures the backup captures the post-scan state, not the pre-scan NULL state.

@@ -442,12 +442,89 @@ function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx,
                 'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
                 'overview' => substr($r['overview'] ?? '', 0, 150),
                 'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
+                'rating' => round((float)($r['vote_average'] ?? 0), 1),
+                'vote_count' => (int)($r['vote_count'] ?? 0),
             ];
             if (count($candidates) >= $limit) break 2;
         }
         usleep(50000);
     }
     return $candidates;
+}
+
+/**
+ * Score a TMDB candidate against an extracted title/year.
+ * Returns 0-100 reflecting match confidence.
+ *
+ * @param array $candidate {id, title, year, type, overview, poster, vote_count?}
+ * @param bool $preferTv True if folder context suggests TV (has season subfolders)
+ */
+function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array $candidate, bool $preferTv = false): int {
+    $score = 0;
+
+    // ── Title similarity (0-65 points) ──
+    $norm = function(string $s): string {
+        $s = mb_strtolower($s);
+        $s = @iconv('UTF-8', 'ASCII//TRANSLIT', $s) ?: $s;
+        $s = preg_replace('/[^a-z0-9 ]/', '', $s);
+        return trim(preg_replace('/\s+/', ' ', $s));
+    };
+    $a = $norm($extractedTitle);
+    $b = $norm($candidate['title'] ?? '');
+    if ($a === '' || $b === '') return 0;
+
+    similar_text($a, $b, $pct);
+    $score += (int)round($pct * 0.65);
+
+    // Bonus: one title contains the other entirely (handles "Naruto" vs "Naruto Shippuden")
+    if ($a !== $b && (str_contains($b, $a) || str_contains($a, $b))) {
+        $score = max($score, 40); // floor at 40 if substring match
+    }
+
+    // ── Year (0-15 points) ──
+    $cYear = (int)($candidate['year'] ?? 0);
+    if ($extractedYear && $cYear) {
+        if ($cYear === $extractedYear) {
+            $score += 15;
+        } elseif (abs($cYear - $extractedYear) <= 1) {
+            $score += 10;
+        }
+    } elseif (!$extractedYear && $cYear) {
+        // No year in filename — slight bonus (not penalised)
+        $score += 5;
+    }
+
+    // ── Type coherence (0-10 points) ──
+    $cType = $candidate['type'] ?? '';
+    if ($preferTv && $cType === 'tv') {
+        $score += 10;
+    } elseif (!$preferTv && $cType === 'movie') {
+        $score += 10;
+    } elseif ($cType === 'tv' || $cType === 'movie') {
+        $score += 3; // wrong preference but still valid media
+    }
+
+    // ── Popularity (0-10 points) — avoid obscure homonyms ──
+    $voteCount = (int)($candidate['vote_count'] ?? 0);
+    if ($voteCount > 500) {
+        $score += 10;
+    } elseif ($voteCount > 100) {
+        $score += 7;
+    } elseif ($voteCount > 10) {
+        $score += 3;
+    }
+
+    return min(100, $score);
+}
+
+/**
+ * Convert a tmdb_score_candidate score to a verified level.
+ */
+function tmdb_score_to_verified(int $score): int {
+    if ($score >= 80) return 80;
+    if ($score >= 55) return 60;
+    if ($score >= 35) return 40;
+    return 0; // below threshold — no match
 }
 
 // ── FFmpeg helpers ──────────────────────────────────────────────────────────

@@ -78,9 +78,18 @@ if (isset($_GET['posters'])) {
                 $fullPath = $resolvedPath . '/' . $f;
                 // Check cache — si le tmdb_id matche le parent, c'est un vrai poster de saison
                 // Sinon c'est un vieux match foireux (ex: "S01" → série chinoise) → re-fetch
-                $stmt = $db->prepare("SELECT poster_url, overview, tmdb_id FROM folder_posters WHERE path = :p");
+                $stmt = $db->prepare("SELECT poster_url, overview, tmdb_id, verified, ia_checked FROM folder_posters WHERE path = :p");
                 $stmt->execute([':p' => $fullPath]);
                 $row = $stmt->fetch();
+                // Respecter les matchs existants (verified > 0) même si tmdb_id != parent — un match direct
+                // vaut mieux qu'un héritage de saison depuis un parent potentiellement faux
+                if ($row && $row['poster_url'] && $row['poster_url'] !== '__none__' && (int)($row['verified'] ?? 0) > 0 && (int)($row['tmdb_id'] ?? 0) !== $parentTmdbId) {
+                    $result[$f] = ['poster' => $row['poster_url'], 'confidence' => (int)($row['verified'] ?? 0)];
+                    if ($row['overview']) $result[$f]['overview'] = $row['overview'];
+                    if (isset($row['ia_checked']) && (int)$row['ia_checked'] === 0) $result[$f]['pending_ai'] = true;
+                    $seasonFolders[] = $f;
+                    continue;
+                }
                 if ($row && (int)($row['tmdb_id'] ?? 0) === $parentTmdbId) {
                     if ($row['poster_url'] === '__none__') {
                         $result[$f] = ['hidden' => true];
@@ -138,7 +147,7 @@ if (isset($_GET['posters'])) {
     if (!empty($eligibleFolders)) {
         $folderPaths = array_map(fn($f) => realpath($resolvedPath . '/' . $f) ?: ($resolvedPath . '/' . $f), $eligibleFolders);
         $ph = implode(',', array_fill(0, count($folderPaths), '?'));
-        $stmt = $db->prepare("SELECT path, poster_url, overview, verified, tmdb_year, tmdb_rating FROM folder_posters WHERE path IN ($ph)");
+        $stmt = $db->prepare("SELECT path, poster_url, overview, verified, tmdb_year, tmdb_rating, ia_checked FROM folder_posters WHERE path IN ($ph)");
         $stmt->execute($folderPaths);
         foreach ($stmt->fetchAll() as $row) {
             $folderDbRows[$row['path']] = $row;
@@ -158,6 +167,7 @@ if (isset($_GET['posters'])) {
                 if ($row['overview']) $cached[$f]['overview'] = $row['overview'];
                 if ($row['tmdb_year']) $cached[$f]['year'] = $row['tmdb_year'];
                 if ($row['tmdb_rating'] > 0) $cached[$f]['rating'] = (float)$row['tmdb_rating'];
+                if (isset($row['ia_checked']) && (int)$row['ia_checked'] === 0) $cached[$f]['pending_ai'] = true;
                 $posterCount[$row['poster_url']] = ($posterCount[$row['poster_url']] ?? 0) + 1;
                 $posterHitCount++;
             } elseif ((int)($row['verified'] ?? 0) === -1) {
@@ -482,24 +492,11 @@ if (isset($_GET['ai_recheck']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         // INSERT si pas d'entrée, UPDATE si existante
         // __none__ + verified=100 = choix humain définitif → jamais toucher
         // __none__ + verified<100 = skip automatique (skill) → réinitialisable
-        poster_log('AI recheck | ' . $name . ' → reset to pending (verified=-1, poster=NULL, match_attempts=0)');
-        $db->prepare("INSERT INTO folder_posters (path, poster_url, verified, match_attempts, ia_checked) VALUES (:p, NULL, -1, 0, 0)
-                      ON CONFLICT(path) DO UPDATE SET poster_url = CASE WHEN poster_url = '__none__' AND verified = 100 THEN '__none__' ELSE NULL END,
-                      verified = CASE WHEN poster_url = '__none__' AND verified = 100 THEN verified ELSE -1 END,
-                      match_attempts = CASE WHEN poster_url = '__none__' AND verified = 100 THEN match_attempts ELSE 0 END,
-                      ia_checked = CASE WHEN poster_url = '__none__' AND verified = 100 THEN ia_checked ELSE 0 END")
+        poster_log('AI recheck | ' . $name . ' → mark for IA verification (ia_checked=0, verified=0)');
+        $db->prepare("INSERT INTO folder_posters (path, ia_checked, verified) VALUES (:p, 0, 0)
+                      ON CONFLICT(path) DO UPDATE SET ia_checked = 0, verified = CASE WHEN poster_url = '__none__' AND verified = 100 THEN verified ELSE 0 END")
            ->execute([':p' => $fullPath]);
-        // Launch cron if not already running
-        $scriptPath = realpath(__DIR__ . '/../tools/tmdb-worker.php');
-        $lockFile = dirname(DB_PATH) . '/sharebox_tmdb_cron.lock';
-        $lockFp = @fopen($lockFile, 'c');
-        if ($lockFp && flock($lockFp, LOCK_EX | LOCK_NB)) {
-            flock($lockFp, LOCK_UN); fclose($lockFp);
-            exec('/usr/bin/php ' . escapeshellarg($scriptPath) . ' >> ' . escapeshellarg(dirname(DB_PATH) . '/tmdb-worker.log') . ' 2>&1 &');
-            poster_log('AI cron triggered by recheck');
-        } else {
-            if ($lockFp) fclose($lockFp);
-        }
+        poster_log('AI recheck queued — will be verified on next IA scan run');
         echo json_encode(['success' => true]);
     } catch (PDOException $e) {
         poster_log('DB error AI recheck | ' . $name . ' → ' . $e->getMessage());
@@ -592,6 +589,217 @@ function search_wikimedia_logos(string $studioName, $ctx): array {
     }
 
     return $results;
+}
+
+// ── Web image search (DuckDuckGo) ──
+if (isset($_GET['web_search'])) {
+    $query = trim($_GET['web_search']);
+    if (!$query) { echo '[]'; exit; }
+    poster_log('WEB_SEARCH | query="' . $query . '"');
+    echo json_encode(search_web_images($query));
+    exit;
+}
+
+// ── Download web image, crop to 2:3 poster ratio, save locally ──
+if (isset($_GET['web_poster_save']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $input = json_decode(file_get_contents('php://input'), true);
+    $imageUrl = $input['image_url'] ?? '';
+    if (!$imageUrl || !filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'invalid url']);
+        exit;
+    }
+
+    // Download image via curl
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $imageUrl,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT => 15,
+        CURLOPT_MAXFILESIZE => 10 * 1024 * 1024,
+        CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; ShareBox/1.0)',
+        CURLOPT_HTTPHEADER => ['Accept: image/*'],
+    ]);
+    $imageData = curl_exec($ch);
+    $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if (!$imageData || $httpCode !== 200) {
+        poster_log('WEB_SAVE error | download failed (' . $httpCode . ') ' . $imageUrl);
+        http_response_code(502);
+        echo json_encode(['error' => 'download failed']);
+        exit;
+    }
+
+    // Create GD image
+    $src = @imagecreatefromstring($imageData);
+    if (!$src) {
+        http_response_code(400);
+        echo json_encode(['error' => 'invalid image']);
+        exit;
+    }
+
+    $srcW = imagesx($src);
+    $srcH = imagesy($src);
+
+    // Target: 300x450 (2:3 ratio)
+    $dstW = 300;
+    $dstH = 450;
+    $targetRatio = $dstW / $dstH; // 0.667
+
+    $srcRatio = $srcW / $srcH;
+
+    if (abs($srcRatio - $targetRatio) < 0.08) {
+        // Already close to 2:3 — just resize
+        $cropX = 0; $cropY = 0; $cropW = $srcW; $cropH = $srcH;
+    } elseif ($srcRatio > $targetRatio) {
+        // Wider than 2:3 — crop sides (center)
+        $cropH = $srcH;
+        $cropW = (int)($srcH * $targetRatio);
+        $cropX = (int)(($srcW - $cropW) / 2);
+        $cropY = 0;
+    } else {
+        // Taller than 2:3 — crop bottom (bias top: title/face usually at top)
+        $cropW = $srcW;
+        $cropH = (int)($srcW / $targetRatio);
+        $cropX = 0;
+        $cropY = (int)(($srcH - $cropH) / 4);
+    }
+
+    $dst = imagecreatetruecolor($dstW, $dstH);
+    imagecopyresampled($dst, $src, 0, 0, $cropX, $cropY, $dstW, $dstH, $cropW, $cropH);
+    imagedestroy($src);
+
+    // Save to data/posters/
+    $posterDir = __DIR__ . '/../data/posters';
+    if (!is_dir($posterDir)) {
+        mkdir($posterDir, 0755, true);
+    }
+
+    $hash = substr(md5($imageUrl . microtime(true)), 0, 12);
+    $filename = $hash . '.jpg';
+    $filepath = $posterDir . '/' . $filename;
+
+    imagejpeg($dst, $filepath, 92);
+    imagedestroy($dst);
+
+    // Build URL accessible from browser
+    $posterUrl = '/share/poster.php?f=' . $filename;
+
+    poster_log('WEB_SAVE | ' . $imageUrl . ' → ' . $filename . ' (crop ' . $cropW . 'x' . $cropH . ' → ' . $dstW . 'x' . $dstH . ')');
+
+    echo json_encode(['success' => true, 'poster_url' => $posterUrl]);
+    exit;
+}
+
+/**
+ * Search web images via DuckDuckGo (no API key required)
+ */
+function search_web_images(string $query): array {
+    $ua = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+    // Step 1: Get vqd token from DuckDuckGo
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => 'https://duckduckgo.com/?q=' . urlencode($query) . '&iar=images&iax=images&ia=images',
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_TIMEOUT => 8,
+        CURLOPT_USERAGENT => $ua,
+        CURLOPT_HTTPHEADER => [
+            'Accept: text/html,application/xhtml+xml',
+            'Accept-Language: fr-FR,fr;q=0.9,en;q=0.8',
+        ],
+    ]);
+    $html = curl_exec($ch);
+
+    if (!$html) {
+        poster_log('WEB_SEARCH error | DDG request failed: ' . curl_error($ch));
+        curl_close($ch);
+        return [];
+    }
+
+    // Extract vqd token (multiple regex patterns for robustness)
+    $vqd = null;
+    if (preg_match('/vqd=(["\'])([\d-]+)\1/', $html, $m)) {
+        $vqd = $m[2];
+    } elseif (preg_match('/vqd=([\d-]+)/', $html, $m)) {
+        $vqd = $m[1];
+    } elseif (preg_match('/vqd%3D([\d-]+)/', $html, $m)) {
+        $vqd = $m[1];
+    }
+
+    if (!$vqd) {
+        poster_log('WEB_SEARCH error | no vqd token found');
+        curl_close($ch);
+        return [];
+    }
+
+    // Step 2: Fetch image results
+    $params = http_build_query([
+        'l' => 'fr-fr',
+        'o' => 'json',
+        'q' => $query,
+        'vqd' => $vqd,
+        'f' => ',,,',
+        'p' => '1',
+    ]);
+    curl_setopt_array($ch, [
+        CURLOPT_URL => 'https://duckduckgo.com/i.js?' . $params,
+        CURLOPT_HTTPHEADER => [
+            'Accept: application/json',
+            'Referer: https://duckduckgo.com/',
+            'Accept-Language: fr-FR,fr;q=0.9',
+        ],
+    ]);
+    $json = curl_exec($ch);
+    curl_close($ch);
+
+    $data = $json ? json_decode($json, true) : null;
+    if (!$data || empty($data['results'])) {
+        poster_log('WEB_SEARCH error | no image results for "' . $query . '"');
+        return [];
+    }
+
+    $results = [];
+    foreach ($data['results'] as $r) {
+        $w = (int)($r['width'] ?? 0);
+        $h = (int)($r['height'] ?? 0);
+        if ($w < 150 || $h < 150) continue;
+
+        $ratio = $h > 0 ? $w / $h : 1;
+        $isPortrait = ($ratio >= 0.45 && $ratio <= 0.85);
+
+        $results[] = [
+            'id' => 0,
+            'title' => strip_tags($r['title'] ?? 'Image'),
+            'year' => '',
+            'type' => 'web',
+            'poster' => $r['thumbnail'] ?? $r['image'],
+            'poster_w300' => $r['image'],
+            'overview' => ($r['source'] ?? '') . ($w ? " ({$w}x{$h})" : ''),
+            'rating' => 0,
+            'width' => $w,
+            'height' => $h,
+            'portrait' => $isPortrait,
+        ];
+
+        if (count($results) >= 50) break;
+    }
+
+    // Sort: portrait images first (ratio 0.45-0.85), then by closeness to 2:3
+    usort($results, function ($a, $b) {
+        // Portrait first
+        if ($a['portrait'] !== $b['portrait']) return $b['portrait'] <=> $a['portrait'];
+        // Then by closeness to 2:3 ratio
+        $target = 2 / 3;
+        $rA = $a['height'] > 0 ? $a['width'] / $a['height'] : 1;
+        $rB = $b['height'] > 0 ? $b['width'] / $b['height'] : 1;
+        return abs($rA - $target) <=> abs($rB - $target);
+    });
+
+    return array_values($results);
 }
 
 echo json_encode(['error' => 'unknown tmdb action']);

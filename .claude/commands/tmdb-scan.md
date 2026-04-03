@@ -107,9 +107,9 @@ Before processing the normal queue, query entries where `folder_type='movies'` A
 - If a matching movie or collection exists → update `tmdb_type='movie'`, new poster, appropriate confidence
 - If no movie match but the content is clearly compilations/films of a TV universe → use a TMDB collection if it exists, else keep `tmdb_type='movie'` with the best available poster
 
-Query ALL entries where `(verified < 90 OR verified IS NULL OR verified = 0) AND ia_checked = 0` and `poster_url IS NOT NULL AND poster_url != '__none__'`. Les entrées avec `ia_checked = 1` sont ignorées sauf si `verified = -1` (reset explicite user).
+Query ALL entries where `(verified < 90 OR verified IS NULL OR verified = 0) AND poster_url IS NOT NULL AND poster_url != '__none__'`. The worker now sets `ia_checked=1` on all matches — use `verified` score (not `ia_checked`) to find entries needing review. Exception: skip entries where `verified >= 90` (already confirmed) unless `verified = -1` (explicit user reset).
 
-> The PHP worker sets `verified=60` (raw match) or `verified=70` (bulk auto-verify). All provisional — skill has final authority and sets ≥90%.
+> The PHP worker now uses multi-candidate scoring and sets graduated `verified` values: 80 (high confidence), 60 (probable), 40 (doubtful). Bulk auto-verify sets 70. All provisional — skill has final authority and sets ≥90%. Prioritize entries with `verified <= 40` — these are the worker's weakest matches and most likely to be wrong.
 
 **For each entry, check:**
 - Folder name vs matched TMDB title — does it make sense?
@@ -117,6 +117,7 @@ Query ALL entries where `(verified < 90 OR verified IS NULL OR verified = 0) AND
 - Episode range — use `ls` on the parent dir to see E001-EXXX range; align with series episode count
 - Media type — `movie` matched for a folder with subfolders = wrong, retry as `tv`
 - Matched title contains sequel/variant keywords (Shippuden, Brotherhood, Kai, Next Gen, etc.) but folder name doesn't → search for original
+- **Video file names as context** — when the folder name alone is ambiguous, `ls` the folder and look at video filenames inside (episode numbers, year, codec info all help determine movie vs tv and correct match)
 
 **Fix rules (no questions, decide and apply):**
 - Matched title is a short film / music video / special but folder is a long series → wrong, re-search
@@ -125,6 +126,9 @@ Query ALL entries where `(verified < 90 OR verified IS NULL OR verified = 0) AND
 - **TMDB models sequel as Season N of original series → NOT a false positive, keep tmdb_id, fetch season-specific poster.** Before re-searching, always check the season list of the matched entry (`GET /tv/{tmdb_id}`) — if the sequel title appears as a season name, it's correct.
 - Episode count fits original series (not sequel) → fix to original
 - **Many sibling entries share the same tmdb_id pointing to a collection/saga/anthology** → this is a worker fallback, not a real individual match. Signal: multiple files in the same directory all have the same tmdb_id, and that entry's title contains words like "Saga", "Collection", "Intégrale", "Complete", or is clearly a franchise-level aggregate rather than a specific work. Action: re-search each file individually by its own filename title. The shared collection poster can be kept for the parent directory, but each child needs its own lookup.
+- **Cross-check siblings** — if N sibling entries in the same directory all share the same tmdb_id and 1-2 entries have a different tmdb_id, prioritize verifying the outliers. They are more likely to be false positives (or the only correct ones if the majority inherited a wrong parent match). Compare their folder names individually against both tmdb_ids.
+- **Low vote_count = probable homonym** — if the matched TMDB entry has `vote_count < 10` (check via `GET /tv/{tmdb_id}` or `GET /movie/{tmdb_id}`), it's likely an obscure homonym. Re-search with additional context (year, parent folder name) or try `search/movie` vs `search/tv` specifically.
+- **French ↔ English retry** — if the current match looks weak (wrong language, partial title match), retry the search without `&language=fr` to get English results. Many anime and foreign films have better TMDB coverage in English.
 
 **After verification:**
 - Correct match → set **95%**
