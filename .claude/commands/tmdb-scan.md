@@ -45,6 +45,16 @@ These rules are deterministic — apply them first, no ambiguity:
   - If parent folder is already matched in `folder_posters` → inherit parent's `tmdb_id`, then try `GET /tv/{tmdb_id}/season/{N}` for a season-specific poster; fall back to series poster
   - If parent is not matched → skip this entry (set `match_attempts = 1`), process after parent is matched
 
+**Saga/Arc folders → season mapping:**
+- Anime series often use "Saga XX", "Arc XX", "Part XX" instead of "Season XX". These do NOT map 1:1 to TMDB seasons.
+- When a parent is a TV series and children are named "Saga 01 - Name", "Arc Alabasta", etc.:
+  1. Get the full season list from TMDB: `GET /tv/{tmdb_id}?api_key=KEY&language=fr` → `seasons[]`
+  2. Match each saga/arc folder to the closest TMDB season by **name similarity** (e.g. "Saga 03 - Skypiea" → TMDB "Arc Skypiea")
+  3. If a name match is found → use that season's poster via `GET /tv/{tmdb_id}/season/{N}`
+  4. If no name match but saga has a number → try sequential mapping (Saga 01 → Season 1, etc.) as fallback
+  5. If no match at all → keep parent poster
+- This applies to any naming convention: "Saga", "Arc", "Part", "Partie", numbered or named
+
 **Series container folder:**
 - Folder named after a single series (e.g. "Pokemon La Series", "Naruto INTEGRALE") and containing season subfolders → search TMDB as TV, match to the series
 

@@ -248,13 +248,21 @@ if ($action !== '') {
                 break;
 
             case 'tmdb_status':
-                $db = get_db();
+                $db = new PDO('sqlite:' . DB_PATH, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+                $db->exec('PRAGMA journal_mode=WAL');
+                $db->exec('PRAGMA query_only = ON');
+                $db->exec('PRAGMA busy_timeout = 1000');
                 $total = (int)$db->query("SELECT COUNT(*) FROM folder_posters")->fetchColumn();
                 $matched = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__'")->fetchColumn();
                 $hidden = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url = '__none__'")->fetchColumn();
                 $pending = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NULL AND (verified IS NULL OR verified >= 0)")->fetchColumn();
                 $failed = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NULL AND verified = -1")->fetchColumn();
-                $scanning = file_exists(sys_get_temp_dir() . '/sharebox_tmdb_scan.lock');
+                $scanLock = dirname(DB_PATH) . '/sharebox_tmdb_cron.lock';
+                $scanning = false;
+                if (file_exists($scanLock)) {
+                    $scanPid = (int)@file_get_contents($scanLock);
+                    $scanning = $scanPid > 0 && is_dir("/proc/$scanPid");
+                }
                 // Confidence breakdown
                 $high = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND verified >= 80")->fetchColumn();
                 $medium = (int)$db->query("SELECT COUNT(*) FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND verified >= 50 AND verified < 80")->fetchColumn();
@@ -269,21 +277,23 @@ if ($action !== '') {
 
             case 'tmdb_scan':
                 // Launch tmdb-worker.php in background
-                $lockFile = sys_get_temp_dir() . '/sharebox_tmdb_scan.lock';
-                if (file_exists($lockFile) && (time() - filemtime($lockFile)) < 300) {
-                    echo json_encode(['ok' => false, 'message' => 'Scan déjà en cours']);
-                    break;
+                $lockFile = dirname(DB_PATH) . '/sharebox_tmdb_cron.lock';
+                if (file_exists($lockFile)) {
+                    $lockPid = (int)@file_get_contents($lockFile);
+                    if ($lockPid > 0 && is_dir("/proc/$lockPid")) {
+                        echo json_encode(['ok' => false, 'message' => 'Scan déjà en cours']);
+                        break;
+                    }
                 }
-                touch($lockFile);
                 $script = realpath(__DIR__ . '/tools/tmdb-worker.php');
                 $logFile = dirname(DB_PATH) . '/tmdb-worker.log';
                 $cmd = sprintf(
-                    '/usr/bin/php %s --cron >> %s 2>&1 & echo $!',
+                    'nohup /usr/bin/php %s --cron >> %s 2>&1 </dev/null & echo $!',
                     escapeshellarg($script),
                     escapeshellarg($logFile)
                 );
                 $pid = trim(shell_exec($cmd));
-                echo json_encode(['ok' => true, 'message' => 'Scan TMDB lancé', 'pid' => $pid]);
+                echo json_encode(['ok' => true, 'message' => 'Scan TMDB lancé', 'pid' => (int)$pid]);
                 break;
 
             case 'ai_scan_launch':
@@ -342,7 +352,35 @@ if ($action !== '') {
                     $cooldown = max(0, 3600 - $elapsed);
                 }
                 $aiAvailable = file_exists('/usr/local/bin/sharebox-tmdb-ai-scan');
-                echo json_encode(['running' => $running, 'pid' => $pid, 'log_size' => $logSize, 'last_result' => $lastResult, 'cooldown' => $cooldown, 'ai_available' => $aiAvailable]);
+                // Live progress: count ia_checked entries (updated by Claude in real-time)
+                $iaChecked = 0;
+                $iaTotal = 0;
+                $recentChanges = [];
+                try {
+                    $aiDb = new PDO('sqlite:' . DB_PATH, null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+                    $aiDb->exec('PRAGMA journal_mode=WAL');
+                    $aiDb->exec('PRAGMA query_only = ON');
+                    $aiDb->exec('PRAGMA busy_timeout = 1000');
+                    $iaChecked = (int)$aiDb->query("SELECT COUNT(*) FROM folder_posters WHERE ia_checked = 1")->fetchColumn();
+                    $iaTotal = (int)$aiDb->query("SELECT COUNT(*) FROM folder_posters")->fetchColumn();
+                    // Last 20 AI-verified entries with details
+                    $since = $_GET['since'] ?? '';
+                    $q = $since
+                        ? $aiDb->prepare("SELECT path, title, verified, tmdb_type, updated_at FROM folder_posters WHERE ia_checked = 1 AND updated_at > ? ORDER BY updated_at DESC LIMIT 20")
+                        : $aiDb->prepare("SELECT path, title, verified, tmdb_type, updated_at FROM folder_posters WHERE ia_checked = 1 ORDER BY updated_at DESC LIMIT 20");
+                    $since ? $q->execute([$since]) : $q->execute();
+                    foreach ($q->fetchAll() as $row) {
+                        $short = preg_replace('#^' . preg_quote(rtrim(BASE_PATH, '/'), '#') . '/#', '', $row['path']);
+                        $recentChanges[] = [
+                            'path' => $short,
+                            'title' => $row['title'],
+                            'verified' => (int)$row['verified'],
+                            'type' => $row['tmdb_type'],
+                            'at' => $row['updated_at'],
+                        ];
+                    }
+                } catch (PDOException $e) {}
+                echo json_encode(['running' => $running, 'pid' => $pid, 'log_size' => $logSize, 'last_result' => $lastResult, 'cooldown' => $cooldown, 'ai_available' => $aiAvailable, 'ia_checked' => $iaChecked, 'ia_total' => $iaTotal, 'recent' => $recentChanges]);
                 break;
 
             case 'ai_scan_log':
@@ -1621,7 +1659,14 @@ async function refreshAiScanBtn() {
             btn.style.display = 'none';
             return;
         }
-        if (data.running) return;
+        if (data.running) {
+            btn.textContent = 'IA en cours...';
+            btn.disabled = true;
+            var panel = document.getElementById('ai-scan-panel');
+            if (panel) panel.style.display = '';
+            pollAiProgress();
+            return;
+        }
         if (data.cooldown > 0) {
             const min = Math.ceil(data.cooldown / 60);
             btn.textContent = 'IA — ' + min + ' min';
@@ -1661,6 +1706,7 @@ async function launchAiScan() {
     }
     appendAiLog('Scan IA démarré (PID ' + res.pid + ')…\n');
     pollAiLog(0);
+    pollAiProgress();
 }
 
 function appendAiLog(text) {
@@ -1668,6 +1714,43 @@ function appendAiLog(text) {
     if (!log) return;
     log.textContent += text;
     log.scrollTop = log.scrollHeight;
+}
+
+var _aiLastSince = '';
+var _aiLastChecked = 0;
+async function pollAiProgress() {
+    try {
+        var url = '/share/admin.php?action=ai_scan_status';
+        if (_aiLastSince) url += '&since=' + encodeURIComponent(_aiLastSince);
+        const res = await fetch(url);
+        const data = await res.json();
+        // Progress counter
+        if (data.ia_checked > _aiLastChecked) {
+            appendAiLog('\n── Progression : ' + data.ia_checked + '/' + data.ia_total + ' vérifiés ──\n');
+            _aiLastChecked = data.ia_checked;
+        }
+        // Show recent changes
+        if (data.recent && data.recent.length > 0) {
+            var confLabel = function(v) {
+                if (v >= 90) return '✓ ' + v + '%';
+                if (v >= 70) return '~ ' + v + '%';
+                return '? ' + v + '%';
+            };
+            data.recent.reverse().forEach(function(c) {
+                var parts = c.path.split('/');
+                var short = parts.length > 3 ? '…/' + parts.slice(-2).join('/') : c.path;
+                appendAiLog(confLabel(c.verified) + '  ' + (c.title || '?') + '  (' + (c.type || '?') + ')  ← ' + short + '\n');
+            });
+            _aiLastSince = data.recent[data.recent.length - 1].at || _aiLastSince;
+        }
+        if (data.running) {
+            setTimeout(pollAiProgress, 5000);
+        } else {
+            appendAiLog('\n── Scan IA terminé ──\n');
+            loadTmdbStatus();
+            refreshAiScanBtn();
+        }
+    } catch(e) {}
 }
 
 async function pollAiLog(offset) {
