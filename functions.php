@@ -46,15 +46,20 @@ function acquireStreamSlot(): array {
         }
         fclose($fp);
     }
-    // Tous les slots occupés — attendre slot 1 avec polling + détection déconnexion
-    $fp = fopen('/tmp/sharebox_stream_slot_1.lock', 'w');
+    // Tous les slots occupés — polling round-robin avec détection déconnexion
+    // ignore_user_abort(false) permet à connection_aborted() de fonctionner
+    // même sans output envoyé (pas de headers flush à ce stade)
+    ignore_user_abort(false);
     $deadline = microtime(true) + STREAM_SLOT_TIMEOUT;
     while (microtime(true) < $deadline) {
-        if (flock($fp, LOCK_EX | LOCK_NB)) return [$fp, true];
-        if (connection_aborted()) { fclose($fp); exit; }
-        usleep(100000); // 100ms entre chaque essai
+        for ($i = 1; $i <= $max; $i++) {
+            $fp = fopen("/tmp/sharebox_stream_slot_{$i}.lock", 'w');
+            if (flock($fp, LOCK_EX | LOCK_NB)) return [$fp, true];
+            fclose($fp);
+        }
+        if (connection_aborted()) exit;
+        usleep(100000); // 100ms entre chaque tour
     }
-    fclose($fp);
     http_response_code(503);
     exit;
 }
@@ -159,17 +164,23 @@ function extract_title_year(string $name): array {
     // Retirer les tags entre crochets (ex: [Torrent911.com], [1080p], [FR])
     $clean = preg_replace('/\[.*?\]/', '', $clean);
     // Remplacer les séparateurs courants par des espaces
-    $clean = preg_replace('/[._()[\]{}]+/', ' ', $clean);
+    $clean = preg_replace('/[._()[\]{}:]+/', ' ', $clean);
     // Retirer la numérotation en début (ex: "01 - ", "01. ", "95 - ")
     $clean = preg_replace('/^\s*\d{1,3}\s*[-–.]\s*/', '', $clean);
     // Chercher une année (4 chiffres entre 1950 et 2099)
+    // Si range d'années proches (ex: "1997-2003" = série), prendre la première (TMDB indexe par début).
+    // Sinon prendre la dernière (ex: "2001 A Space Odyssey 1968" → 1968 est l'année de sortie).
     $year = null;
-    if (preg_match('/\b((?:19|20)\d{2})\b/', $clean, $m)) {
-        $year = (int)$m[1];
+    if (preg_match_all('/\b((?:19|20)\d{2})\b/', $clean, $m)) {
+        $first = (int)reset($m[1]);
+        $last = (int)end($m[1]);
+        $year = (count($m[1]) > 1 && abs($last - $first) <= 10) ? $first : $last;
     }
     // Remove season/saison markers before cutting to tech tags (they pollute TMDB search)
     // Handles: "Saison 3", "Season 2", "34 Saisons", "4 Seasons", "Season 1-4", "S01-S07"
+    // Also handles ordinal forms: "2nd Season", "3rd Season", "1st Season"
     $clean = preg_replace('/\b\d*\s*(saisons?|seasons?)\s*\d*(?:\s*[-–]\s*\d+)?\b/i', ' ', $clean);
+    $clean = preg_replace('/\b\d+(st|nd|rd|th)\s+seasons?\b/i', ' ', $clean);
     $clean = preg_replace('/\bS\d{1,2}\s*[-–]\s*S\d{1,2}\b/i', ' ', $clean);
     // Remove common non-title words that confuse TMDB
     $clean = preg_replace('/\b(int[eé]grale|collection|custom|restored|remast(?:er)?ed|pack|films?\s+\d+\s+a\s+\d+|oav|mini\s+film)\b/iu', ' ', $clean);
@@ -178,7 +189,9 @@ function extract_title_year(string $name): array {
     // Remove "HD Remasted" pattern
     $clean = preg_replace('/\bHD\s+Remast\w*/i', '', $clean);
     // Couper au premier tag technique
-    $title = preg_replace('/\b(multi|vff|vfq|truefrench|french|english|vostfr|subfrench|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|hdtv|dvdrip|hdrip|x264|x265|h264|h265|hevc|avc|xvid|divx|avi|mpeg|mpg|10bit|remux|2160p|1080p|720p|480p|uhd|4k|hdr|hdr10|dts|truehd|atmos|aac|ac3|flac|ddp?\d|proper|repack|internal|extended|unrated|directors?-?cut|complete|s\d{2}e?\d{0,2}|e\d{2,4})\b.*/i', '', $clean);
+    $title = preg_replace('/\b(multi|vff|vfq|truefrench|french|english|vostfr|vost|subfrench|dual|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|hdtv|dvdrip|hdrip|x264|x265|h264|h265|hevc|avc|xvid|divx|avi|mpeg|mpg|10bit|remux|2160p|1080p|720p|480p|uhd|4k|hdr|hdr10|dts|truehd|atmos|aac|ac3|flac|ddp?\d|proper\d?|repack|internal|extended|unrated|directors?-?cut|complete|s\d{2}e?\d{0,2}|e\d{2,4})\b.*/i', '', $clean);
+    // "DC" = Directors Cut — retire seulement en fin de titre (évite de couper "DC Comics" au début)
+    $title = preg_replace('/\s+dc\s*$/i', '', $title);
     // Si on a coupé à l'année, la retirer du titre aussi
     if ($year) {
         $title = preg_replace('/\b' . $year . '\b/', '', $title);
@@ -387,38 +400,6 @@ function tmdb_fetch(string $url, $ctx, int $maxRetries = 2): ?array {
 }
 
 /**
- * Cherche un titre sur TMDB et retourne le premier résultat avec un poster.
- * @param string[] $endpoints Ex: ['multi', 'tv'] ou ['multi', 'tv', 'movie']
- * @return array{poster: string, id: int, title: string, overview: string}|null
- */
-function tmdb_search(string $title, ?int $year, string $apiKey, $ctx, array $endpoints = ['multi', 'tv']): ?array {
-    $queries = tmdb_build_queries($title);
-    if ($year) $queries[] = $title . ' ' . $year;
-    foreach ($queries as $q) {
-        $encoded = urlencode($q);
-        foreach ($endpoints as $ep) {
-            $url = "https://api.themoviedb.org/3/search/{$ep}?api_key={$apiKey}&query={$encoded}&language=fr&page=1";
-            $data = tmdb_fetch($url, $ctx);
-            if ($data && !empty($data['results'])) {
-                foreach ($data['results'] as $r) {
-                    if (!empty($r['poster_path'])) {
-                        return [
-                            'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
-                            'id' => $r['id'] ?? null,
-                            'title' => $r['title'] ?? $r['name'] ?? null,
-                            'overview' => $r['overview'] ?? null,
-                            'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
-                            'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
-                        ];
-                    }
-                }
-            }
-        }
-    }
-    return null;
-}
-
-/**
  * Cherche un titre sur TMDB et retourne TOUS les candidats (pour le pick IA).
  * @return array[] Array of {id, title, year, type, overview, poster}
  */
@@ -453,7 +434,7 @@ function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx,
             ];
             if (count($candidates) >= $limit) break 2;
         }
-        usleep(50000);
+        usleep(300000);
     }
     return $candidates;
 }
@@ -471,12 +452,20 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
     // ── Title similarity (0-65 points) ──
     $norm = function(string $s): string {
         $s = mb_strtolower($s);
-        $s = @iconv('UTF-8', 'ASCII//TRANSLIT', $s) ?: $s;
-        $s = preg_replace('/[^a-z0-9 ]/', '', $s);
+        $trans = @iconv('UTF-8', 'ASCII//TRANSLIT', $s);
+        $ascii = ($trans !== false) ? trim(preg_replace('/[^a-z0-9 ]/', '', $trans)) : '';
+        if ($ascii !== '') {
+            $s = $ascii;
+        } else {
+            // Non-latin (kanji, hangul…): keep as-is, just strip punctuation
+            $s = preg_replace('/[\p{P}\p{S}]/u', '', $s);
+        }
         return trim(preg_replace('/\s+/', ' ', $s));
     };
     $a = $norm($extractedTitle);
     if ($a === '') return 0;
+    // Tronquer pour éviter O(n³) de similar_text sur des noms de release longs
+    if (mb_strlen($a) > 80) $a = mb_substr($a, 0, 80);
 
     // Score against localized title
     $b = $norm($candidate['title'] ?? '');
@@ -484,6 +473,10 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
     $bestB = $b;
     if ($b !== '') {
         similar_text($a, $b, $pct);
+        // Penalize length divergence to avoid short-title false positives ("One" vs "One Piece")
+        $lenA = mb_strlen($a); $lenB = mb_strlen($b);
+        $lenRatio = max($lenA, $lenB) > 0 ? min($lenA, $lenB) / max($lenA, $lenB) : 1;
+        if ($lenRatio < 0.5) $pct *= $lenRatio * 1.5;
         $bestPct = $pct;
     }
 
@@ -491,6 +484,10 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
     $bOrig = isset($candidate['original_title']) ? $norm($candidate['original_title']) : '';
     if ($bOrig !== '' && $bOrig !== $b) {
         similar_text($a, $bOrig, $pctOrig);
+        // Same length penalty for original title
+        $lenBO = mb_strlen($bOrig);
+        $lenRatioO = max($lenA, $lenBO) > 0 ? min($lenA, $lenBO) / max($lenA, $lenBO) : 1;
+        if ($lenRatioO < 0.5) $pctOrig *= $lenRatioO * 1.5;
         if ($pctOrig > $bestPct) {
             $bestPct = $pctOrig;
             $bestB = $bOrig;
@@ -500,12 +497,13 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
     if ($bestB === '') return 0;
     $score += (int)round($bestPct * 0.65);
 
-    // Substring bonus — proportional to length ratio to avoid false positives
-    if ($a !== $bestB && (str_contains($bestB, $a) || str_contains($a, $bestB))) {
+    // Substring bonus — additive, proportional to length ratio to avoid false positives
+    // Skip very short titles (< 4 chars) to prevent "One" matching "One Piece"
+    if ($a !== $bestB && mb_strlen($a) >= 4 && (str_contains($bestB, $a) || str_contains($a, $bestB))) {
         $shorter = min(mb_strlen($a), mb_strlen($bestB));
         $longer = max(mb_strlen($a), mb_strlen($bestB));
         $ratio = $longer > 0 ? $shorter / $longer : 0;
-        $score = max($score, max(20, (int)round(50 * $ratio)));
+        $score += (int)round(8 * $ratio);
     }
 
     // ── Year (0-15 points) ──
@@ -516,9 +514,6 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
         } elseif (abs($cYear - $extractedYear) <= 1) {
             $score += 10;
         }
-    } elseif (!$extractedYear && $cYear) {
-        // No year in filename — slight bonus (not penalised)
-        $score += 5;
     }
 
     // ── Type coherence (0-10 points) ──
@@ -571,8 +566,25 @@ function validateFilterMode(string $mode): string {
     return in_array($mode, ALLOWED_FILTER_MODES, true) ? $mode : 'none';
 }
 
-function validateBurnSub(int $burnSub): int {
-    return ($burnSub >= 0 && $burnSub < 50) ? $burnSub : -1;
+function validateBurnSub(int $burnSub, ?int $subCount = null): int {
+    if ($burnSub < 0 || $burnSub >= 50) return -1;
+    if ($subCount !== null && $burnSub >= $subCount) return -1;
+    return $burnSub;
+}
+
+/**
+ * Compte les pistes sous-titres d'un fichier via probe_cache.
+ */
+function getSubtitleCount(PDO $db, string $path): int {
+    try {
+        $stmt = $db->prepare("SELECT result FROM probe_cache WHERE path = :p");
+        $stmt->execute([':p' => $path]);
+        if ($row = $stmt->fetch()) {
+            $data = json_decode($row['result'], true);
+            return count($data['subtitles'] ?? []);
+        }
+    } catch (PDOException $e) { /* ignore */ }
+    return 0;
 }
 
 /**
@@ -614,8 +626,8 @@ function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1, stri
     $videoFilters .= ',format=yuv420p';
 
     if ($burnSub >= 0) {
-        return '"[0:s:' . $burnSub . '][0:v]scale2ref[ss][sv];[sv][ss]overlay=eof_action=pass[ov];'
-            . '[ov]' . $videoFilters . '[v];'
+        // Scale vidéo d'abord, puis overlay sous-titres (meilleure lisibilité du texte)
+        return '"[0:v:0]' . $videoFilters . '[sv];[0:s:' . $burnSub . '][sv]scale2ref[ss][sv2];[sv2][ss]overlay=eof_action=pass[v];'
             . '[0:a:' . $audioTrack . ']aresample=async=3000[a]"';
     }
     return '"[0:v:0]' . $videoFilters . '[v];'
@@ -623,10 +635,25 @@ function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1, stri
 }
 
 /**
+ * Vérifie si un fichier a au moins une piste audio (via probe_cache).
+ */
+function hasAudioTrack(PDO $db, string $path): bool {
+    try {
+        $stmt = $db->prepare("SELECT result FROM probe_cache WHERE path = :p");
+        $stmt->execute([':p' => $path]);
+        if ($row = $stmt->fetch()) {
+            $data = json_decode($row['result'], true);
+            return !empty($data['audio']);
+        }
+    } catch (PDOException $e) { /* ignore */ }
+    return true; // assume audio exists if no probe data
+}
+
+/**
  * Construit les arguments d'entrée ffmpeg communs.
  */
 function buildFfmpegInputArgs(string $filePath, string $seekBefore = ''): string {
-    return 'timeout 14400 ionice -c 2 -n 0 nice -n 5 ffmpeg -nostdin' . $seekBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
+    return 'timeout 3600 ionice -c 2 -n 0 nice -n 5 ffmpeg -nostdin' . $seekBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
 }
 
 /**
@@ -701,6 +728,7 @@ function computeEpisodeNav(string $subPath, string $basePath, string $baseUrl): 
  * Warm le fichier dans le page cache si < 2 Go.
  */
 function warmFileCache(string $filePath): void {
+    if (!is_file($filePath)) return;
     if (filesize($filePath) < VMTOUCH_SIZE_LIMIT) {
         shell_exec('vmtouch -qt ' . escapeshellarg($filePath) . ' >/dev/null 2>&1 &');
     }

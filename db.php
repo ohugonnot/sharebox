@@ -105,7 +105,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 18; // bump when adding migrations
+    $targetVersion = 19; // bump when adding migrations
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)
@@ -326,6 +326,12 @@ function get_db(): PDO {
             $db->exec("ALTER TABLE folder_posters ADD COLUMN ia_checked INTEGER DEFAULT 0");
         }
         $db->query('PRAGMA user_version = 18');
+    }
+
+    if ($version < 19) {
+        // v19 : index composite pour accélérer la requête pending du worker
+        $db->exec("CREATE INDEX IF NOT EXISTS idx_fp_pending ON folder_posters(poster_url, match_attempts)");
+        $db->query('PRAGMA user_version = 19');
     }
 
     if ($version < $targetVersion) {

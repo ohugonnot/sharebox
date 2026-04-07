@@ -14,6 +14,22 @@ if (!$apiKey) {
     exit;
 }
 
+// Rate limit pour les endpoints qui appellent des API externes (tmdb_search, web_search)
+// ?posters et ?tmdb_set sont exemptés (pas d'appel API ou action ponctuelle)
+if (isset($_GET['tmdb_search']) || isset($_GET['web_search'])) {
+    $rlFile = '/tmp/sharebox_rl_' . md5($_SERVER['REMOTE_ADDR'] ?? '') . '.json';
+    $rlData = @json_decode(@file_get_contents($rlFile), true) ?: ['ts' => 0, 'n' => 0];
+    $now = time();
+    if ($now - $rlData['ts'] > 60) { $rlData = ['ts' => $now, 'n' => 0]; }
+    $rlData['n']++;
+    @file_put_contents($rlFile, json_encode($rlData));
+    if ($rlData['n'] > 15) {
+        http_response_code(429);
+        echo json_encode(['error' => 'rate limit exceeded']);
+        exit;
+    }
+}
+
 // ── Batch poster lookup for all subfolders ──
 // On cherche des posters TMDB pour chaque sous-dossier dont le nom ressemble à un titre
 // de film/série. On skip les noms d'organisation (Season, Saison, OVA, Bonus, Extras...).
@@ -31,7 +47,8 @@ if (isset($_GET['posters'])) {
         . '|bdmv|clipinf|playlist|stream$|meta|backup|certificate'
         . ')/iu';
     // Sous-ensemble du skipPattern : dossiers de saison (on peut leur trouver un poster TMDB via le parent)
-    $seasonPattern = '/(?:^|\b)(?:season|saison|s)[\s._-]*(\d+)/i';
+    // Matche les dossiers saison/saga avec OU sans numéro : "Season 2", "Arc - East Blue", "Saga Alabasta"
+    $seasonPattern = '/(?:^|\b)(?:season|saison|saga|arc|part(?:ie)?)[\s._-]*(\d+)?/i';
 
     $result = [];
 
@@ -74,7 +91,7 @@ if (isset($_GET['posters'])) {
     if ($parentTmdbId) {
         foreach ($folders as $f) {
             if (preg_match($seasonPattern, $f, $m)) {
-                $seasonNum = (int)$m[1];
+                $seasonNum = !empty($m[1]) ? (int)$m[1] : 0;
                 $fullPath = $resolvedPath . '/' . $f;
                 // Check cache — si le tmdb_id matche le parent, c'est un vrai poster de saison
                 // Sinon c'est un vieux match foireux (ex: "S01" → série chinoise) → re-fetch
@@ -102,7 +119,7 @@ if (isset($_GET['posters'])) {
                 // Insert for worker — avoid synchronous TMDB API calls in web request
                 poster_log('SEASON pending | ' . $f . ' num=' . $seasonNum . ' parentId=' . $parentTmdbId);
                 try {
-                    $db->prepare("INSERT OR IGNORE INTO folder_posters (path) VALUES (:p)")->execute([':p' => $fullPath]);
+                    $db->prepare("INSERT INTO folder_posters (path) VALUES (:p) ON CONFLICT(path) DO UPDATE SET match_attempts = 0")->execute([':p' => $fullPath]);
                 } catch (PDOException $e) {}
                 $seasonFolders[] = $f;
             }
@@ -126,7 +143,7 @@ if (isset($_GET['posters'])) {
     if (!empty($eligibleFolders)) {
         $folderPaths = array_map(fn($f) => realpath($resolvedPath . '/' . $f) ?: ($resolvedPath . '/' . $f), $eligibleFolders);
         $ph = implode(',', array_fill(0, count($folderPaths), '?'));
-        $stmt = $db->prepare("SELECT path, poster_url, overview, verified, tmdb_year, tmdb_rating, ia_checked FROM folder_posters WHERE path IN ($ph)");
+        $stmt = $db->prepare("SELECT path, poster_url, overview, verified, tmdb_year, tmdb_rating, ia_checked, title FROM folder_posters WHERE path IN ($ph)");
         $stmt->execute($folderPaths);
         foreach ($stmt->fetchAll() as $row) {
             $folderDbRows[$row['path']] = $row;
@@ -143,9 +160,11 @@ if (isset($_GET['posters'])) {
                 $hiddenCount++;
             } elseif ($row['poster_url']) {
                 $cached[$f] = ['poster' => $row['poster_url']];
+                if (!empty($row['title'])) $cached[$f]['title'] = $row['title'];
                 if ($row['overview']) $cached[$f]['overview'] = $row['overview'];
                 if ($row['tmdb_year']) $cached[$f]['year'] = $row['tmdb_year'];
                 if ($row['tmdb_rating'] > 0) $cached[$f]['rating'] = (float)$row['tmdb_rating'];
+                if (isset($watchedPaths[$fullPath])) $cached[$f]['watched'] = true;
                 $posterCount[$row['poster_url']] = ($posterCount[$row['poster_url']] ?? 0) + 1;
                 $posterHitCount++;
             } elseif ((int)($row['verified'] ?? 0) === -1) {
@@ -261,6 +280,19 @@ if (isset($_GET['posters'])) {
         } else {
             if ($lockFp) fclose($lockFp);
             poster_log('WORKER already running');
+        }
+    }
+
+    // Flag posters used 5+ times as duplicates (same poster for many entries = likely wrong match)
+    $dupThreshold = 5;
+    foreach ($posterCount as $url => $count) {
+        if ($count >= $dupThreshold) {
+            foreach ($result as &$entry) {
+                if (isset($entry['poster']) && $entry['poster'] === $url) {
+                    $entry['duplicate'] = true;
+                }
+            }
+            unset($entry);
         }
     }
 
@@ -410,10 +442,23 @@ if (isset($_GET['tmdb_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
             $db->prepare("INSERT INTO folder_posters (path) VALUES (:p) ON CONFLICT(path) DO UPDATE SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, match_attempts = 0, updated_at = datetime('now')")
                ->execute([':p' => $fullPath]);
         } else {
+            // Check if tmdb_id changed — invalidate season children if so
+            $oldStmt = $db->prepare("SELECT tmdb_id FROM folder_posters WHERE path = :p");
+            $oldStmt->execute([':p' => $fullPath]);
+            $oldTmdbId = (int)($oldStmt->fetchColumn() ?: 0);
+
             poster_log('SET poster | ' . $folder . ' → ' . ($title ?: '?') . ' (id=' . $tmdbId . ') ' . ($posterUrl === '__none__' ? '__none__' : 'poster') . ' verified=100');
             $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_rating, verified) VALUES (:p, :u, :i, :t, :o, :y, :r, 100)
               ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, tmdb_year = :y, tmdb_rating = :r, verified = 100, updated_at = datetime('now')")
                ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $tmdbId, ':t' => $title, ':o' => $overview, ':y' => $year, ':r' => $rating]);
+
+            // If tmdb_id changed and this is a directory, reset season children inherited from old parent
+            if ($tmdbId > 0 && $oldTmdbId > 0 && $tmdbId !== $oldTmdbId && is_dir($fullPath)) {
+                $resetSeason = $db->prepare("UPDATE folder_posters SET poster_url = NULL, tmdb_id = NULL, verified = 0, match_attempts = 0, updated_at = datetime('now') WHERE path LIKE :prefix AND tmdb_id = :old_id AND verified < 100");
+                $resetSeason->execute([':prefix' => $fullPath . '/%', ':old_id' => $oldTmdbId]);
+                $resetCount = $resetSeason->rowCount();
+                if ($resetCount > 0) poster_log('SET cascade | reset ' . $resetCount . ' season children (old_id=' . $oldTmdbId . ' new_id=' . $tmdbId . ')');
+            }
         }
         echo json_encode(['success' => true]);
     } catch (PDOException $e) {
@@ -445,7 +490,12 @@ if (isset($_GET['folder_type_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $db->prepare("INSERT INTO folder_posters (path, folder_type) VALUES (:p, :t)
                       ON CONFLICT(path) DO UPDATE SET folder_type = :t, updated_at = datetime('now')")
            ->execute([':p' => $fullPath, ':t' => $type]);
-        echo json_encode(['success' => true, 'folder_type' => $type]);
+        // Reset children posters pour re-matching (sauf choix humains verified=100)
+        $resetStmt = $db->prepare("UPDATE folder_posters SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, match_attempts = 0, updated_at = datetime('now') WHERE path LIKE :prefix AND NOT (poster_url = '__none__' AND verified = 100)");
+        $resetStmt->execute([':prefix' => $fullPath . '/%']);
+        $resetCount = $resetStmt->rowCount();
+        if ($resetCount > 0) poster_log('TYPE cascade | reset ' . $resetCount . ' children');
+        echo json_encode(['success' => true, 'folder_type' => $type, 'reset' => $resetCount]);
     } catch (PDOException $e) {
         poster_log('DB error TYPE set | ' . $folder . ' → ' . $e->getMessage());
         http_response_code(500);

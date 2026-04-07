@@ -67,7 +67,7 @@ function plog(tag, msg, data) {
         audioIdx: 0,    quality: 720,    filter: 'none',  burnSub: -1,  isMP4: false,  isMKV: false,
         speed: 1,
         dragging: false, seekPending: false, rafPending: false,
-        hasFailed: false, stallCount: 0,
+        hasFailed: false, stallCount: 0, failRetries: 0,
         videoHeight: 0, seekGen: 0,
         keyframeAbort: null,
         // timers
@@ -90,7 +90,7 @@ function plog(tag, msg, data) {
     // Safari iOS : utiliser HLS au lieu de fMP4 (Safari coupe les streams fMP4 sans Range support)
     // Détection iPad Desktop Mode : platform peut être "MacIntel" ou futur "macOS" → /^Mac/
     var isIOS = (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream)
-             || (/^Mac/.test(navigator.platform || '') && navigator.maxTouchPoints > 1);
+             || (/^Mac/.test(navigator.platform || '') && navigator.maxTouchPoints > 1 && !window.chrome);
     var isSafari = /Safari/.test(navigator.userAgent) && !/Chrome/.test(navigator.userAgent);
     // HLS uniquement pour Safari réel sur iOS (pas Chrome DevTools émulation mobile)
     // Chrome avec UA iPhone a toujours window.chrome défini ; sur vrai iOS tous les browsers sont WebKit
@@ -106,6 +106,8 @@ function plog(tag, msg, data) {
             if (S.burnSub >= 0) url += '&burnSub=' + S.burnSub;
         }
         if (startSec > 0) url += '&start=' + startSec.toFixed(1);
+        // Cache-bust pour éviter que le navigateur serve un ancien stream depuis le cache
+        url += '&_t=' + Date.now();
         return url;
     }
 
@@ -176,8 +178,13 @@ function plog(tag, msg, data) {
     }
     function onFsChange() {
         if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;  // safe: static SVG constants
-        if (isFs()) { player.style.height = ''; showFsControls(); }
-        else { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); applyZoom(); }
+        if (isFs()) {
+            player.style.height = ''; showFsControls();
+            try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(function(){}); } catch(e){}
+        } else {
+            clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); applyZoom();
+            try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch(e){}
+        }
     }
     document.addEventListener('fullscreenchange',        onFsChange);
     document.addEventListener('webkitfullscreenchange',  onFsChange);
@@ -300,10 +307,12 @@ function plog(tag, msg, data) {
         var nativeAudio = selectedAudio ? canPlayAudio(selectedAudio.codec) : true;
         if (c === 'h264') {
             if (d.isMP4 && nativeAudio) return 'native';
+            if (d.isMKV && nativeAudio && canPlay('video/x-matroska; codecs="avc1"')) return 'native';
             return REMUX_ENABLED ? 'remux' : 'transcode';
         }
         if (c === 'vp9' || c === 'vp8') {
-            if (d.isMKV && nativeAudio && canPlay('video/webm; codecs="vp9"')) return 'native';
+            if (nativeAudio && d.isMKV && canPlay('video/webm; codecs="vp9"')) return 'native';
+            if (nativeAudio && canPlay('video/webm; codecs="' + (c === 'vp9' ? 'vp09' : 'vp8') + '"')) return 'native';
             return 'transcode';
         }
         if (c === 'av1' || c === 'av01') {
@@ -324,9 +333,29 @@ function plog(tag, msg, data) {
         if (S.hasFailed) return;
         S.hasFailed = true;
         var pos = realTime();
-        plog('ERROR', 'onFail step=' + S.step + ' confirmed=' + S.confirmed + ' pos=' + pos.toFixed(1));
+        var errCode = player.error ? player.error.code : 0;
+        plog('ERROR', 'onFail step=' + S.step + ' confirmed=' + S.confirmed + ' errCode=' + errCode + ' pos=' + pos.toFixed(1));
+        // Erreur réseau (code 2) : retry simple sans cascader le mode
+        if (errCode === 2 && S.failRetries < 3) {
+            S.failRetries++;
+            S.hasFailed = false;
+            plog('ERROR', 'network error → retry #' + S.failRetries);
+            hint.textContent = 'Erreur r\u00E9seau, retry #' + S.failRetries + '...'; hint.className = 'player-hint';
+            setTimeout(function() {
+                // Ne pas retry si l'onglet est caché (évite les ffmpeg orphelins)
+                if (document.hidden) { plog('ERROR', 'tab hidden, deferring retry'); S.hasFailed = false; return; }
+                startStream(pos);
+            }, 1500);
+            return;
+        }
+        // Erreur réseau épuisée : erreur définitive (pas de cascade)
+        if (errCode === 2) {
+            hint.textContent = 'Erreur r\u00E9seau persistante. V\u00E9rifiez votre connexion.';
+            hint.className = 'player-hint error';
+            return;
+        }
         // Cascade : native/remux → transcode → erreur définitive
-        if (!S.confirmed && (S.step === 'native' || S.step === 'remux')) {
+        if (S.confirmed !== 'transcode' && (S.step === 'native' || S.step === 'remux')) {
             S.step = S.confirmed = 'transcode';
             plog('ERROR', 'cascade → transcode');
             hint.textContent = 'Transcodage en cours...'; hint.className = 'player-hint transcoding';
@@ -357,7 +386,7 @@ function plog(tag, msg, data) {
         if (!isVideo || S.confirmed === 'native') return;
         var elapsed = 0;
         S.stallInterval = setInterval(function() {
-            if (!player.paused && player.readyState < 3) { hint.textContent = 'Chargement... ' + (++elapsed) + 's'; hint.className = 'player-hint'; }
+            if (!player.paused && player.readyState < 3) { var m = (S.confirmed || S.step) !== 'native' ? "File d'attente... " : 'Chargement... '; hint.textContent = m + (++elapsed) + 's'; hint.className = 'player-hint'; }
         }, 1000);
         S.stallTimer = setTimeout(function() {
             clearStallWatchdog();
@@ -390,6 +419,7 @@ function plog(tag, msg, data) {
         unlockSize();
         Subs.resetIdx();
         clearStallWatchdog();
+        S.failRetries = 0;
         clearTimeout(stableTimer);
         stableTimer = setTimeout(function() { S.stallCount = 0; }, 30000);
         var mode = S.confirmed || S.step;
@@ -444,6 +474,7 @@ function plog(tag, msg, data) {
             var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
             return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec.toFixed(3);
         },
+        _lastTxt: '',
         render: function() {
             if (!this._div) return;
             var t = realTime(), txt = '';
@@ -451,22 +482,26 @@ function plog(tag, msg, data) {
                 while (this._idx < this.cues.length && this.cues[this._idx].end <= t) this._idx++;
                 if (this._idx < this.cues.length && this.cues[this._idx].start <= t) txt = this.cues[this._idx].text;
             }
-            var safe = txt.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                          .replace(/&lt;(\/?(b|i|u|em|strong|s))&gt;/gi,'<$1>');
+            if (txt === this._lastTxt) return;
+            this._lastTxt = txt;
+            // Strip unknown tags, keep only b/i/u/em/strong/s
+            var safe = txt.replace(/<(\/?(b|i|u|em|strong|s))\s*>/gi, '\x00$1\x01')
+                          .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                          .replace(/\x00/g,'<').replace(/\x01/g,'>');
             var html = txt ? '<span style="background:rgba(0,0,0,.78);color:#fff;padding:.2em .6em;border-radius:4px;line-height:1.4;display:inline-block;max-width:100%;word-break:break-word;white-space:pre-line">' + safe + '</span>' : '';
-            if (this._div.innerHTML !== html) this._div.innerHTML = html;
+            this._div.innerHTML = html;
         },
         load: function(idx) {
             plog('SUBS', 'load idx=' + idx + ' type=' + (this.types[idx]||'off') + ' wasBurning=' + (S.burnSub >= 0));
             var gen = ++this._gen;
             var wasBurning = S.burnSub >= 0, pos = realTime();
-            this.cues = []; this._idx = 0; S.burnSub = -1;
+            this.cues = []; this._idx = 0; this._emptyRetries = 0; S.burnSub = -1;
             if (this._div) this._div.innerHTML = '';
             this._syncTrack();
             if (idx >= 0 && this.types[idx] === 'image') {
                 S.burnSub = idx; S.confirmed = S.step = 'transcode';
                 hint.textContent = 'Transcodage avec sous-titres...'; hint.className = 'player-hint transcoding';
-                startStream(pos);
+                saveCfg(); startStream(pos);
             } else if (idx >= 0 && this.urls[idx]) {
                 if (wasBurning) startStream(pos);
                 var self = this;
@@ -479,7 +514,19 @@ function plog(tag, msg, data) {
                     })
                     .then(function(t) {
                         if (gen !== self._gen) { plog('SUBS', 'DISCARDED: gen=' + gen + ' current=' + self._gen); return; }
-                        if (!t || !t.trim()) { plog('SUBS', 'empty VTT response — server may still be extracting'); return; }
+                        if (!t || !t.trim()) {
+                            self._emptyRetries = (self._emptyRetries || 0) + 1;
+                            plog('SUBS', 'empty VTT response #' + self._emptyRetries + ' — server may still be extracting');
+                            if (self._emptyRetries >= 5) {
+                                hint.textContent = 'Sous-titres indisponibles'; hint.className = 'player-hint error';
+                                setTimeout(function() { if (hint.textContent === 'Sous-titres indisponibles') hint.textContent = ''; }, 4000);
+                                return;
+                            }
+                            hint.textContent = 'Extraction des sous-titres... (' + self._emptyRetries + '/5)'; hint.className = 'player-hint';
+                            setTimeout(function() { if (gen === self._gen) self.load(idx); }, 5000);
+                            return;
+                        }
+                        self._emptyRetries = 0;
                         self.cues = parseVTT(t);
                         self._idx = self._find(realTime());
                         self._syncTrack();
@@ -546,7 +593,7 @@ function plog(tag, msg, data) {
 
     // ── Seekbar ───────────────────────────────────────────────────────────────
     function updateSeekUI() {
-        if (S.duration <= 0 || S.seekPending) return;
+        if (S.duration <= 0 || S.seekPending || S.dragging) return;
         var pos = realTime(), pct = Math.min(100, Math.max(0, pos / S.duration * 100));
         seekFill.style.width  = pct + '%';
         seekThumb.style.left  = pct + '%';
@@ -569,10 +616,11 @@ function plog(tag, msg, data) {
         clearTimeout(S.seekDebounce);
         if (S.confirmed === 'native') {
             S.seekPending = false; player.currentTime = t; hint.textContent = '';
-            Subs.resetIdx();
+            Subs.resetIdx(); Subs._syncTrack();
         } else {
+            var debounceMs = (S.confirmed === 'transcode') ? 600 : 300;
             S.seekDebounce = setTimeout(function() {
-                startStream(t); S.seekPending = false;
+                S.failRetries = 0; startStream(t); S.seekPending = false;
                 hint.textContent = 'Chargement \u00E0 ' + fmtTime(t) + '...'; hint.className = 'player-hint';
                 // Correction rétroactive : le coarse seek atterrit sur keyframe K ≤ t.
                 // On corrige S.offset = K pendant le démarrage du stream (avant le 1er frame).
@@ -585,12 +633,13 @@ function plog(tag, msg, data) {
                         .then(function(r) { return r.json(); })
                         .then(function(d) {
                             if (seekGen === S.seekGen && typeof d.pts === 'number' && d.pts >= 0) {
-                                S.offset = d.pts; Subs.resetIdx(); Subs._syncTrack();
+                                S.offset = d.pts; Subs.resetIdx();
+                                Subs._syncTrack();
                             }
                         })
                         .catch(function() {});
                 }
-            }, 300);
+            }, debounceMs);
         }
     }
     player.addEventListener('timeupdate', function() {
@@ -598,7 +647,8 @@ function plog(tag, msg, data) {
             S.rafPending = true;
             requestAnimationFrame(function() { S.rafPending = false; updateSeekUI(); updateTitle(); });
         }
-        updateBuffered(); Subs.render();
+        updateBuffered();
+        if (!S.rafPending) Subs.render();
         // Watch history : marquer vu à 85% (une seule fois par lecture)
         if (!watchMarked && watchPath && watchCsrf && S.duration > 60) {
             if (realTime() / S.duration >= 0.85) {
@@ -613,11 +663,11 @@ function plog(tag, msg, data) {
         }
     });
     seekBar.addEventListener('mousedown',  function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); });
-    seekBar.addEventListener('touchstart', function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); }, {passive:true});
+    seekBar.addEventListener('touchstart', function(e) { if (!S.duration || e.touches.length !== 1) return; var rect = seekBar.getBoundingClientRect(); var ty = e.touches[0].clientY; if (ty < rect.top - 10 || ty > rect.bottom + 10) return; e.preventDefault(); S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); if (seekTooltip) { var f = getFraction(e); seekTooltip.textContent = fmtTime(f * S.duration); seekTooltip.style.left = (f * 100) + '%'; seekTooltip.style.display = 'block'; } }, {passive:false});
     document.addEventListener('mousemove', function(e) { if (S.dragging) seekToFraction(getFraction(e)); });
-    document.addEventListener('touchmove', function(e) { if (S.dragging) { e.preventDefault(); seekToFraction(getFraction(e)); } }, {passive:false});
+    seekBar.addEventListener('touchmove', function(e) { if (S.dragging) { e.preventDefault(); seekToFraction(getFraction(e)); if (seekTooltip) { var f = getFraction(e); seekTooltip.textContent = fmtTime(f * S.duration); seekTooltip.style.left = (f * 100) + '%'; seekTooltip.style.display = 'block'; } } }, {passive:false});
     document.addEventListener('mouseup',   function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } });
-    document.addEventListener('touchend',  function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } });
+    document.addEventListener('touchend',  function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); if (seekTooltip) seekTooltip.style.display = 'none'; } });
     seekBar.addEventListener('mousemove', function(e) {
         if (!S.duration || !seekTooltip) return;
         var rect = seekBar.getBoundingClientRect(), frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -656,17 +706,19 @@ function plog(tag, msg, data) {
         if (d.audio && d.audio.length > 1) {
             hasControls = true;
             var lbl = document.createElement('label'); lbl.textContent = 'Audio :';
-            var sel = document.createElement('select'); sel.className = 'track-select'; sel.title = 'Audio'; sel.dataset.track = 'audio';
+            var sel = document.createElement('select'); sel.className = 'track-select'; sel.title = 'Audio'; sel.setAttribute('aria-label', 'Piste audio'); sel.dataset.track = 'audio';
             d.audio.forEach(function(a) { var o = document.createElement('option'); o.value = a.index; o.textContent = a.label; sel.appendChild(o); });
             sel.addEventListener('change', function() {
                 S.audioIdx = parseInt(sel.value, 10) || 0;
                 // Re-évaluer le mode : natif possible seulement sur piste 0 (serveur sert le fichier brut)
+                // Piste non-0 : remux si vidéo compatible (copie vidéo, transcode audio en AAC)
                 var bestMode;
                 if (S.audioIdx === 0) {
                     var fakeProbe = {videoCodec:d.videoCodec, isMP4:d.isMP4, isMKV:d.isMKV, audio: d.audio[0] ? [d.audio[0]] : []};
                     bestMode = _chooseModeFromProbe(fakeProbe);
                 } else {
-                    bestMode = 'transcode';
+                    var vc = (d.videoCodec || '').toLowerCase();
+                    bestMode = (REMUX_ENABLED && vc === 'h264') ? 'remux' : 'transcode';
                 }
                 S.confirmed = S.step = bestMode;
                 plog('TRACK', 'audio changed → ' + S.audioIdx + ' mode=' + S.step);
@@ -703,7 +755,7 @@ function plog(tag, msg, data) {
                 }
                 hasControls = true;
                 var lbl3 = document.createElement('label'); lbl3.textContent = 'Qualit\u00E9 :';
-                var sel3 = document.createElement('select'); sel3.className = 'track-select'; sel3.title = 'Qualit\u00E9'; sel3.dataset.track = 'quality';
+                var sel3 = document.createElement('select'); sel3.className = 'track-select'; sel3.title = 'Qualit\u00E9'; sel3.setAttribute('aria-label', 'Qualit\u00E9 vid\u00E9o'); sel3.dataset.track = 'quality';
                 qs.forEach(function(q) { var o = document.createElement('option'); o.value = q; o.textContent = q + 'p'; if (q === S.quality) o.selected = true; sel3.appendChild(o); });
                 sel3.addEventListener('change', function() {
                     S.quality = parseInt(sel3.value, 10) || 720; S.confirmed = 'transcode';
@@ -715,12 +767,21 @@ function plog(tag, msg, data) {
                 grpVideo.append(lbl3, sel3);
                 // Sélecteur de filtres
                 var lbl4 = document.createElement('label'); lbl4.textContent = 'Filtre :';
-                var sel4 = document.createElement('select'); sel4.className = 'track-select'; sel4.title = 'Filtre'; sel4.dataset.track = 'filter';
+                var sel4 = document.createElement('select'); sel4.className = 'track-select'; sel4.title = 'Filtre'; sel4.setAttribute('aria-label', 'Filtre vid\u00E9o'); sel4.dataset.track = 'filter';
                 var filters = [{v:'none',t:'Aucun'},{v:'hdr',t:'HDR→SDR'},{v:'anime',t:'Anime'},{v:'detail',t:'Détail'},{v:'night',t:'Nuit'},{v:'deinterlace',t:'Désentrelacé'}];
                 filters.forEach(function(f) { var o = document.createElement('option'); o.value = f.v; o.textContent = f.t; if (f.v === S.filter) o.selected = true; sel4.appendChild(o); });
                 sel4.addEventListener('change', function() {
-                    S.filter = sel4.value || 'none'; S.confirmed = 'transcode';
+                    S.filter = sel4.value || 'none';
                     plog('TRACK', 'filter changed → ' + S.filter);
+                    // Si filtre "Aucun" et mode optimal n'est pas transcode, réévaluer
+                    if (S.filter === 'none' && probeData) {
+                        var optimal = chooseModeFromProbe(probeData);
+                        if (optimal !== 'transcode') {
+                            S.confirmed = S.step = optimal;
+                            hint.textContent = ''; saveCfg(); startStream(realTime()); return;
+                        }
+                    }
+                    S.confirmed = 'transcode';
                     hint.textContent = 'Changement de filtre...'; hint.className = 'player-hint transcoding';
                     saveCfg(); startStream(realTime());
                 });
@@ -733,7 +794,7 @@ function plog(tag, msg, data) {
             hasControls = true;
             d.subtitles.forEach(function(s) { Subs.urls.push(s.type === 'text' ? base + '?' + pp + 'subtitle=' + s.index : null); Subs.types.push(s.type || 'text'); });
             var lbl2 = document.createElement('label'); lbl2.textContent = 'Sous-titres :';
-            var selSub = document.createElement('select'); selSub.className = 'track-select'; selSub.title = 'Sous-titres'; selSub.dataset.track = 'subtitle';
+            var selSub = document.createElement('select'); selSub.className = 'track-select'; selSub.title = 'Sous-titres'; selSub.setAttribute('aria-label', 'Sous-titres'); selSub.dataset.track = 'subtitle';
             var off = document.createElement('option'); off.value = '-1'; off.textContent = 'D\u00E9sactiv\u00E9s'; selSub.appendChild(off);
             d.subtitles.forEach(function(s, i) { var o = document.createElement('option'); o.value = i; o.textContent = s.label; selSub.appendChild(o); });
             // Restaurer le dernier sous-titre choisi pour ce fichier
@@ -810,25 +871,60 @@ function plog(tag, msg, data) {
         var clickArea = document.getElementById('video-click-area');
         var lastClickTime = 0;
         var wasPausedBeforeTap = false;
+        var singleTapTimer = null;
         clickArea.addEventListener('click', function() {
             var now = Date.now();
             var isDouble = now - lastClickTime < 300;
             lastClickTime = isDouble ? 0 : now;
             if (isDouble) {
                 // Double-tap : annuler le play/pause du premier tap, toggle fullscreen
+                clearTimeout(singleTapTimer);
                 // Sur iOS : toggle fullscreen d'abord — le user gesture est consommé par play()/pause()
                 // ce qui fait échouer webkitEnterFullscreen si on l'appelle après
                 if (isIOS) { toggleFs(); return; }
+                // Undo first click's play/pause
                 if (wasPausedBeforeTap) { player.pause(); showPlayIcon(true); }
                 else { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
                 toggleFs();
-            } else {
-                // Single tap : play/pause immédiat (iOS exige play() dans le user gesture synchrone)
+            } else if (isIOS) {
+                // iOS : play/pause immédiat (exige play() dans le user gesture synchrone)
                 wasPausedBeforeTap = player.paused;
                 if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
                 else               { player.pause(); showPlayIcon(true); }
+            } else {
+                // Desktop/Android : délai pour éviter le flash play→pause→fullscreen
+                wasPausedBeforeTap = player.paused;
+                singleTapTimer = setTimeout(function() {
+                    if (wasPausedBeforeTap) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
+                    else                    { player.pause(); showPlayIcon(true); }
+                }, 200);
             }
         });
+        // Touch-seek : swipe horizontal +-10s
+        (function() {
+            var touchStartX = 0, touchStartY = 0, swiping = false;
+            clickArea.addEventListener('touchstart', function(e) {
+                if (e.touches.length !== 1) return;
+                touchStartX = e.touches[0].clientX; touchStartY = e.touches[0].clientY; swiping = false;
+            }, {passive: true});
+            clickArea.addEventListener('touchmove', function(e) {
+                if (!touchStartX || e.touches.length !== 1) return;
+                var dx = e.touches[0].clientX - touchStartX, dy = e.touches[0].clientY - touchStartY;
+                if (!swiping && Math.abs(dx) > 30 && Math.abs(dx) > Math.abs(dy) * 2) swiping = true;
+            }, {passive: true});
+            clickArea.addEventListener('touchend', function(e) {
+                if (!swiping) { touchStartX = 0; return; }
+                var dx = e.changedTouches[0].clientX - touchStartX;
+                touchStartX = 0; swiping = false;
+                if (Math.abs(dx) < 30 || !S.duration) return;
+                e.preventDefault();
+                var skip = dx > 0 ? 10 : -10;
+                var t = Math.max(0, Math.min(S.duration, realTime() + skip));
+                osd.textContent = (skip > 0 ? '+' : '') + skip + 's'; osd.classList.add('visible');
+                clearTimeout(osdTimer); osdTimer = setTimeout(function() { osd.classList.remove('visible'); }, 800);
+                seekToFraction(t / S.duration);
+            });
+        })();
         playBtn.addEventListener('click', function() {
             if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
             else               player.pause();
@@ -908,16 +1004,28 @@ function plog(tag, msg, data) {
             speedIdx = (speedIdx + 1) % speeds.length; S.speed = speeds[speedIdx];
             player.playbackRate = S.speed; speedBtn.textContent = S.speed + '\u00D7';
             lsSet('player_speed', S.speed);
+            if (S.speed > 1 && S.confirmed && S.confirmed !== 'native') {
+                osd.textContent = S.speed + '\u00D7 \u2014 le buffer peut se vider en transcode';
+                osd.classList.add('visible');
+                clearTimeout(osdTimer); osdTimer = setTimeout(function() { osd.classList.remove('visible'); }, 2500);
+            }
         }); }
         // iOS Safari ignore playbackRate sur HLS — masquer le bouton vitesse
         if (isIOS && speedBtn) speedBtn.style.display = 'none';
-        // Sauvegarde de position toutes les 5 s (30s min, 60s avant fin)
+        // Sauvegarde de position toutes les 15s (30s min, 30s avant fin)
         setInterval(function() {
             if (player.paused || S.duration <= 0) return;
             var t = realTime();
-            if (t > 30 && t < S.duration - 60) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
-            else if (t >= S.duration - 60)      { lsSet(posKey, '0'); clearCfg(); }
-        }, 5000);
+            if (t > 30 && t < S.duration - 30) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
+            else if (t >= S.duration - 30)      { lsSet(posKey, '0'); clearCfg(); }
+        }, 15000);
+        // Sauvegarder aussi quand l'onglet passe en arrière-plan (contourne le timer throttling)
+        document.addEventListener('visibilitychange', function() {
+            if (document.hidden && !player.paused && S.duration > 0) {
+                var t = realTime();
+                if (t > 30 && t < S.duration - 30) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
+            }
+        });
         // Auto-next épisode
         var autoNextEl = null;
         player.addEventListener('ended', function() {
@@ -932,6 +1040,11 @@ function plog(tag, msg, data) {
             var t3 = document.createElement('div'); t3.className = 'autonext-countdown';
             var remaining = 8;
             t3.textContent = 'Lecture dans ' + remaining + 's\u2026';
+            // Preload probe du prochain épisode pour que le cache soit chaud
+            if (episodeNav.next && episodeNav.next.url) {
+                var nextProbeUrl = episodeNav.next.url + (episodeNav.next.url.indexOf('?') !== -1 ? '&' : '?') + 'probe=1';
+                fetch(nextProbeUrl, {credentials: 'same-origin'}).catch(function(){});
+            }
             var acts = document.createElement('div'); acts.className = 'autonext-actions';
             var playNow = document.createElement('button'); playNow.className = 'an-play'; playNow.textContent = 'Lire maintenant';
             var cancel = document.createElement('button'); cancel.className = 'an-cancel'; cancel.textContent = 'Annuler';
@@ -951,13 +1064,21 @@ function plog(tag, msg, data) {
             if (S.duration > 0 && t > 30 && t < S.duration - 60) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
             clearStallWatchdog(); clearTimeout(stableTimer);
         });
+        // Retry deferred quand l'onglet redevient visible
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden && S.hasFailed && !player.paused) {
+                plog('EVENT', 'tab visible again, retrying after deferred error');
+                S.hasFailed = false;
+                startStream(realTime());
+            }
+        });
 
         // Bouton Resync
         var resyncBtn = document.createElement('button');
         resyncBtn.className = 'player-btn'; resyncBtn.title = 'Resynchroniser son et image';
         resyncBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Resync';
         resyncBtn.addEventListener('click', function() {
-            if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 0.1); return; }
+            if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 3); return; }
             hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(realTime());
         });
         var grpPlayback = document.createElement('div'); grpPlayback.className = 'track-group';
@@ -971,15 +1092,18 @@ function plog(tag, msg, data) {
             var pos = realTime(), m = S.confirmed || S.step;
             // Cycle : native → [remux si MKV+activé] → x264-480p → x264-720p → x264-1080p → native
             var allQ = [480, 576, 720, 1080].filter(function(q) { return q <= (S.videoHeight || 1080); });
+            var probeNative = probeData ? chooseModeFromProbe(probeData) === 'native' : true;
             if (m === 'native')         { S.step = S.confirmed = (REMUX_ENABLED && S.isMKV) ? 'remux' : 'transcode'; S.quality = allQ[0] || 480; }
             else if (m === 'remux')     { S.step = S.confirmed = 'transcode'; S.quality = allQ[0] || 480; }
             else {
                 var qi = allQ.indexOf(S.quality);
                 if (qi < 0) { S.quality = allQ[0] || 480; }
                 else if (qi < allQ.length - 1) { S.quality = allQ[qi + 1]; }
-                else { S.step = S.confirmed = 'native'; S.quality = 720; saveCfg(); startStream(pos); return; }
+                else if (probeNative) { S.step = S.confirmed = 'native'; S.quality = 720; S.filter = 'none'; var fSel = trackBar.querySelector('select[data-track="filter"]'); if (fSel) fSel.value = 'none'; saveCfg(); startStream(pos); return; }
+                else { S.quality = allQ[0] || 480; } // Boucle sur les qualités sans passer par natif
             }
-            // Reset burnSub uniquement (les sous-titres texte survivent au changement de mode)
+            // Reset burnSub et stallCount (éviter que les stalls du mode précédent imposent un long timeout)
+            S.stallCount = 0;
             if (S.burnSub >= 0) { S.burnSub = -1; Subs.cues = []; if (Subs._div) Subs._div.textContent = ''; }
             // Synchroniser le sélecteur de qualité
             var qSel = trackBar.querySelector('select[data-track="quality"]');
@@ -1066,7 +1190,7 @@ function plog(tag, msg, data) {
             }
             else if (e.key === 'r' || e.key === 'R') {
                 e.preventDefault();
-                if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 0.1); }
+                if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 3); }
                 else { hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(realTime()); }
             }
             else if (e.key === 'p' || e.key === 'P') {
@@ -1106,7 +1230,24 @@ function plog(tag, msg, data) {
         plog('CONFIG', 'restoreCfg from localStorage', savedCfg);
         if (savedCfg.audio >= 0)   S.audioIdx = savedCfg.audio;
         if (savedCfg.quality > 0)  S.quality  = savedCfg.quality;
-        if (savedCfg.mode)         { S.step = S.confirmed = savedCfg.mode; }
+        if (savedCfg.mode) {
+            // Vérifier compatibilité du mode sauvegardé avec le probe actuel
+            // (évite un 415 si l'épisode suivant est MP4 et le mode sauvegardé est "remux")
+            if (probeData) {
+                var optimalMode = _chooseModeFromProbe(probeData);
+                if (savedCfg.mode === 'remux' && !REMUX_ENABLED) {
+                    plog('CONFIG', 'saved mode remux but remux disabled → ' + optimalMode);
+                    S.step = S.confirmed = optimalMode;
+                } else if (savedCfg.mode === 'native' && optimalMode !== 'native') {
+                    plog('CONFIG', 'saved mode native but probe says ' + optimalMode);
+                    S.step = S.confirmed = optimalMode;
+                } else {
+                    S.step = S.confirmed = savedCfg.mode;
+                }
+            } else {
+                S.step = S.confirmed = savedCfg.mode;
+            }
+        }
     }
     // Synchroniser les sélecteurs UI après applyProbe (qui les construit)
     function restoreCfgUI() {
@@ -1189,7 +1330,11 @@ function plog(tag, msg, data) {
             }
         }, 2000);
         fetch(base + '?' + pp + 'probe=1', probeCtrl ? {signal: probeCtrl.signal} : {})
-            .then(function(r) { clearTimeout(probeTimer); return r.json(); })
+            .then(function(r) {
+                clearTimeout(probeTimer);
+                if (!r.ok) throw new Error('probe HTTP ' + r.status);
+                return r.json();
+            })
             .then(function(d) {
                 clearTimeout(fallbackTimer);
                 probeData = d;
@@ -1216,8 +1361,9 @@ function plog(tag, msg, data) {
                     } else {
                         startStream(0);
                     }
-                } else if (fallbackAt && Date.now() - fallbackAt < 5000) {
+                } else if (fallbackAt && Date.now() - fallbackAt < 3000) {
                     // Probe arrivé peu après le fallback natif — si le mode optimal est différent, restart proactif
+                    // Seulement si < 3s (au-delà, la lecture native est probablement établie)
                     var optimalMode = chooseModeFromProbe(d);
                     if (optimalMode !== 'native') {
                         plog('INIT', 'late probe restart → ' + optimalMode + ' at ' + realTime().toFixed(1));
