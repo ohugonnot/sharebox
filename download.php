@@ -45,7 +45,7 @@ function write_stream_info(array $info): void {
             $db = get_db();
             $ip = $_SERVER['REMOTE_ADDR'] ?? null;
             $details = 'mode=' . $info['mode'] . ' | file=' . ($info['filename'] ?? '') . ' | user=' . ($info['user'] ?? 'anonymous');
-            log_activity($db, 'stream_start', $info['user'] ?? null, $ip, $details);
+            log_activity('stream_start', $info['user'] ?? null, $ip, $details);
         } catch (\Throwable $e) {
             // Non-fatal: logging failure must not break streaming
         }
@@ -131,8 +131,9 @@ if ($link['password_hash'] !== null) {
     }
 }
 
-// Libère le verrou de session — inutile de le garder pour servir des fichiers.
-// Sans ça, chaque requête HLS (~5s) bloque toutes les autres requêtes PHP du navigateur.
+// Capturer les données session nécessaires avant de libérer le verrou.
+// Sans session_write_close(), chaque requête HLS (~5s) bloque toutes les autres requêtes PHP.
+$cachedSessionUser = $_SESSION['sharebox_user'] ?? null;
 session_write_close();
 
 // Sous-chemin dans le dossier partagé (pour la navigation)
@@ -186,7 +187,7 @@ if (is_file($resolvedPath)) {
     // Mode streaming natif : sert le fichier brut (audio uniquement, ou fallback)
     if (isset($_GET['stream']) && $_GET['stream'] === '1') {
         write_stream_info([
-            'user'         => $_SESSION['sharebox_user'] ?? 'anonymous',
+            'user'         => $cachedSessionUser ?? 'anonymous',
             'filename'     => basename($resolvedPath),
             'path'         => $resolvedPath,
             'token'        => $token,
@@ -208,7 +209,7 @@ if (is_file($resolvedPath)) {
     // Audio transcodé en AAC pour compatibilité (AC3/DTS → AAC, léger)
     if (isset($_GET['stream']) && $_GET['stream'] === 'remux') {
         write_stream_info([
-            'user'         => $_SESSION['sharebox_user'] ?? 'anonymous',
+            'user'         => $cachedSessionUser ?? 'anonymous',
             'filename'     => basename($resolvedPath),
             'path'         => $resolvedPath,
             'token'        => $token,
@@ -221,7 +222,7 @@ if (is_file($resolvedPath)) {
     // Mode transcodage complet : ré-encode vidéo + audio (CPU intensif)
     if (isset($_GET['stream']) && $_GET['stream'] === 'transcode') {
         write_stream_info([
-            'user'         => $_SESSION['sharebox_user'] ?? 'anonymous',
+            'user'         => $cachedSessionUser ?? 'anonymous',
             'filename'     => basename($resolvedPath),
             'path'         => $resolvedPath,
             'token'        => $token,
@@ -236,14 +237,14 @@ if (is_file($resolvedPath)) {
     // que Safari iOS supporte nativement pour le streaming adaptatif.
     if (isset($_GET['stream']) && $_GET['stream'] === 'hls') {
         $hlsQuality  = validateQuality(isset($_GET['quality']) ? (int)$_GET['quality'] : 720);
-        $hlsBurnSub  = validateBurnSub(isset($_GET['burnSub']) ? (int)$_GET['burnSub'] : -1);
+        $hlsBurnSub  = validateBurnSub(isset($_GET['burnSub']) ? (int)$_GET['burnSub'] : -1, getSubtitleCount($db, $resolvedPath));
         $hlsFilterMode = validateFilterMode(isset($_GET['filter']) ? $_GET['filter'] : 'none');
         if ($hlsFilterMode === 'none' && isHDRFile($db, $resolvedPath)) $hlsFilterMode = 'hdr';
         $hlsKey      = md5($resolvedPath . '|' . $hlsQuality . '|' . $audioTrack . '|' . $hlsBurnSub . '|' . $startSec . '|' . $hlsFilterMode);
         $hlsBaseDir  = (defined('STREAM_LOG') && STREAM_LOG ? dirname(STREAM_LOG) : sys_get_temp_dir()) . '/hls_cache';
         $hlsPidFile  = $hlsBaseDir . '/hls_' . $hlsKey . '/ffmpeg.pid';
         write_stream_info([
-            'user'         => $_SESSION['sharebox_user'] ?? 'anonymous',
+            'user'         => $cachedSessionUser ?? 'anonymous',
             'filename'     => basename($resolvedPath),
             'path'         => $resolvedPath,
             'token'        => $token,
@@ -520,8 +521,8 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 /* ── Grid view ── */
 .grid-wrap { display:grid; grid-template-columns:repeat(auto-fill,minmax(var(--card-size,180px),1fr)); gap:.75rem; margin-bottom:1rem; }
 .grid-wrap.hidden { display:none; }
-.grid-card { position:relative; border-radius:var(--radius-md); overflow:hidden; cursor:pointer; text-decoration:none; color:var(--text-primary); transition:transform .18s,box-shadow .18s; animation:fadeScale .25s ease both; border:1px solid rgba(255,255,255,.06); display:flex; flex-direction:column; }
-.grid-card:hover { transform:translateY(-4px) scale(1.02); box-shadow:0 12px 32px rgba(0,0,0,.5); border-color:rgba(240,160,48,.2); }
+.grid-card { position:relative; border-radius:var(--radius-md); overflow:hidden; cursor:pointer; text-decoration:none; color:var(--text-primary); transition:transform .18s,box-shadow .18s; animation:fadeScale .25s ease both; border:1px solid rgba(255,255,255,.06); display:flex; flex-direction:column; contain:layout style; }
+.grid-card:hover { transform:translateY(-4px) scale(1.02); box-shadow:0 12px 32px rgba(0,0,0,.5); border-color:rgba(240,160,48,.2); will-change:transform; }
 .grid-card-bg { aspect-ratio:2/3; display:flex; align-items:center; justify-content:center; background-size:cover; background-position:center; transition:background-image .3s; }
 .grid-card.has-poster .grid-card-letter { display:none; }
 .grid-card.has-poster .grid-card-icon { display:none; }
@@ -529,14 +530,16 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card:hover .grid-card-overview, .grid-card.ov-open .grid-card-overview { opacity:1; }
 .grid-card-overview-title { font-size:.85rem; font-weight:700; color:var(--accent); margin-bottom:.35rem; line-height:1.25; }
 .grid-card-overview-text { font-size:.74rem; color:#ccc; line-height:1.5; display:-webkit-box; -webkit-line-clamp:8; -webkit-box-orient:vertical; overflow:hidden; }
-.grid-card-confidence { position:absolute; bottom:.4rem; right:.4rem; width:7px; height:7px; border-radius:50%; opacity:.6; z-index:4; }
+.grid-card-confidence { position:absolute; bottom:.4rem; right:.4rem; width:7px; height:7px; border-radius:50%; opacity:.6; z-index:4; pointer-events:none; }
 .grid-card-rating { position:absolute; top:.5rem; left:.5rem; background:rgba(0,0,0,.65); backdrop-filter:blur(4px); border-radius:4px; padding:.15rem .4rem; font-size:.7rem; font-weight:700; color:#f0c040; z-index:5; pointer-events:none; letter-spacing:.02em; line-height:1.4; }
-.grid-card-watched { position:absolute; top:.42rem; left:3.5rem; width:18px; height:18px; border-radius:50%; background:rgba(61,220,132,.85); display:flex; align-items:center; justify-content:center; z-index:4; pointer-events:none; font-size:.75rem; color:#000; font-weight:700; }
+.grid-card-watched { position:absolute; top:.42rem; right:1.8rem; width:18px; height:18px; border-radius:50%; background:rgba(61,220,132,.85); display:flex; align-items:center; justify-content:center; z-index:4; pointer-events:none; font-size:.75rem; color:#000; font-weight:700; }
 .grid-card-overview-meta { font-size:.72rem; color:rgba(255,255,255,.5); margin-bottom:.28rem; }
 .grid-card-ctx { position:absolute; top:.5rem; right:.5rem; width:26px; height:26px; border-radius:50%; background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.15); display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition:opacity .15s; z-index:5; color:rgba(255,255,255,.8); }
-.grid-card:hover .grid-card-ctx { opacity:1; }
+.grid-card:hover .grid-card-ctx, .grid-card.poster-broken .grid-card-ctx { opacity:1; }
 .grid-card-ctx:hover { background:rgba(0,0,0,.8); border-color:var(--accent); color:var(--accent); }
-.grid-card-menu { position:absolute; top:calc(.5rem + 30px); right:.5rem; background:#1a1a2e; border:1px solid rgba(255,255,255,.15); border-radius:8px; padding:.3rem 0; min-width:160px; z-index:20; box-shadow:0 4px 12px rgba(0,0,0,.5); display:none; }
+.grid-card.menu-elevated { z-index:10; position:relative; }
+.grid-card-menu { position:absolute; top:calc(.5rem + 30px); right:.5rem; background:#1a1a2e; border:1px solid rgba(255,255,255,.15); border-radius:8px; padding:.3rem 0; min-width:160px; z-index:20; box-shadow:0 4px 12px rgba(0,0,0,.5); display:none; max-height:calc(100vh - 4rem); overflow-y:auto; }
+.grid-card-menu.flip-up { top:auto; bottom:calc(.5rem + 30px); }
 .grid-card-menu.open { display:block; }
 .grid-card-menu-item { display:flex; align-items:center; gap:.5rem; padding:.45rem .75rem; color:rgba(255,255,255,.85); font-size:.78rem; cursor:pointer; white-space:nowrap; transition:background .1s; }
 .grid-card-menu-item:hover { background:rgba(255,255,255,.08); }
@@ -548,6 +551,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 /* Shimmer during poster loading */
 @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
 .grid-card:not(.has-poster):not(.poster-resolved) .grid-card-bg { background-image:linear-gradient(110deg,rgba(255,255,255,.02) 30%,rgba(255,255,255,.06) 50%,rgba(255,255,255,.02) 70%); background-size:200% 100%; animation:shimmer 2s ease-in-out infinite; }
+.grid-card.poster-broken .grid-card-bg::after { content:'\26A0'; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:2rem; color:rgba(255,255,255,.25); pointer-events:none; }
 /* Poster picker modal */
 .poster-modal { position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px); animation:fadeUp .15s ease; }
 .poster-modal-card { background:var(--bg-surface); border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); padding:1.5rem; max-width:720px; width:94%; max-height:85vh; overflow-y:auto; }
@@ -565,10 +569,9 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .poster-modal-item.poster-portrait::after { content:'2:3'; position:absolute; top:.3rem; right:.3rem; background:rgba(76,175,80,.85); color:#fff; font-size:.6rem; font-weight:700; padding:.1rem .35rem; border-radius:.2rem; line-height:1.3; }
 .poster-modal-item.poster-loading img { filter:brightness(.4); }
 .poster-modal-item.poster-loading::before { content:''; position:absolute; top:50%; left:50%; width:1.5rem; height:1.5rem; margin:-.75rem 0 0 -.75rem; border:2px solid rgba(255,255,255,.3); border-top-color:var(--accent); border-radius:50%; animation:spin .6s linear infinite; z-index:2; }
-@keyframes spin { to { transform:rotate(360deg); } }
 .grid-card-letter { font-family:var(--font-sans); font-weight:700; font-size:3rem; color:rgba(255,255,255,.18); text-transform:uppercase; user-select:none; }
 .grid-card-icon { position:absolute; top:.7rem; right:.7rem; opacity:.25; }
-.grid-card-label { padding:.4rem .5rem; background:rgba(0,0,0,.72); text-align:center; height:3rem; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.grid-card-label { padding:.4rem .5rem; background:rgba(0,0,0,.72); text-align:center; min-height:3rem; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .grid-card-title { font-size:.85rem; font-weight:700; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; text-shadow:0 1px 2px rgba(0,0,0,.5); overflow-wrap:break-word; word-break:break-word; hyphens:auto; text-wrap:balance; }
 /* animation-delay set inline per card for smooth stagger beyond 7 items */
 .grid-card.hidden { display:none; }
@@ -590,7 +593,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .gear-select:focus { border-color:var(--accent); }
 .gear-select option { background:#1a1d28; color:#e8eaf0; }
 @media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row{min-height:44px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem}}
-@media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-box{flex:1;width:auto;min-width:80px}.toolbar-info{display:none}.gear-panel{right:-1rem;min-width:240px}.grid-wrap{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-box{flex:1;width:auto;min-width:80px}.toolbar-info{display:none}.gear-panel{right:-1rem;min-width:240px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}}
     </style>
 </head>
 <body>
@@ -733,8 +736,9 @@ HTML;
             $dataFolder = $hasVideo ? ' data-folder="' . $folderHtml . '"' : '';
             $folderFullPath = $dirPath . '/' . $folder['name'];
             $folderType = $folderTypes[$folderFullPath] ?? 'series';
-            $stagger = round(min(0.03 * ($idx + 1), 0.6), 2);
-            echo '<a class="grid-card" href="' . $folderUrl . '" style="animation-delay:' . $stagger . 's;background:' . $color . '" data-type="folder" data-name="' . $folderHtml . '"' . $dataFolder . ' data-folder-type="' . $folderType . '">';
+            $stagger = $idx < 20 ? round(0.03 * ($idx + 1), 2) : 0;
+            $animStyle = $stagger > 0 ? 'animation-delay:' . $stagger . 's;' : 'animation:none;';
+            echo '<a class="grid-card" href="' . $folderUrl . '" style="' . $animStyle . 'background:' . $color . '" data-type="folder" data-name="' . $folderHtml . '"' . $dataFolder . ' data-folder-type="' . $folderType . '">';
             echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
             echo '<div class="grid-card-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" opacity=".4"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg></div>';
             if ($hasVideo) {
@@ -754,8 +758,10 @@ HTML;
                 $color = $cardColors[($idx + count($folders)) % count($cardColors)];
                 $letter = mb_strtoupper(mb_substr($vf['name'], 0, 1));
                 $escapedVfName = htmlspecialchars(addcslashes($vf['name'], "'\\"), ENT_QUOTES);
-                $stagger = round(min(0.03 * ($idx + count($folders) + 1), 0.6), 2);
-                echo '<a class="grid-card grid-card-file" href="' . $vfDownloadUrl . '" data-play="' . htmlspecialchars($vfPlayUrl, ENT_QUOTES) . '" style="animation-delay:' . $stagger . 's;background:' . $color . '" data-type="file" data-name="' . $vfHtml . '" data-folder="' . $vfHtml . '" data-size="' . $vf['size'] . '">';
+                $totalIdx = $idx + count($folders);
+                $stagger = $totalIdx < 20 ? round(0.03 * ($totalIdx + 1), 2) : 0;
+                $animStyle = $stagger > 0 ? 'animation-delay:' . $stagger . 's;' : 'animation:none;';
+                echo '<a class="grid-card grid-card-file" href="' . $vfDownloadUrl . '" data-play="' . htmlspecialchars($vfPlayUrl, ENT_QUOTES) . '" style="' . $animStyle . 'background:' . $color . '" data-type="file" data-name="' . $vfHtml . '" data-folder="' . $vfHtml . '" data-size="' . $vf['size'] . '">';
                 echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
                 echo '<div class="grid-card-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg></div>';
                 echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();toggleCardMenu(this,\'' . $escapedVfName . '\')" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
@@ -1057,33 +1063,49 @@ function reloadAllPosters() {
 
     // O(1) card lookup by folder name
     var cardMap = {};
-    cards.forEach(function(c){ cardMap[c.getAttribute('data-folder')] = c; });
+    // Décoder les entités HTML pour matcher les noms bruts renvoyés par l'API ?posters=1
+    var _decodeEl = document.createElement('textarea');
+    function decodeHtmlEntities(s) { _decodeEl.innerHTML = s; return _decodeEl.value; }
+    cards.forEach(function(c){ cardMap[decodeHtmlEntities(c.getAttribute('data-folder'))] = c; });
 
     // Lazy loading via IntersectionObserver
+    function loadPosterImage(card, url, retried) {
+        if (card.classList.contains('has-poster')) return;
+        var img = new Image();
+        var timeout = setTimeout(function(){
+            img.src = '';
+            if (!retried) { setTimeout(function(){ loadPosterImage(card, url, true); }, 5000); }
+            else { card.classList.add('poster-resolved', 'poster-broken'); card.removeAttribute('data-poster'); }
+        }, 15000);
+        img.onload = function(){
+            clearTimeout(timeout);
+            if (card.classList.contains('has-poster')) return;
+            var currentUrl = card.getAttribute('data-poster') || url;
+            var bg = card.querySelector('.grid-card-bg');
+            if (bg) { bg.style.backgroundImage = 'url(' + currentUrl + ')'; }
+            card.classList.add('has-poster');
+            card.removeAttribute('data-poster');
+        };
+        img.onerror = function(){
+            clearTimeout(timeout);
+            if (!retried) { setTimeout(function(){ loadPosterImage(card, url, true); }, 10000); }
+            else { card.classList.add('poster-resolved', 'poster-broken'); card.removeAttribute('data-poster'); }
+        };
+        img.src = url;
+    }
     var observer = window.IntersectionObserver ? new IntersectionObserver(function(entries){
         entries.forEach(function(e){
             if (!e.isIntersecting) return;
             var card = e.target;
             var url = card.getAttribute('data-poster');
             if (!url) return;
-            var img = new Image();
-            img.onload = function(){
-                var bg = card.querySelector('.grid-card-bg');
-                if (bg) { bg.style.backgroundImage = 'url(' + url + ')'; }
-                card.classList.add('has-poster');
-                card.removeAttribute('data-poster');
-            };
-            img.onerror = function(){
-                card.classList.add('poster-resolved');
-                card.removeAttribute('data-poster');
-            };
-            img.src = url;
+            loadPosterImage(card, url, false);
             observer.unobserve(card);
         });
     }, {rootMargin: '200px'}) : null;
 
-    var MAX_POLLS = 20;
-    var SCHEDULE = [3000,5000,5000,10000,10000,30000,30000,30000];
+    var MAX_POLLS = 30;
+    var SCHEDULE = [3000,5000,5000,10000,10000,15000,30000,30000,30000,30000];
     fetchPosters.polls = 0;
     fetchPosters.inFlight = false;
     fetchPosters.pending = false;
@@ -1131,6 +1153,7 @@ function reloadAllPosters() {
                     var oldAi = card.querySelector('.grid-card-ai-pending');
                     if (oldAi) oldAi.remove();
                     var poster = info.poster;
+                    var tmdbTitle = info.title || null;
                     var overview = info.overview || null;
                     var year = info.year || null;
                     var rating = info.rating || 0;
@@ -1174,12 +1197,21 @@ function reloadAllPosters() {
                             if (existing) existing.remove();
                         }
                     }
-                    if (overview && !card.querySelector('.grid-card-overview')) {
+                    // Flag duplicate posters (same poster shared across 5+ entries)
+                    if (info.duplicate) {
+                        card.style.borderColor = 'rgba(239,83,80,.3)';
+                        card.title = (card.title ? card.title + ' — ' : '') + 'Poster identique sur plusieurs entrées';
+                    }
+                    if (overview) {
+                        var existOv = card.querySelector('.grid-card-overview');
+                        if (existOv) existOv.remove();
+                    }
+                    if (overview) {
                         var ov = document.createElement('div');
                         ov.className = 'grid-card-overview';
                         var ovTitle = document.createElement('div');
                         ovTitle.className = 'grid-card-overview-title';
-                        ovTitle.textContent = name;
+                        ovTitle.textContent = tmdbTitle || name;
                         if (year) {
                             var ovMeta = document.createElement('div');
                             ovMeta.className = 'grid-card-overview-meta';
@@ -1201,9 +1233,10 @@ function reloadAllPosters() {
                     var delay = SCHEDULE[Math.min(fetchPosters.polls, SCHEDULE.length - 1)];
                     fetchPosters.polls++;
                     setTimeout(fetchPosters, delay);
-                } else if (d.pending === 0) {
-                    // Mark unmatched cards as resolved (stops shimmer)
+                } else {
+                    // Stops shimmer: soit pending=0, soit MAX_POLLS atteint (worker crash/bloqué)
                     document.querySelectorAll('.grid-card:not(.has-poster)').forEach(function(c){ c.classList.add('poster-resolved'); });
+                    fetchPosters.pending = false;
                 }
             })
             .catch(function(e){
@@ -1215,17 +1248,17 @@ function reloadAllPosters() {
             });
     }
     fetchPosters();
-    // Safety poll toutes les 30s — seulement s'il y a des posters pending
+    // Safety poll toutes les 30s — seulement s'il y a des posters pending (sans reset du backoff)
     var safetyInterval = setInterval(function() {
-        if (!document.hidden && !fetchPosters.inFlight && fetchPosters.pending) {
-            fetchPosters.polls = 0;
+        if (!document.hidden && !fetchPosters.inFlight && fetchPosters.pending && fetchPosters.polls >= MAX_POLLS) {
+            fetchPosters.polls = MAX_POLLS - 1; // Un seul poll supplémentaire
             fetchPosters();
         } else if (!fetchPosters.pending) {
             clearInterval(safetyInterval);
         }
     }, 30000);
     document.addEventListener('visibilitychange', function() {
-        if (!document.hidden && !fetchPosters.inFlight) {
+        if (!document.hidden && !fetchPosters.inFlight && fetchPosters.pending) {
             fetchPosters.polls = 0;
             fetchPosters();
         }
@@ -1233,7 +1266,7 @@ function reloadAllPosters() {
 })();
 
 // ── Mobile: first tap shows overview, second tap navigates ──
-if('ontouchstart' in window){document.addEventListener('click',function(e){var card=e.target.closest('.grid-card');if(!card||e.target.closest('.grid-card-ctx'))return;var ov=card.querySelector('.grid-card-overview');if(!ov)return;if(!card.classList.contains('ov-open')){e.preventDefault();document.querySelectorAll('.grid-card.ov-open').forEach(function(c){c.classList.remove('ov-open')});card.classList.add('ov-open')}});}
+if(window.matchMedia('(hover:none) and (pointer:coarse)').matches){document.addEventListener('click',function(e){var card=e.target.closest('.grid-card');if(!card||e.target.closest('.grid-card-ctx')){document.querySelectorAll('.grid-card.ov-open').forEach(function(c){c.classList.remove('ov-open')});return}var ov=card.querySelector('.grid-card-overview');if(!ov)return;if(!card.classList.contains('ov-open')){e.preventDefault();document.querySelectorAll('.grid-card.ov-open').forEach(function(c){c.classList.remove('ov-open')});card.classList.add('ov-open')}});var _scrollTimer=null;window.addEventListener('scroll',function(){if(_scrollTimer)return;_scrollTimer=requestAnimationFrame(function(){_scrollTimer=null;var open=document.querySelector('.grid-card.ov-open');if(open)open.classList.remove('ov-open')})},{passive:true});}
 
 // ── Poster picker modal ──
 function openPosterPicker(folderName) {
@@ -1310,21 +1343,27 @@ function openPosterPicker(folderName) {
     card.appendChild(btnRow);
     modal.appendChild(card);
     modal.addEventListener('click', function(e){ if (e.target === modal) modal.remove(); });
+    modal._escHandler = function(e){ if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', modal._escHandler); } };
+    document.addEventListener('keydown', modal._escHandler);
     document.body.appendChild(modal);
     searchInput.focus();
     searchInput.select();
     var webAllResults = [], webOffset = 0;
+    var searchAbort = null;
     function doSearch(query) {
         grid.innerHTML = '';
         grid.textContent = 'Recherche...';
+        if (searchAbort) searchAbort.abort();
+        searchAbort = new AbortController();
+        var timer = setTimeout(function(){ searchAbort.abort(); }, 12000);
         var url;
         if (currentType === 'web') {
             url = BASE_URL + '?' + SUB_PATH + 'web_search=' + encodeURIComponent(query);
         } else {
             url = BASE_URL + '?' + SUB_PATH + 'tmdb_search=' + encodeURIComponent(query) + '&tmdb_type=' + currentType;
         }
-        fetch(url, {credentials:'same-origin'})
-            .then(function(r){ return r.json(); })
+        fetch(url, {credentials:'same-origin', signal: searchAbort.signal})
+            .then(function(r){ clearTimeout(timer); return r.json(); })
             .then(function(results){
                 grid.innerHTML = '';
                 if (currentType === 'web') {
@@ -1335,7 +1374,7 @@ function openPosterPicker(folderName) {
                     renderResults(results, folderName, modal, grid);
                 }
             })
-            .catch(function(){ grid.innerHTML = ''; grid.textContent = 'Erreur de recherche'; });
+            .catch(function(e){ clearTimeout(timer); if (e.name !== 'AbortError') { grid.innerHTML = ''; grid.textContent = 'Erreur de recherche'; } });
     }
     function showWebPage() {
         var oldMore = grid.querySelector('.poster-modal-more');
@@ -1397,7 +1436,7 @@ function openPosterPicker(folderName) {
     }
     searchBtn.onclick = function(){ doSearch(searchInput.value); };
     searchInput.addEventListener('keydown', function(e){ if (e.key === 'Enter') doSearch(searchInput.value); });
-    doSearch(folderName);
+    doSearch(cleanName || folderName);
 }
 function renderResults(results, folderName, modal, grid) {
     if (!results.length) { grid.textContent = 'Aucun résultat. Essayez un autre nom.'; return; }
@@ -1419,20 +1458,34 @@ function renderResults(results, folderName, modal, grid) {
 }
 function selectPoster(folderName, posterUrl, tmdbId, title, overview, year, rating) {
     var url = BASE_URL + '?' + SUB_PATH + 'tmdb_set=1';
+    var card = document.querySelector('.grid-card[data-folder="'+CSS.escape(folderName)+'"]');
+    var prevBg = card ? (card.querySelector('.grid-card-bg') || {}).style.backgroundImage : '';
+    var hadPoster = card ? card.classList.contains('has-poster') : false;
     fetch(url, {
         method: 'POST',
         credentials: 'same-origin',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({folder: folderName, poster_url: posterUrl, tmdb_id: tmdbId, title: title, overview: overview || '', year: year || null, rating: rating || 0})
-    }).catch(function(){});
-    var card = document.querySelector('.grid-card[data-folder="'+CSS.escape(folderName)+'"]');
+    }).then(function(r){ if (!r.ok) throw new Error(r.status); })
+    .catch(function(){
+        console.warn('selectPoster failed for', folderName);
+        // Revert UI on failure
+        if (card) {
+            var bg = card.querySelector('.grid-card-bg');
+            if (bg) bg.style.backgroundImage = prevBg || '';
+            if (hadPoster) card.classList.add('has-poster');
+            else card.classList.remove('has-poster');
+        }
+    });
     if (!card) return;
     var bg = card.querySelector('.grid-card-bg');
-    // Supprimer l'ancien overlay et badge
+    // Supprimer l'ancien overlay, badge et dot confiance
     var oldOv = card.querySelector('.grid-card-overview');
     if (oldOv) oldOv.remove();
     var oldBadge = card.querySelector('.grid-card-rating');
     if (oldBadge) oldBadge.remove();
+    var oldDot = card.querySelector('.grid-card-confidence');
+    if (oldDot) oldDot.remove();
     if (posterUrl === '__none__') {
         if (bg) { bg.style.backgroundImage = ''; }
         card.classList.remove('has-poster');
@@ -1470,15 +1523,34 @@ function selectPoster(folderName, posterUrl, tmdbId, title, overview, year, rati
 }
 
 // ── Card dropdown menu ──
+// Fermer le menu contextuel au clic extérieur
+document.addEventListener('click', function(e) {
+    if (!e.target.closest('.grid-card-ctx') && !e.target.closest('.grid-card-menu')) {
+        var openMenu = document.querySelector('.grid-card-menu');
+        if (openMenu) openMenu.remove();
+        document.querySelectorAll('.grid-card-ctx').forEach(function(b){ b.dataset.menuOpen = ''; });
+        // Retirer le z-index surélevé
+        document.querySelectorAll('.grid-card.menu-elevated').forEach(function(c){ c.classList.remove('menu-elevated'); });
+    }
+});
 function toggleCardMenu(btn, folderName) {
     var old = document.querySelector('.grid-card-menu');
     if (old) { old.remove(); }
+    document.querySelectorAll('.grid-card.menu-elevated').forEach(function(c){ c.classList.remove('menu-elevated'); });
     if (btn.dataset.menuOpen === '1') { btn.dataset.menuOpen = ''; return; }
     document.querySelectorAll('.grid-card-ctx').forEach(function(b){ b.dataset.menuOpen = ''; });
     btn.dataset.menuOpen = '1';
+    // Élever la carte pour que le menu ne soit pas masqué par les cartes suivantes
+    var parentCard = btn.closest('.grid-card');
+    if (parentCard) parentCard.classList.add('menu-elevated');
 
     var menu = document.createElement('div');
     menu.className = 'grid-card-menu open';
+    // Flip menu up if near bottom of viewport
+    requestAnimationFrame(function(){
+        var mr = menu.getBoundingClientRect();
+        if (mr.bottom > window.innerHeight - 8) menu.classList.add('flip-up');
+    });
 
     // Item 1: Changer le poster
     var item1 = document.createElement('div');
@@ -1601,6 +1673,14 @@ function toggleCardMenu(btn, folderName) {
     }
 
     card.appendChild(menu);
+    // Repositionner vers le haut si le menu déborde du viewport
+    requestAnimationFrame(function() {
+        var r = menu.getBoundingClientRect();
+        if (r.bottom > window.innerHeight) {
+            menu.style.top = 'auto';
+            menu.style.bottom = 'calc(.5rem + 30px)';
+        }
+    });
 }
 
 function setFolderType(folderName, type, card) {
@@ -1813,7 +1893,7 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     <div class="player-card">
         <div class="fs-title" id="fs-title">{$prevBtnHtml}<span class="fs-title-text">{$fileNameHtml}</span>{$nextBtnHtml}</div>
         <div class="player-video-wrap">
-            <{$tag} id="player" {$controlsAttr} autoplay playsinline webkit-playsinline preload="metadata"></{$tag}>
+            <{$tag} id="player" {$controlsAttr} autoplay playsinline webkit-playsinline preload="none"></{$tag}>
             <div class="player-hint" id="hint"><span class="player-hint-text">Chargement...</span></div>
             <div id="video-click-area" style="position:absolute;top:0;right:0;bottom:0;left:0;z-index:6;cursor:pointer;outline:none;-webkit-tap-highlight-color:transparent;user-select:none"></div>
             <div id="play-icon-overlay" class="play-icon-overlay"></div>
@@ -1948,7 +2028,7 @@ function afficher_search_results(string $basePath, string $token, string $shareN
 .search-back:hover { color:#ffc060; }
 .grid-wrap { display:grid; grid-template-columns:repeat(auto-fill,minmax(var(--card-size,160px),1fr)); gap:.75rem; margin-bottom:1.5rem; --card-size:160px; }
 .grid-card { position:relative; border-radius:var(--radius-md); overflow:hidden; aspect-ratio:2/3; border:1px solid rgba(255,255,255,.06); cursor:pointer; text-decoration:none; color:inherit; display:flex; flex-direction:column; transition:transform .2s,box-shadow .2s,border-color .2s; animation:fadeUp .22s ease both; }
-.grid-card:hover { transform:translateY(-4px) scale(1.02); box-shadow:0 12px 32px rgba(0,0,0,.5); border-color:rgba(240,160,48,.2); }
+.grid-card:hover { transform:translateY(-4px) scale(1.02); box-shadow:0 12px 32px rgba(0,0,0,.5); border-color:rgba(240,160,48,.2); will-change:transform; }
 .grid-card-bg { position:absolute; inset:0; background-size:cover; background-position:center top; background-repeat:no-repeat; transition:opacity .3s; }
 .grid-card-bg::after { content:''; position:absolute; inset:0; background:linear-gradient(to bottom, transparent 40%, rgba(6,8,14,.95) 100%); }
 .grid-card-letter { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:3.5rem; font-weight:800; color:rgba(255,255,255,.15); }

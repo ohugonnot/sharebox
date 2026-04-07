@@ -9,7 +9,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
     if ($filterMode === 'none' && isHDRFile($db, $resolvedPath)) {
         $filterMode = 'hdr';
     }
-    $burnSub = validateBurnSub(isset($_GET['burnSub']) ? (int)$_GET['burnSub'] : -1);
+    $burnSub = validateBurnSub(isset($_GET['burnSub']) ? (int)$_GET['burnSub'] : -1, getSubtitleCount($db, $resolvedPath));
     $logFile = ffmpeg_log_path();
 
     // Dossier cache unique par fichier+qualité+audio+burnSub+startSec+filterMode
@@ -31,12 +31,17 @@ if ($mime && str_starts_with($mime, 'video/')) {
             usleep(100000);
         }
         if (!file_exists($segPath)) { http_response_code(404); exit; }
-        // Attendre que ffmpeg ait fini d'écrire le segment (taille stable pendant 100ms)
+        // Attendre que ffmpeg ait fini d'écrire le segment (taille stable 3× consécutives = 150ms)
         $prevSize = 0;
-        for ($w = 0; $w < 20; $w++) {
+        $stableCount = 0;
+        for ($w = 0; $w < 30; $w++) {
             clearstatcache(true, $segPath);
             $curSize = filesize($segPath);
-            if ($curSize > 0 && $curSize === $prevSize) break;
+            if ($curSize > 0 && $curSize === $prevSize) {
+                if (++$stableCount >= 3) break;
+            } else {
+                $stableCount = 0;
+            }
             $prevSize = $curSize;
             usleep(50000);
         }
@@ -97,8 +102,9 @@ if ($mime && str_starts_with($mime, 'video/')) {
             . ' ' . escapeshellarg($m3u8)
             . ' -loglevel error 2>>' . escapeshellarg($logFile);
 
-        // Lancer ffmpeg en arrière-plan et stocker son PID
-        $pid = trim(shell_exec($ffmpegCmd . ' > /dev/null & echo $!'));
+        // Lancer ffmpeg en arrière-plan via setsid (survit au kill du process PHP)
+        // exec() avec & retourne le PID réel du processus (pas du shell wrapper comme shell_exec)
+        $pid = trim(shell_exec('setsid sh -c ' . escapeshellarg('exec ' . $ffmpegCmd) . ' > /dev/null & echo $!'));
         file_put_contents($pidFile, $pid);
         touch($hlsDir . '/.active');
 
@@ -114,7 +120,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
         // (entre la lecture du pidFile et le rm -rf, un nouveau startup pourrait s'intercaler)
         $cleanupBody = 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do '
             . 'inactive=$(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))); '
-            . 'if [ $inactive -gt 300 ]; then kill -9 ' . (int)$pid . ' 2>/dev/null; break; fi; '
+            . 'if [ $inactive -gt 300 ]; then kill -15 ' . (int)$pid . ' 2>/dev/null; sleep 2; kill -9 ' . (int)$pid . ' 2>/dev/null; break; fi; '
             . 'sleep 30; done; '
             . 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '
             . '(flock -x 200; '

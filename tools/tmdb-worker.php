@@ -47,18 +47,25 @@ function discover_folders(PDO $db): int {
 
     $stmt = $db->prepare("INSERT OR IGNORE INTO folder_posters (path) VALUES (:p)");
 
+    // Track real paths to detect symlink cycles (setMaxDepth alone doesn't prevent cycles)
+    $seenPaths = [];
     $iter = new RecursiveIteratorIterator(
         new RecursiveCallbackFilterIterator(
             new RecursiveDirectoryIterator($basePath, FilesystemIterator::SKIP_DOTS | FilesystemIterator::FOLLOW_SYMLINKS),
-            function (SplFileInfo $current, string $key, RecursiveDirectoryIterator $iterator) use ($hiddenDirs) {
+            function (SplFileInfo $current, string $key, RecursiveDirectoryIterator $iterator) use ($hiddenDirs, &$seenPaths) {
                 if (!$current->isDir()) return false;
                 if (in_array($current->getFilename(), $hiddenDirs, true)) return false;
                 if ($current->getFilename()[0] === '.') return false;
+                // Cycle detection via realpath
+                $real = $current->getRealPath();
+                if ($real && isset($seenPaths[$real])) return false;
+                if ($real) $seenPaths[$real] = true;
                 return true;
             }
         ),
         RecursiveIteratorIterator::SELF_FIRST
     );
+    $iter->setMaxDepth(15);
 
     $batch = 0;
     $db->beginTransaction();
@@ -83,33 +90,48 @@ function discover_folders(PDO $db): int {
     return $inserted;
 }
 
-$discovered = discover_folders($db);
-if ($discovered > 0) {
-    ai_log("DISCOVER | $discovered new folders found in " . BASE_PATH);
+try {
+    $discovered = discover_folders($db);
+    if ($discovered > 0) {
+        ai_log("DISCOVER | $discovered new folders found in " . BASE_PATH);
+    }
+} catch (Exception $e) {
+    ai_log('DISCOVER error: ' . $e->getMessage());
 }
 
 // ── Single lock file shared with web handler ──
 // Web handler checks this file to know if worker is running.
 // Stale lock (>15 min): kill old PID and break lock.
 $cronLock = dirname(DB_PATH) . '/sharebox_tmdb_cron.lock';
-@touch($cronLock); @chmod($cronLock, 0666);
-if (file_exists($cronLock) && (time() - filemtime($cronLock)) > 900) {
-    $stalePid = (int)@file_get_contents($cronLock);
-    if ($stalePid > 1 && file_exists("/proc/$stalePid")) {
-        ai_log("SCAN stale lock detected (>15min), killing old PID $stalePid");
-        posix_kill($stalePid, SIGTERM);
-        usleep(200000);
+@touch($cronLock); @chmod($cronLock, 0644);
+$cronFp = fopen($cronLock, 'c'); // 'c': create if missing, no truncate
+if (!$cronFp) { ai_log('SCAN skip — cannot open lock file'); exit(1); }
+if (!flock($cronFp, LOCK_EX | LOCK_NB)) {
+    // Lock held — check if stale (>15 min)
+    if ((time() - filemtime($cronLock)) > 900) {
+        $stalePid = (int)@file_get_contents($cronLock);
+        if ($stalePid > 1 && file_exists("/proc/$stalePid")) {
+            ai_log("SCAN stale lock detected (>15min), killing old PID $stalePid");
+            posix_kill($stalePid, SIGTERM);
+            usleep(200000);
+        } else {
+            ai_log('SCAN stale lock detected (>15min), breaking it');
+        }
+        // Retry lock after killing stale process
+        if (!flock($cronFp, LOCK_EX | LOCK_NB)) {
+            ai_log('SCAN skip — still locked after stale cleanup');
+            fclose($cronFp);
+            exit(0);
+        }
     } else {
-        ai_log('SCAN stale lock detected (>15min), breaking it');
+        ai_log('SCAN skip — already running');
+        fclose($cronFp);
+        exit(0);
     }
-    @unlink($cronLock);
-    @touch($cronLock); @chmod($cronLock, 0666);
 }
-$cronFp = fopen($cronLock, 'w');
-if (!$cronFp || !flock($cronFp, LOCK_EX | LOCK_NB)) {
-    ai_log('SCAN skip — already running');
-    exit(0);
-}
+// Lock acquired — write PID atomically (truncate + write, no unlink)
+ftruncate($cronFp, 0);
+rewind($cronFp);
 fwrite($cronFp, (string)getmypid());
 fflush($cronFp);
 
@@ -120,7 +142,7 @@ do {
     // Touch lock to reset mtime — prevents stale detection during legitimate long runs
     @touch($cronLock);
 
-    $rows = $dbRead->query("SELECT rowid, path, match_attempts FROM folder_posters WHERE poster_url IS NULL AND (match_attempts IS NULL OR match_attempts < 3)")->fetchAll();
+    $rows = $dbRead->query("SELECT rowid, path, match_attempts FROM folder_posters WHERE poster_url IS NULL AND (match_attempts IS NULL OR match_attempts < 3) LIMIT 200")->fetchAll();
     $pendingCount = count($rows);
     ai_log('SCAN start | pending=' . $pendingCount);
 
@@ -157,10 +179,14 @@ do {
         $key = $dir . chr(0) . $name;
         if (isset($rowIds[$key])) return $rowIds[$key];
         $norm = @iconv('UTF-8', 'ASCII//TRANSLIT', $name) ?: $name;
+        // iconv peut retourner "?????" pour les kanji — ne pas comparer dans ce cas
+        if ($norm !== $name && preg_match('/^\?+$/', $norm)) return null;
         foreach ($rowIds as $k => $id) {
             if (!str_starts_with($k, $dir . chr(0))) continue;
             $dbName = substr($k, strlen($dir) + 1);
-            if ((@iconv('UTF-8', 'ASCII//TRANSLIT', $dbName) ?: $dbName) === $norm) return $id;
+            $dbNorm = @iconv('UTF-8', 'ASCII//TRANSLIT', $dbName) ?: $dbName;
+            if ($dbNorm !== $dbName && preg_match('/^\?+$/', $dbNorm)) continue;
+            if ($dbNorm === $norm) return $id;
         }
         return null;
     };
@@ -319,8 +345,8 @@ do {
             // Attempt 2: full title, no language (English fallback)
             if ($attempt === 1) {
                 $words = explode(' ', $searchTitle);
-                if (count($words) > 2) {
-                    $searchTitle = implode(' ', array_slice($words, 0, (int)ceil(count($words) / 2)));
+                if (count($words) > 3) {
+                    $searchTitle = implode(' ', array_slice($words, 0, max(3, (int)ceil(count($words) / 2))));
                 }
             }
 
@@ -352,7 +378,7 @@ do {
                             if (count($candidates) >= 8) break;
                         }
                     }
-                    usleep(50000);
+                    usleep(300000);
                 }
             }
 
@@ -438,7 +464,8 @@ do {
     }
 
     // Auto-verify: entries in same dir with same tmdb_id (>3 = clearly same show)
-    $unverified = $dbRead->query("SELECT path, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND (verified IS NULL OR verified = 0 OR verified = 60)")->fetchAll();
+    // Auto-verify : seulement les entrées avec un score minimum de 50 (exclut les matchs très faibles à 40)
+    $unverified = $dbRead->query("SELECT path, tmdb_id FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND verified >= 50 AND verified <= 60")->fetchAll();
     $byDirTmdb = [];
     foreach ($unverified as $row) {
         $dir = dirname($row['path']);
@@ -473,20 +500,20 @@ do {
     // Use writer connection ($db) for propagation reads — $dbRead may have a stale WAL snapshot
     // and miss entries that were just matched in this same pass, causing propagation to overwrite
     // good matches with weaker parent matches.
-    $stillPending = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
+    // Also include children with very weak matches (verified <= 40) — they may have been corrected
+    // by a parent manual fix and should inherit the better match.
+    $stillPending = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL OR (verified <= 40 AND verified >= 0)")->fetchAll(PDO::FETCH_COLUMN);
 
     foreach ($stillPending as $childPath) {
         $parentPath = dirname($childPath);
         if (isset($parentMap[$parentPath])) {
             $p = $parentMap[$parentPath];
             try {
-                // Only propagate to entries that truly have no poster — the WHERE clause ensures
-                // we don't overwrite a match set earlier in this same pass.
-                $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 55, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND poster_url IS NULL")
-                   ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath]);
-                if ($db->prepare("SELECT changes()")->execute() && $db->query("SELECT changes()")->fetchColumn() > 0) {
-                    $propagated++;
-                }
+                // Propagate to entries with no poster OR very weak matches (verified <= 40)
+                // Don't overwrite entries that have a different tmdb_id (direct match, even weak)
+                $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 60, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND (poster_url IS NULL OR (verified <= 40 AND verified >= 0 AND (tmdb_id IS NULL OR tmdb_id = 0 OR tmdb_id = ?)))")
+                   ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath, $p['tmdb_id']]);
+                $propagated++;
             } catch (PDOException $e) {
                 ai_log('DB error (propagate): ' . $e->getMessage());
             }
@@ -504,14 +531,14 @@ do {
 $parentRows = $db->query("SELECT path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type, tmdb_rating FROM folder_posters WHERE poster_url IS NOT NULL AND poster_url != '__none__' AND verified >= 60")->fetchAll();
 $parentMap = [];
 foreach ($parentRows as $pr) $parentMap[$pr['path']] = $pr;
-$stillPending = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL")->fetchAll(PDO::FETCH_COLUMN);
+$stillPending = $db->query("SELECT path FROM folder_posters WHERE poster_url IS NULL OR (verified <= 40 AND verified >= 0)")->fetchAll(PDO::FETCH_COLUMN);
 $finalPropagated = 0;
 foreach ($stillPending as $childPath) {
     $parentPath = dirname($childPath);
     if (isset($parentMap[$parentPath])) {
         $p = $parentMap[$parentPath];
         try {
-            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 55, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND poster_url IS NULL")
+            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 60, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND (poster_url IS NULL OR (verified <= 40 AND verified >= 0))")
                ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath]);
             $finalPropagated++;
         } catch (PDOException $e) {}
@@ -543,8 +570,9 @@ foreach ($seasonRows as $sr) {
 
         // Extract season number from folder name (classic patterns)
         $seasonNum = null;
+        $sagaNum = null;
         $sagaName = null;
-        if (preg_match('/(?:^|\.)S(\d{1,2})(?:\.|$)/i', $child, $m)) {
+        if (preg_match('/(?:^|[\s._\-])S(\d{1,2})(?:[\s._\-]|$)/i', $child, $m)) {
             $seasonNum = (int)$m[1];
         } elseif (preg_match('/(?:saison|season)\s*(\d+)/i', $child, $m)) {
             $seasonNum = (int)$m[1];
@@ -608,7 +636,11 @@ foreach ($seasonRows as $sr) {
                 }
             }
 
-            if ($seasonNum === null) continue; // Could not resolve saga to season
+            if ($seasonNum === null) {
+                // Saga non résolue → garder le poster parent (déjà propagé)
+                ai_log('SAGA skip | "' . $child . '" could not resolve to season, keeping parent poster');
+                continue;
+            }
         }
 
         // Fetch season-specific poster from TMDB
@@ -633,11 +665,14 @@ foreach ($seasonRows as $sr) {
 if ($seasonUpdated > 0) ai_log('SEASON | ' . $seasonUpdated . ' entries got season-specific poster (incl. saga/arc)');
 
 // ── GC: remove entries for paths that no longer exist ──
-$gcRows = $db->query("SELECT rowid, path FROM folder_posters ORDER BY RANDOM() LIMIT 1000")->fetchAll();
+// Échantillon aléatoire efficace : offset random dans la table au lieu de ORDER BY RANDOM() (O(n))
+$gcTotal = (int)$db->query("SELECT COUNT(*) FROM folder_posters")->fetchColumn();
+$gcOffset = $gcTotal > 1000 ? random_int(0, $gcTotal - 1000) : 0;
+$gcRows = $db->query("SELECT rowid, path FROM folder_posters LIMIT 1000 OFFSET $gcOffset")->fetchAll();
 $gcRemoved = 0;
 $db->beginTransaction();
 foreach ($gcRows as $gr) {
-    if (!file_exists($gr['path'])) {
+    if (!is_link($gr['path']) && !file_exists($gr['path'])) {
         $db->prepare("DELETE FROM folder_posters WHERE rowid = ?")->execute([$gr['rowid']]);
         $gcRemoved++;
     }

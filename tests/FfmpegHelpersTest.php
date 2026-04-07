@@ -124,7 +124,7 @@ class FfmpegHelpersTest extends TestCase
     public function testBuildFilterGraphHdrWithBurnSub(): void
     {
         $result = buildFilterGraph(1080, 0, 0, 'hdr');
-        // Sous-titres PGS : scale2ref + overlay AVANT le pipeline HDR
+        // Sous-titres PGS : scale2ref + overlay APRÈS le pipeline vidéo
         $this->assertStringContainsString('scale2ref', $result);
         $this->assertStringContainsString('overlay', $result);
         $this->assertStringContainsString('tonemap=mobius', $result);
@@ -159,7 +159,7 @@ class FfmpegHelpersTest extends TestCase
     {
         $result = buildFfmpegInputArgs('/path/to/video.mkv');
         $this->assertStringContainsString('ffmpeg', $result);
-        $this->assertStringContainsString('timeout 14400', $result);
+        $this->assertStringContainsString('timeout 3600', $result);
         $this->assertStringContainsString('ionice', $result);
         $this->assertStringContainsString('nice -n 5', $result);
         $this->assertStringContainsString('-nostdin', $result);
@@ -292,5 +292,18 @@ class FfmpegHelpersTest extends TestCase
             'at cap'     => [50],
             'absurd'     => [99999],
         ];
+    }
+
+    public function testValidateBurnSubWithSubCount(): void
+    {
+        // Valid: index within subtitle count
+        $this->assertSame(0, validateBurnSub(0, 3));
+        $this->assertSame(2, validateBurnSub(2, 3));
+        // Invalid: index >= subtitle count
+        $this->assertSame(-1, validateBurnSub(3, 3));
+        $this->assertSame(-1, validateBurnSub(5, 2));
+        // Null subCount: fallback to range-only check
+        $this->assertSame(5, validateBurnSub(5, null));
+        $this->assertSame(5, validateBurnSub(5));
     }
 }

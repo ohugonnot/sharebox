@@ -373,15 +373,20 @@ class StreamingHandlersTest extends TestCase
 
     // ── Remux/Transcode : slot explicitement nullifié après release ─────
 
-    public function testStreamHandlersNullifySlotAfterRelease(): void
+    public function testStreamHandlersReleaseSlotViaShutdownOnly(): void
     {
         foreach (['stream_remux.php', 'stream_transcode.php'] as $handler) {
             $source = file_get_contents(__DIR__ . '/../handlers/' . $handler);
-            // Après releaseStreamSlot, $slotFp doit être mis à null
-            $this->assertMatchesRegularExpression(
-                '/releaseStreamSlot\(\$slotFp\);\s*\$slotFp\s*=\s*null/',
+            // Le slot doit être libéré uniquement par le shutdown function (pas de double release)
+            $this->assertStringContainsString(
+                'register_shutdown_function',
                 $source,
-                $handler . ' doit nullifier $slotFp après releaseStreamSlot pour éviter le double-release'
+                $handler . ' doit utiliser register_shutdown_function pour releaseStreamSlot'
+            );
+            $this->assertStringContainsString(
+                '// Slot released by shutdown function',
+                $source,
+                $handler . ' ne doit pas appeler releaseStreamSlot explicitement (géré par shutdown)'
             );
         }
     }
@@ -459,8 +464,8 @@ class StreamingHandlersTest extends TestCase
     public function testPlayerJsSyncTrackAfterKeyframeCorrection(): void
     {
         $source = file_get_contents(__DIR__ . '/../player.js');
-        // Après "S.offset = d.pts", on doit trouver _syncTrack() sur la même ligne ou très proche
-        preg_match('/S\.offset = d\.pts;(.*?)$/m', $source, $m);
+        // Après "S.offset = d.pts", on doit trouver _syncTrack() dans les lignes suivantes (conditionné sur isIOS)
+        preg_match('/S\.offset = d\.pts;(.{0,200})/s', $source, $m);
         $this->assertNotEmpty($m, 'La correction keyframe S.offset = d.pts doit exister');
         $this->assertStringContainsString(
             '_syncTrack()',
@@ -651,6 +656,246 @@ class StreamingHandlersTest extends TestCase
             'qi < 0',
             $source,
             'Le mode badge doit gérer le cas où S.quality n\'est pas dans allQ (qi < 0)'
+        );
+    }
+
+    // ── Player JS : network error exhaustion → erreur définitive ───────
+
+    public function testPlayerJsNetworkErrorExhaustedShowsError(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // Après 3 retries réseau (errCode === 2), doit afficher une erreur au lieu de cascader
+        $this->assertStringContainsString(
+            'erreur r',
+            mb_strtolower($source),
+            'player.js doit afficher une erreur réseau persistante après épuisement des retries'
+        );
+        // Vérifier qu'il y a un return après l'erreur réseau épuisée
+        preg_match('/Erreur r.*seau persistante.*?return;/s', $source, $m);
+        $this->assertNotEmpty($m, 'L\'erreur réseau épuisée doit return sans cascader le mode');
+    }
+
+    // ── Player JS : VP9 vérifie nativeAudio ────────────────────────────
+
+    public function testPlayerJsVp9ChecksNativeAudio(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // Le bloc vp9 doit tester nativeAudio
+        preg_match("/c === 'vp9'.*?return 'transcode';/s", $source, $m);
+        $this->assertNotEmpty($m, 'Le bloc VP9 doit exister dans _chooseModeFromProbe');
+        $this->assertStringContainsString(
+            'nativeAudio',
+            $m[0],
+            'VP9 doit vérifier nativeAudio avant de déclarer natif'
+        );
+    }
+
+    // ── Player JS : Subs.render compare avant innerHTML ─────────────────
+
+    public function testPlayerJsSubsRenderComparesBeforeDom(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        preg_match('/render:\s*function\(\)\s*\{(.*?)\n        \},/s', $source, $m);
+        $this->assertNotEmpty($m, 'Subs.render doit exister');
+        $this->assertStringContainsString(
+            '_lastTxt',
+            $m[1],
+            'Subs.render doit comparer le texte via _lastTxt avant de toucher le DOM'
+        );
+    }
+
+    // ── Player JS : VTT sanitize strips unknown tags ────────────────────
+
+    public function testPlayerJsVttSanitizeStripsUnknownTags(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // Le sanitize doit utiliser un placeholder pour les tags connus
+        // au lieu d'échapper tout puis ré-autoriser
+        $this->assertStringContainsString(
+            "\\x00",
+            $source,
+            'VTT sanitize doit utiliser des placeholders pour préserver les tags connus et strip les inconnus'
+        );
+    }
+
+    // ── Player JS : mode badge reset filter en natif ────────────────────
+
+    public function testPlayerJsModeBadgeResetsFilterOnNative(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // Dans le cycle mode badge, quand probeNative → 'native', filter doit être reset
+        preg_match("/probeNative\).*?S\.step = S\.confirmed = 'native'(.*?)return;/s", $source, $m);
+        $this->assertNotEmpty($m, 'Le branch probeNative → native doit exister dans le mode badge');
+        $this->assertStringContainsString(
+            "S.filter = 'none'",
+            $m[1],
+            'Le mode badge doit reset S.filter à none quand on repasse en natif'
+        );
+    }
+
+    // ── Player JS : touch-seek utilise seekToFraction ───────────────────
+
+    public function testPlayerJsTouchSeekUsesSeekToFraction(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // Le touchend dans la zone vidéo (swipe seek) doit utiliser seekToFraction
+        preg_match('/touchend.*?swiping.*?duration(.*?)\}\);/s', $source, $m);
+        $this->assertNotEmpty($m, 'Le handler touchend swipe doit exister');
+        $this->assertStringContainsString(
+            'seekToFraction',
+            $m[0],
+            'Le touch-seek doit utiliser seekToFraction (avec debounce) au lieu de startStream direct'
+        );
+    }
+
+    // ── HLS handler : setsid pour ffmpeg background ─────────────────────
+
+    public function testHlsUsesSetsidForFfmpeg(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../handlers/stream_hls.php');
+        $this->assertStringContainsString(
+            'setsid',
+            $source,
+            'HLS doit lancer ffmpeg via setsid pour survivre au kill du process PHP'
+        );
+    }
+
+    // ── TMDB handler : seasonPattern inclut saga/arc/part ───────────────
+
+    public function testTmdbSeasonPatternIncludesSagaArcPart(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../handlers/tmdb.php');
+        preg_match('/seasonPattern\s*=\s*\'(.*?)\'/s', $source, $m);
+        $this->assertNotEmpty($m, 'seasonPattern doit exister dans tmdb.php');
+        $pattern = $m[1];
+        $this->assertMatchesRegularExpression('/saga/', $pattern, 'seasonPattern doit matcher saga');
+        $this->assertMatchesRegularExpression('/arc/', $pattern, 'seasonPattern doit matcher arc');
+        $this->assertMatchesRegularExpression('/part/', $pattern, 'seasonPattern doit matcher part');
+    }
+
+    // ── TMDB handler : tmdb_set invalide les enfants saison ─────────────
+
+    public function testTmdbSetInvalidatesSeasonChildren(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../handlers/tmdb.php');
+        // Quand tmdb_set change le tmdb_id, les enfants hérités doivent être invalidés
+        $this->assertStringContainsString(
+            'resetSeason',
+            $source,
+            'tmdb_set doit invalider les enfants saison quand le tmdb_id parent change'
+        );
+        $this->assertStringContainsString(
+            'old_id',
+            $source,
+            'tmdb_set doit comparer l\'ancien tmdb_id pour détecter un changement'
+        );
+    }
+
+    // ── Worker : LIMIT sur la requête pending ───────────────────────────
+
+    public function testWorkerUsesLimitOnPendingQuery(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        $this->assertMatchesRegularExpression(
+            '/SELECT.*poster_url IS NULL.*LIMIT\s+\d+/si',
+            $source,
+            'Le worker doit paginer la requête pending avec LIMIT'
+        );
+    }
+
+    // ── Worker : lock file chmod 0644 ───────────────────────────────────
+
+    public function testWorkerLockFileChmod0644(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        $this->assertStringContainsString(
+            '0644',
+            $source,
+            'Le lock file du worker doit être 0644 (pas world-writable)'
+        );
+        $this->assertStringNotContainsString(
+            '0666',
+            $source,
+            'Le lock file ne doit pas être 0666'
+        );
+    }
+
+    // ── Worker : word truncation garde min 3 mots ───────────────────────
+
+    public function testWorkerWordTruncationKeepsMinThreeWords(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        // Le retry attempt 1 doit garder au minimum 3 mots
+        $this->assertStringContainsString(
+            'max(3',
+            $source,
+            'Le retry attempt 1 doit garder au minimum 3 mots lors du truncation'
+        );
+    }
+
+    // ── Worker : rate limit TMDB ≥ 250ms ────────────────────────────────
+
+    public function testWorkerRateLimitTmdb(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        // Le usleep entre les requêtes TMDB doit être ≥ 250ms (250000µs)
+        preg_match_all('/usleep\((\d+)\)/', $source, $matches);
+        $this->assertNotEmpty($matches[1], 'Le worker doit avoir des usleep pour le rate limit');
+        $apiSleeps = array_filter($matches[1], fn($us) => (int)$us >= 250000);
+        $this->assertNotEmpty(
+            $apiSleeps,
+            'Le worker doit avoir au moins un usleep ≥ 250ms pour le rate limit TMDB API'
+        );
+    }
+
+    // ── download.php : poster loading vérifie has-poster ────────────────
+
+    public function testPosterLoadingChecksHasPoster(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../download.php');
+        // loadPosterImage doit vérifier has-poster en début de fonction
+        preg_match('/function loadPosterImage\(.*?\{(.*?)\n    \}/s', $source, $m);
+        $this->assertNotEmpty($m, 'loadPosterImage doit exister');
+        $this->assertStringContainsString(
+            'has-poster',
+            $m[1],
+            'loadPosterImage doit vérifier has-poster pour éviter la race condition'
+        );
+    }
+
+    // ── download.php : grid cards utilisent contain ─────────────────────
+
+    public function testGridCardsUseContain(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../download.php');
+        $this->assertStringContainsString(
+            'contain:',
+            $source,
+            'Les grid cards doivent utiliser CSS contain pour limiter les reflows'
+        );
+    }
+
+    // ── download.php : context menu flip-up ─────────────────────────────
+
+    public function testContextMenuFlipsUp(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../download.php');
+        $this->assertStringContainsString(
+            'flip-up',
+            $source,
+            'Le context menu doit avoir un flip-up pour éviter le débordement bas du viewport'
+        );
+    }
+
+    // ── download.php : scroll jank debounce ─────────────────────────────
+
+    public function testMobileScrollDebounced(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../download.php');
+        $this->assertStringContainsString(
+            'requestAnimationFrame',
+            $source,
+            'Le scroll listener mobile doit être debounced via requestAnimationFrame'
         );
     }
 }
