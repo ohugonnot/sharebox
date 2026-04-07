@@ -69,10 +69,15 @@ function plog(tag, msg, data) {
         dragging: false, seekPending: false, rafPending: false,
         hasFailed: false, stallCount: 0,
         videoHeight: 0, seekGen: 0,
+        keyframeAbort: null,
         // timers
         fsHideTimer: null, videoWidthTimer: null,
         seekDebounce: null, stallTimer: null, stallInterval: null
     };
+
+    // ── localStorage (try/catch : private browsing peut throw) ───────────────
+    function lsGet(k, def) { try { var v = localStorage.getItem(k); return v !== null ? v : def; } catch(e) { return def; } }
+    function lsSet(k, v)   { try { localStorage.setItem(k, v); } catch(e) {} }
 
     // ── Utilitaires ───────────────────────────────────────────────────────────
     function fmtTime(s) {
@@ -126,6 +131,7 @@ function plog(tag, msg, data) {
             mode: S.confirmed || '',
             audio: S.audioIdx,
             quality: S.quality,
+            filter: S.filter,
             burnSub: S.burnSub
         }));
         // Ne PAS set player_seek_ — on ne veut pas de faux resume
@@ -188,10 +194,6 @@ function plog(tag, msg, data) {
         if (!isLandscapeMobile() && !isFs()) { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); if (fsTitle) fsTitle.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
     });
 
-    // ── localStorage (try/catch : private browsing peut throw) ───────────────
-    function lsGet(k, def) { try { var v = localStorage.getItem(k); return v !== null ? v : def; } catch(e) { return def; } }
-    function lsSet(k, v)   { try { localStorage.setItem(k, v); } catch(e) {} }
-
     // ── Zoom ─────────────────────────────────────────────────────────────────
     function applyZoom() {
         player.style.objectFit = zoomModes[zoomIndex];
@@ -207,10 +209,10 @@ function plog(tag, msg, data) {
         if (!isFs() && zoomIndex === 0) player.style.height = '';
         applyZoom();
         lsSet('asc_zoom', zoomModes[zoomIndex]);
-        volOsd.textContent = '\uD83D\uDD0D Zoom: ' + zoomLabels[zoomIndex];
-        volOsd.classList.add('visible');
-        clearTimeout(volOsdTimer);
-        volOsdTimer = setTimeout(function() { volOsd.classList.remove('visible'); }, 1200);
+        osd.textContent = '\uD83D\uDD0D Zoom: ' + zoomLabels[zoomIndex];
+        osd.classList.add('visible');
+        clearTimeout(osdTimer);
+        osdTimer = setTimeout(function() { osd.classList.remove('visible'); }, 1200);
     }
     (function initZoom() {
         var saved = lsGet('asc_zoom', 'contain');
@@ -233,6 +235,7 @@ function plog(tag, msg, data) {
     function startStream(resumeAt) {
         var mode = S.confirmed || S.step;
         plog('STREAM', 'startStream mode=' + mode + ' resumeAt=' + (resumeAt || 0).toFixed(1) + ' audio=' + S.audioIdx + ' quality=' + S.quality + ' burnSub=' + S.burnSub);
+        clearStallWatchdog();
         watchMarked = false;
         // En mode natif, le navigateur gère le seek via player.currentTime (pas de &start= dans l'URL)
         if (mode === 'native' && resumeAt > 0) {
@@ -267,7 +270,8 @@ function plog(tag, msg, data) {
     }
 
     // Choisit le mode optimal à partir du probe (avant de démarrer le stream)
-    function canPlay(mime) { var t = document.createElement('video').canPlayType(mime); return t === 'probably' || t === 'maybe'; }
+    var _canPlayEl = document.createElement('video');
+    function canPlay(mime) { var t = _canPlayEl.canPlayType(mime); return t === 'probably' || t === 'maybe'; }
 
     function chooseModeFromProbe(d) {
         var _r = _chooseModeFromProbe(d);
@@ -311,8 +315,6 @@ function plog(tag, msg, data) {
             var hevcSupported = canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"')
                 || canPlay('video/webm; codecs="hvc1"') || canPlay('video/x-matroska; codecs="hvc1"');
             if (hevcSupported && nativeAudio && (d.isMP4 || d.isMKV)) return 'native';
-            // Tenter natif d'abord (cascade native→transcode si échec)
-            if (nativeAudio && (d.isMP4 || d.isMKV)) return 'native';
             return 'transcode';
         }
         return 'transcode';
@@ -337,20 +339,7 @@ function plog(tag, msg, data) {
     }
     player.addEventListener('error', onFail);
 
-    player.addEventListener('playing', function() {
-        plog('EVENT', 'playing | mode=' + (S.confirmed || S.step) + ' offset=' + S.offset.toFixed(1) + ' ct=' + (player.currentTime || 0).toFixed(1) + ' realTime=' + realTime().toFixed(1));
-        unlockSize();
-        Subs.resetIdx();
-        var mode = S.confirmed || S.step;
-        if ((mode === 'native' || mode === 'remux') && isVideo && !S.confirmed) {
-            S.videoWidthTimer = setTimeout(function() {
-                if (player.videoWidth === 0) onFail();
-                else { S.confirmed = mode; hint.textContent = ''; updateModeUI(); }
-            }, mode === 'native' ? 2000 : 1500);
-            return;
-        }
-        hint.textContent = '';
-    });
+    // Note: le listener 'playing' principal est défini après le stall watchdog (voir plus bas)
 
     // ── Stall watchdog ────────────────────────────────────────────────────────
     // Timeout différencié : transcode HEVC/burnSub est lent à démarrer (décodage
@@ -397,9 +386,21 @@ function plog(tag, msg, data) {
 
     player.addEventListener('waiting', function() { plog('EVENT', 'waiting | stallCount=' + S.stallCount + ' ct=' + (player.currentTime||0).toFixed(1)); clearTimeout(stableTimer); stableTimer = null; startStallWatchdog(); });
     player.addEventListener('playing', function() {
+        plog('EVENT', 'playing | mode=' + (S.confirmed || S.step) + ' offset=' + S.offset.toFixed(1) + ' ct=' + (player.currentTime || 0).toFixed(1) + ' realTime=' + realTime().toFixed(1));
+        unlockSize();
+        Subs.resetIdx();
         clearStallWatchdog();
         clearTimeout(stableTimer);
         stableTimer = setTimeout(function() { S.stallCount = 0; }, 30000);
+        var mode = S.confirmed || S.step;
+        if ((mode === 'native' || mode === 'remux') && isVideo && !S.confirmed) {
+            S.videoWidthTimer = setTimeout(function() {
+                if (player.videoWidth === 0) onFail();
+                else { S.confirmed = mode; hint.textContent = ''; updateModeUI(); }
+            }, mode === 'native' ? 2000 : 1500);
+            return;
+        }
+        hint.textContent = '';
     });
     player.addEventListener('pause', function() { clearStallWatchdog(); clearTimeout(stableTimer); stableTimer = null; });
 
@@ -472,9 +473,13 @@ function plog(tag, msg, data) {
                 // Le pré-cache background (lancé au probe) a probablement déjà rempli le cache
                 // Si pas encore prêt, le serveur fait l'extraction complète (~30-50s sur gros fichiers)
                 fetch(this.urls[idx], {credentials:'same-origin'})
-                    .then(function(r) { return r.text(); })
+                    .then(function(r) {
+                        if (!r.ok) throw new Error('HTTP ' + r.status);
+                        return r.text();
+                    })
                     .then(function(t) {
                         if (gen !== self._gen) { plog('SUBS', 'DISCARDED: gen=' + gen + ' current=' + self._gen); return; }
+                        if (!t || !t.trim()) { plog('SUBS', 'empty VTT response — server may still be extracting'); return; }
                         self.cues = parseVTT(t);
                         self._idx = self._find(realTime());
                         self._syncTrack();
@@ -511,7 +516,6 @@ function plog(tag, msg, data) {
             else { this._resizeHandler = pos; window.addEventListener('resize', pos); }
             // iOS fullscreen natif : afficher/masquer le <track> (seul moyen d'avoir les sous-titres)
             if (isIOS) {
-                var self = this;
                 player.addEventListener('webkitbeginfullscreen', function() {
                     if (self.cues.length) self._syncTrack();
                     if (self._track) self._track.track.mode = 'showing';
@@ -574,11 +578,14 @@ function plog(tag, msg, data) {
                 // On corrige S.offset = K pendant le démarrage du stream (avant le 1er frame).
                 if (t > 0) {
                     var seekGen = ++S.seekGen;
-                    fetch(base + '?' + pp + 'keyframe=' + t.toFixed(1))
+                    if (S.keyframeAbort) S.keyframeAbort.abort();
+                    var kfCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                    S.keyframeAbort = kfCtrl;
+                    fetch(base + '?' + pp + 'keyframe=' + t.toFixed(1), kfCtrl ? {signal: kfCtrl.signal} : {})
                         .then(function(r) { return r.json(); })
                         .then(function(d) {
                             if (seekGen === S.seekGen && typeof d.pts === 'number' && d.pts >= 0) {
-                                S.offset = d.pts; Subs.resetIdx();
+                                S.offset = d.pts; Subs.resetIdx(); Subs._syncTrack();
                             }
                         })
                         .catch(function() {});
@@ -649,7 +656,7 @@ function plog(tag, msg, data) {
         if (d.audio && d.audio.length > 1) {
             hasControls = true;
             var lbl = document.createElement('label'); lbl.textContent = 'Audio :';
-            var sel = document.createElement('select'); sel.className = 'track-select'; sel.title = 'Audio';
+            var sel = document.createElement('select'); sel.className = 'track-select'; sel.title = 'Audio'; sel.dataset.track = 'audio';
             d.audio.forEach(function(a) { var o = document.createElement('option'); o.value = a.index; o.textContent = a.label; sel.appendChild(o); });
             sel.addEventListener('change', function() {
                 S.audioIdx = parseInt(sel.value, 10) || 0;
@@ -696,7 +703,7 @@ function plog(tag, msg, data) {
                 }
                 hasControls = true;
                 var lbl3 = document.createElement('label'); lbl3.textContent = 'Qualit\u00E9 :';
-                var sel3 = document.createElement('select'); sel3.className = 'track-select'; sel3.title = 'Qualit\u00E9';
+                var sel3 = document.createElement('select'); sel3.className = 'track-select'; sel3.title = 'Qualit\u00E9'; sel3.dataset.track = 'quality';
                 qs.forEach(function(q) { var o = document.createElement('option'); o.value = q; o.textContent = q + 'p'; if (q === S.quality) o.selected = true; sel3.appendChild(o); });
                 sel3.addEventListener('change', function() {
                     S.quality = parseInt(sel3.value, 10) || 720; S.confirmed = 'transcode';
@@ -708,7 +715,7 @@ function plog(tag, msg, data) {
                 grpVideo.append(lbl3, sel3);
                 // Sélecteur de filtres
                 var lbl4 = document.createElement('label'); lbl4.textContent = 'Filtre :';
-                var sel4 = document.createElement('select'); sel4.className = 'track-select'; sel4.title = 'Filtre';
+                var sel4 = document.createElement('select'); sel4.className = 'track-select'; sel4.title = 'Filtre'; sel4.dataset.track = 'filter';
                 var filters = [{v:'none',t:'Aucun'},{v:'hdr',t:'HDR→SDR'},{v:'anime',t:'Anime'},{v:'detail',t:'Détail'},{v:'night',t:'Nuit'},{v:'deinterlace',t:'Désentrelacé'}];
                 filters.forEach(function(f) { var o = document.createElement('option'); o.value = f.v; o.textContent = f.t; if (f.v === S.filter) o.selected = true; sel4.appendChild(o); });
                 sel4.addEventListener('change', function() {
@@ -726,7 +733,7 @@ function plog(tag, msg, data) {
             hasControls = true;
             d.subtitles.forEach(function(s) { Subs.urls.push(s.type === 'text' ? base + '?' + pp + 'subtitle=' + s.index : null); Subs.types.push(s.type || 'text'); });
             var lbl2 = document.createElement('label'); lbl2.textContent = 'Sous-titres :';
-            var selSub = document.createElement('select'); selSub.className = 'track-select'; selSub.title = 'Sous-titres';
+            var selSub = document.createElement('select'); selSub.className = 'track-select'; selSub.title = 'Sous-titres'; selSub.dataset.track = 'subtitle';
             var off = document.createElement('option'); off.value = '-1'; off.textContent = 'D\u00E9sactiv\u00E9s'; selSub.appendChild(off);
             d.subtitles.forEach(function(s, i) { var o = document.createElement('option'); o.value = i; o.textContent = s.label; selSub.appendChild(o); });
             // Restaurer le dernier sous-titre choisi pour ce fichier
@@ -771,22 +778,22 @@ function plog(tag, msg, data) {
         var svgPauseIcon = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
         var svgPlayIcon  = '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
         var playIconEl = document.getElementById('play-icon-overlay');
-        var volOsd = document.getElementById('vol-osd');
-        var volOsdTimer = null;
+        var osd = document.getElementById('vol-osd');
+        var osdTimer = null;
         function showVolOsd() {
             var pct = player.muted ? 0 : Math.round(player.volume * 100);
             var icon = player.muted || pct === 0 ? '\uD83D\uDD07' : pct < 50 ? '\uD83D\uDD09' : '\uD83D\uDD0A';
-            volOsd.textContent = icon + ' ' + pct + '%';
-            volOsd.classList.add('visible');
-            clearTimeout(volOsdTimer);
-            volOsdTimer = setTimeout(function() { volOsd.classList.remove('visible'); }, 1500);
+            osd.textContent = icon + ' ' + pct + '%';
+            osd.classList.add('visible');
+            clearTimeout(osdTimer);
+            osdTimer = setTimeout(function() { osd.classList.remove('visible'); }, 1500);
         }
         function showSeekOsd(delta) {
             var icon = delta > 0 ? '\u23E9' : '\u23EA';
-            volOsd.textContent = icon + ' ' + (delta > 0 ? '+' : '') + delta + 's';
-            volOsd.classList.add('visible');
-            clearTimeout(volOsdTimer);
-            volOsdTimer = setTimeout(function() { volOsd.classList.remove('visible'); }, 800);
+            osd.textContent = icon + ' ' + (delta > 0 ? '+' : '') + delta + 's';
+            osd.classList.add('visible');
+            clearTimeout(osdTimer);
+            osdTimer = setTimeout(function() { osd.classList.remove('visible'); }, 800);
         }
         var popTimer = null;
         function showPlayIcon(pausing) {
@@ -911,10 +918,10 @@ function plog(tag, msg, data) {
             if (t > 30 && t < S.duration - 60) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
             else if (t >= S.duration - 60)      { lsSet(posKey, '0'); clearCfg(); }
         }, 5000);
-        player.addEventListener('ended', function() { lsSet(posKey, '0'); clearCfg(); });
         // Auto-next épisode
         var autoNextEl = null;
         player.addEventListener('ended', function() {
+            lsSet(posKey, '0'); clearCfg();
             if (!episodeNav.next) return;
             if (autoNextEl) autoNextEl.remove();
             var overlay = document.createElement('div');
@@ -968,18 +975,15 @@ function plog(tag, msg, data) {
             else if (m === 'remux')     { S.step = S.confirmed = 'transcode'; S.quality = allQ[0] || 480; }
             else {
                 var qi = allQ.indexOf(S.quality);
-                if (qi >= 0 && qi < allQ.length - 1) { S.quality = allQ[qi + 1]; }
+                if (qi < 0) { S.quality = allQ[0] || 480; }
+                else if (qi < allQ.length - 1) { S.quality = allQ[qi + 1]; }
                 else { S.step = S.confirmed = 'native'; S.quality = 720; saveCfg(); startStream(pos); return; }
             }
             // Reset burnSub uniquement (les sous-titres texte survivent au changement de mode)
             if (S.burnSub >= 0) { S.burnSub = -1; Subs.cues = []; if (Subs._div) Subs._div.textContent = ''; }
             // Synchroniser le sélecteur de qualité
-            var qSel = trackBar.querySelector('select.track-select');
-            trackBar.querySelectorAll('select.track-select').forEach(function(sel) {
-                if (sel.previousElementSibling && sel.previousElementSibling.textContent === 'Qualit\u00e9 :') {
-                    sel.value = S.quality;
-                }
-            });
+            var qSel = trackBar.querySelector('select[data-track="quality"]');
+            if (qSel) qSel.value = S.quality;
             hint.textContent = ''; updateModeUI(); saveCfg(); startStream(pos);
         });
         grpPlayback.appendChild(modeBtn); trackBar.style.display = 'flex';
@@ -1107,17 +1111,26 @@ function plog(tag, msg, data) {
     // Synchroniser les sélecteurs UI après applyProbe (qui les construit)
     function restoreCfgUI() {
         if (!savedCfg) return;
-        var selects = trackBar.querySelectorAll('select.track-select');
-        selects.forEach(function(sel) {
-            if (sel.previousElementSibling && sel.previousElementSibling.textContent === 'Audio :') {
-                var opt = sel.querySelector('option[value="' + S.audioIdx + '"]');
-                if (opt) sel.value = S.audioIdx;
+        var audioSel = trackBar.querySelector('select[data-track="audio"]');
+        if (audioSel) {
+            if (audioSel.querySelector('option[value="' + S.audioIdx + '"]')) {
+                audioSel.value = S.audioIdx;
+            } else {
+                // Piste audio invalide (fichier différent) → reset à la première disponible
+                S.audioIdx = parseInt(audioSel.value, 10) || 0;
+                plog('CONFIG', 'audio index ' + savedCfg.audio + ' invalid → reset to ' + S.audioIdx);
             }
-            if (sel.previousElementSibling && sel.previousElementSibling.textContent === 'Qualit\u00e9 :') {
-                var opt = sel.querySelector('option[value="' + S.quality + '"]');
-                if (opt) sel.value = S.quality;
+        }
+        var qualSel = trackBar.querySelector('select[data-track="quality"]');
+        if (qualSel) {
+            if (qualSel.querySelector('option[value="' + S.quality + '"]')) {
+                qualSel.value = S.quality;
+            } else {
+                // Qualité invalide → reset à la valeur courante du sélecteur
+                S.quality = parseInt(qualSel.value, 10) || 720;
+                plog('CONFIG', 'quality ' + savedCfg.quality + ' invalid → reset to ' + S.quality);
             }
-        });
+        }
         updateModeUI();
     }
 
@@ -1145,9 +1158,15 @@ function plog(tag, msg, data) {
         noBtn.addEventListener('click', function() {
             banner.remove(); lsSet(posKey, '0'); clearCfg();
             // Réinitialiser au mode optimal du probe (pas la config sauvegardée)
+            // Note : S.filter conservé intentionnellement (préférence utilisateur, pas lié à la position)
             S.confirmed = ''; S.audioIdx = 0; S.quality = 720; S.burnSub = -1;
             if (probeData) S.step = chooseModeFromProbe(probeData);
             else S.step = 'native';
+            // Synchroniser les sélecteurs avec les valeurs réinitialisées
+            var qSel = trackBar.querySelector('select[data-track="quality"]');
+            if (qSel) qSel.value = S.quality;
+            var aSel = trackBar.querySelector('select[data-track="audio"]');
+            if (aSel) aSel.value = S.audioIdx;
             updateModeUI();
             onResume(0);
         });
@@ -1186,11 +1205,8 @@ function plog(tag, msg, data) {
                     if (d.colorTransfer && ['smpte2084', 'arib-std-b67', 'smpte428'].indexOf(d.colorTransfer) !== -1) {
                         S.filter = 'hdr';
                         // Mettre à jour le sélecteur UI
-                        trackBar.querySelectorAll('select.track-select').forEach(function(sel) {
-                            if (sel.previousElementSibling && sel.previousElementSibling.textContent === 'Filtre :') {
-                                sel.value = 'hdr';
-                            }
-                        });
+                        var filterSel = trackBar.querySelector('select[data-track="filter"]');
+                        if (filterSel) filterSel.value = 'hdr';
                         plog('HDR', 'auto-detected colorTransfer=' + d.colorTransfer + ', forcing filter=hdr');
                     }
                     hint.textContent = '';
@@ -1204,11 +1220,11 @@ function plog(tag, msg, data) {
                     // Probe arrivé peu après le fallback natif — si le mode optimal est différent, restart proactif
                     var optimalMode = chooseModeFromProbe(d);
                     if (optimalMode !== 'native') {
-                        plog('INIT', 'late probe restart → ' + optimalMode);
+                        plog('INIT', 'late probe restart → ' + optimalMode + ' at ' + realTime().toFixed(1));
                         S.step = S.confirmed = optimalMode;
                         hint.textContent = optimalMode === 'transcode' ? 'Transcodage en cours...' : 'Remux en cours...';
                         hint.className = 'player-hint transcoding';
-                        startStream(savedPos);
+                        startStream(realTime());
                     }
                 }
                 // Si stream déjà démarré (fallback), applyProbe a juste mis à jour l'UI

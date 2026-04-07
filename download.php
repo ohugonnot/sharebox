@@ -25,6 +25,7 @@ function write_stream_info(array $info): void {
     if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
     $file = '/tmp/sharebox_stream_' . md5($sid) . '.json';
     $now = time();
+    $is_new_stream = false;
     if (file_exists($file)) {
         $existing = @json_decode(@file_get_contents($file), true) ?: [];
         $info['start_time'] = $existing['start_time'] ?? (new DateTimeImmutable())->format('c');
@@ -37,7 +38,7 @@ function write_stream_info(array $info): void {
     @chmod($file, 0600);
 
     // Log to activity_logs on first write only
-    if (!empty($is_new_stream)) {
+    if ($is_new_stream) {
         try {
             require_once __DIR__ . '/db.php';
             require_once __DIR__ . '/functions.php';
@@ -206,6 +207,14 @@ if (is_file($resolvedPath)) {
     // Mode remux : repackage MKV→MP4 sans ré-encoder la vidéo (quasi zéro CPU)
     // Audio transcodé en AAC pour compatibilité (AC3/DTS → AAC, léger)
     if (isset($_GET['stream']) && $_GET['stream'] === 'remux') {
+        write_stream_info([
+            'user'         => $_SESSION['sharebox_user'] ?? 'anonymous',
+            'filename'     => basename($resolvedPath),
+            'path'         => $resolvedPath,
+            'token'        => $token,
+            'mode'         => 'remux',
+            'hls_pid_file' => null,
+        ]);
         require __DIR__ . '/handlers/stream_remux.php';
     }
 
@@ -227,7 +236,7 @@ if (is_file($resolvedPath)) {
     // que Safari iOS supporte nativement pour le streaming adaptatif.
     if (isset($_GET['stream']) && $_GET['stream'] === 'hls') {
         $hlsQuality  = validateQuality(isset($_GET['quality']) ? (int)$_GET['quality'] : 720);
-        $hlsBurnSub  = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
+        $hlsBurnSub  = validateBurnSub(isset($_GET['burnSub']) ? (int)$_GET['burnSub'] : -1);
         $hlsFilterMode = validateFilterMode(isset($_GET['filter']) ? $_GET['filter'] : 'none');
         if ($hlsFilterMode === 'none' && isHDRFile($db, $resolvedPath)) $hlsFilterMode = 'hdr';
         $hlsKey      = md5($resolvedPath . '|' . $hlsQuality . '|' . $audioTrack . '|' . $hlsBurnSub . '|' . $startSec . '|' . $hlsFilterMode);

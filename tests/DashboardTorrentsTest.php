@@ -3,10 +3,10 @@
 use PHPUnit\Framework\TestCase;
 
 /**
- * Tests pour active_torrents.php :
- * - comportement sans socket (doit retourner une clé 'error', pas d'exception)
+ * Tests pour active_torrents.php (qBittorrent API).
+ * - comportement avec URL vide (doit retourner des listes vides, pas d'exception)
  * - conversion rates bytes/s → MB/s
- * - calcul de progression completed_chunks / size_chunks
+ * - calcul de progression
  */
 class DashboardTorrentsTest extends TestCase
 {
@@ -15,28 +15,35 @@ class DashboardTorrentsTest extends TestCase
         require_once __DIR__ . '/../api/active_torrents.php';
     }
 
-    // ---------------------------------------- Socket manquant → error key --
+    // ---------------------------------------- URL vide → listes vides --
 
-    public function testMissingSocketReturnsErrorKey(): void
+    public function testEmptyUrlReturnsEmptyLists(): void
     {
-        $result = get_torrents_from_rtorrent('/tmp/nonexistent_rtorrent_' . uniqid() . '.sock');
+        $result = get_torrents_from_qbittorrent('');
 
         $this->assertIsArray($result);
-        $this->assertArrayHasKey('error', $result);
-        $this->assertArrayHasKey('downloads', $result);
-        $this->assertArrayHasKey('uploads', $result);
         $this->assertSame([], $result['downloads']);
         $this->assertSame([], $result['uploads']);
     }
 
-    public function testMissingSocketDoesNotThrow(): void
+    public function testEmptyUrlDoesNotThrow(): void
     {
         $this->expectNotToPerformAssertions();
         try {
-            get_torrents_from_rtorrent('/tmp/nonexistent_rtorrent_' . uniqid() . '.sock');
+            get_torrents_from_qbittorrent('');
         } catch (\Throwable $e) {
-            $this->fail('get_torrents_from_rtorrent() a levé une exception : ' . $e->getMessage());
+            $this->fail('get_torrents_from_qbittorrent("") a levé une exception : ' . $e->getMessage());
         }
+    }
+
+    // ---------------------------------------- Legacy alias existe --
+
+    public function testLegacyAliasExists(): void
+    {
+        $this->assertTrue(
+            function_exists('get_torrents_from_rtorrent'),
+            'L\'alias legacy get_torrents_from_rtorrent doit exister pour la compatibilité'
+        );
     }
 
     // ---------------------------------------- Conversion bytes/s → MB/s --
@@ -80,28 +87,16 @@ class DashboardTorrentsTest extends TestCase
         $this->assertSame(0.0, $progress);
     }
 
-    // ------------------------------------------ Parsing réponse multicall --
+    // ------------------------------------------ Seuil 50 KB/s --
 
-    public function testXmlrpcParseResponseReturnsNullOnInvalidXml(): void
+    public function testThresholdIs50KBs(): void
     {
-        $result = xmlrpc_parse_response('not xml at all');
-        $this->assertNull($result);
-    }
-
-    public function testXmlrpcParseResponseParsesArray(): void
-    {
-        $xml = '<?xml version="1.0"?>'
-             . '<methodResponse><params><param><value>'
-             . '<array><data>'
-             .   '<value><int>42</int></value>'
-             .   '<value><string>hello</string></value>'
-             . '</data></array>'
-             . '</value></param></params></methodResponse>';
-
-        $result = xmlrpc_parse_response($xml);
-
-        $this->assertIsArray($result);
-        $this->assertSame(42,      $result[0]);
-        $this->assertSame('hello', $result[1]);
+        // Le seuil dans le code est 51200 bytes/s (50 KB/s)
+        $source = file_get_contents(__DIR__ . '/../api/active_torrents.php');
+        $this->assertStringContainsString(
+            '51200',
+            $source,
+            'Le seuil d\'affichage doit être 51200 bytes/s (50 KB/s)'
+        );
     }
 }

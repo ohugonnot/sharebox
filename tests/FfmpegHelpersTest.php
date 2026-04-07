@@ -236,8 +236,21 @@ class FfmpegHelpersTest extends TestCase
         $this->assertStringContainsString('-avoid_negative_ts make_zero', $result);
         $this->assertStringContainsString('-start_at_zero', $result);
         $this->assertStringContainsString('-max_muxing_queue_size 4096', $result);
-        $this->assertStringContainsString('-min_frag_duration 300000', $result);
+        $this->assertStringContainsString('-min_frag_duration 2000000', $result);
         $this->assertStringContainsString('-movflags frag_keyframe+empty_moov+default_base_moof', $result);
+    }
+
+    /**
+     * Vérifie que min_frag_duration est >= 2s (2000000µs).
+     * Un fragment trop court (ex: 300ms) cause un overhead muxing important
+     * et dégrade le buffering navigateur pour le streaming progressif.
+     */
+    public function testBuildFmp4MuxerArgsFragDurationNotTooLow(): void
+    {
+        $result = buildFmp4MuxerArgs();
+        preg_match('/-min_frag_duration (\d+)/', $result, $m);
+        $this->assertNotEmpty($m, 'min_frag_duration must be present');
+        $this->assertGreaterThanOrEqual(2000000, (int)$m[1], 'min_frag_duration must be >= 2s (2000000µs) for VOD streaming');
     }
 
     // ── ALLOWED_QUALITIES constant ──────────────────────────────────────
@@ -245,5 +258,39 @@ class FfmpegHelpersTest extends TestCase
     public function testAllowedQualitiesConstant(): void
     {
         $this->assertSame([480, 576, 720, 1080], ALLOWED_QUALITIES);
+    }
+
+    // ── validateBurnSub ────────────────────────────────────────────────
+
+    /** @dataProvider validBurnSubProvider */
+    public function testValidateBurnSubAcceptsValid(int $input, int $expected): void
+    {
+        $this->assertSame($expected, validateBurnSub($input));
+    }
+
+    public static function validBurnSubProvider(): array
+    {
+        return [
+            'zero'      => [0, 0],
+            'first'     => [1, 1],
+            'mid'       => [25, 25],
+            'max valid' => [49, 49],
+        ];
+    }
+
+    /** @dataProvider invalidBurnSubProvider */
+    public function testValidateBurnSubRejectsInvalid(int $input): void
+    {
+        $this->assertSame(-1, validateBurnSub($input));
+    }
+
+    public static function invalidBurnSubProvider(): array
+    {
+        return [
+            'disabled'   => [-1],
+            'negative'   => [-100],
+            'at cap'     => [50],
+            'absurd'     => [99999],
+        ];
     }
 }
