@@ -59,7 +59,7 @@ if ($action !== '') {
 
                 foreach ($users as &$u) {
                     if ($seedboxMode) {
-                        $svc = escapeshellarg("rtorrent@{$u['username']}");
+                        $svc = escapeshellarg("qbittorrent@{$u['username']}");
                         exec("sudo /usr/bin/systemctl is-active {$svc} 2>&1", $out, $code);
                         $u['rtorrent_status'] = trim(implode('', $out));
                         $u['has_system_user'] = posix_getpwnam($u['username']) !== false;
@@ -228,12 +228,12 @@ if ($action !== '') {
                     echo json_encode(['error' => 'Username manquant']);
                     break;
                 }
-                $svcName = escapeshellarg("rtorrent@{$username}");
+                $svcName = escapeshellarg("qbittorrent@{$username}");
                 exec("sudo /usr/bin/systemctl restart {$svcName} 2>&1", $out, $code);
                 sleep(2);
                 exec("sudo /usr/bin/systemctl is-active {$svcName} 2>&1", $statusOut);
                 $status = trim(implode('', $statusOut));
-                echo json_encode(['ok' => $code === 0, 'status' => $status, 'message' => "rtorrent@{$username}: {$status}"]);
+                echo json_encode(['ok' => $code === 0, 'status' => $status, 'message' => "qbittorrent@{$username}: {$status}"]);
                 break;
 
             case 'stop_rtorrent':
@@ -242,9 +242,9 @@ if ($action !== '') {
                     echo json_encode(['error' => 'Username manquant']);
                     break;
                 }
-                $svcName = escapeshellarg("rtorrent@{$username}");
+                $svcName = escapeshellarg("qbittorrent@{$username}");
                 exec("sudo /usr/bin/systemctl stop {$svcName} 2>&1", $out, $code);
-                echo json_encode(['ok' => true, 'status' => 'inactive', 'message' => "rtorrent@{$username} arrêté"]);
+                echo json_encode(['ok' => true, 'status' => 'inactive', 'message' => "qbittorrent@{$username} arrêté"]);
                 break;
 
             case 'tmdb_status':
@@ -930,7 +930,7 @@ if ($action !== '') {
             .col-token, .col-ip, .col-date { display: none; }
         }
         @media (max-width: 480px) {
-            .col-user, .col-disk, .col-rtorrent, .col-role { display: none; }
+            .col-user, .col-disk, .col-torrent, .col-role { display: none; }
             .user-table th, .user-table td { padding: .5rem .6rem; font-size: .78rem; }
             #activity-search { width: 100%; }
             .activity-pager { justify-content: center; }
@@ -1056,7 +1056,7 @@ if ($action !== '') {
     <div id="tab-utilisateurs" class="tab-panel active">
         <div class="card">
             <div class="card-header">
-                <div class="card-title">Utilisateurs<?= $seedboxMode ? ' <span style="font-weight:400;color:var(--text-dim);font-size:.75rem">(rtorrent + ruTorrent + SFTP)</span>' : '' ?></div>
+                <div class="card-title">Utilisateurs<?= $seedboxMode ? ' <span style="font-weight:400;color:var(--text-dim);font-size:.75rem">(qBittorrent + SFTP)</span>' : '' ?></div>
                 <button class="btn btn-accent" onclick="openCreateModal()">+ Nouvel utilisateur</button>
             </div>
             <div id="user-table-wrap">
@@ -1397,7 +1397,7 @@ async function loadUsers() {
 
     let html = '<table class="user-table"><thead><tr>';
     html += '<th>Utilisateur</th><th class="col-role">Rôle</th>';
-    if (sbMode) html += '<th class="col-rtorrent">rtorrent</th>';
+    if (sbMode) html += '<th class="col-torrent">qBittorrent</th>';
     html += '<th class="col-disk">Disque</th><th class="col-date">Créé le</th><th>Actions</th>';
     html += '</tr></thead><tbody>';
 
@@ -1425,7 +1425,7 @@ async function loadUsers() {
             } else {
                 statusBadge = '<span class="badge badge-inactive">inactif</span>';
             }
-            html += '<td class="col-rtorrent">' + statusBadge + '</td>';
+            html += '<td class="col-torrent">' + statusBadge + '</td>';
         }
 
         const diskStr = formatBytes(u.disk_used);
@@ -1527,9 +1527,9 @@ async function deleteUser() {
     loadUsers();
 }
 
-// ── rtorrent control ──
+// ── qBittorrent control ──
 async function restartRtorrent(username) {
-    toast('Redémarrage de rtorrent@' + username + '...');
+    toast('Redémarrage de qbittorrent@' + username + '...');
     const res = await api('restart_rtorrent', { username });
     if (res.error) { toast(res.error, false); return; }
     toast(res.message, res.status === 'active');

@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Capture un snapshot des performances qBittorrent + systeme.
+Usage: snapshot-perf [label]
+Sauvegarde dans /var/log/seedbox-snapshots/"""
+import json, os, sys, time, subprocess, urllib.request, urllib.parse
+from datetime import datetime
+
+SNAP_DIR = '/var/log/seedbox-snapshots'
+QB_URL   = 'http://127.0.0.1:8181'
+QB_USER  = 'ropixv2'
+QB_PASS  = 'Lip8NebW8Z8HrbX'
+cookie   = None
+
+def qb(endpoint, data=None, raw=False):
+    global cookie
+    url = f'{QB_URL}{endpoint}'
+    if data: data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data)
+    if cookie: req.add_header('Cookie', cookie)
+    resp = urllib.request.urlopen(req, timeout=10)
+    sc = resp.headers.get('Set-Cookie')
+    if sc: cookie = sc.split(';')[0]
+    body = resp.read().decode()
+    if raw: return body
+    return json.loads(body)
+
+def sysval(path):
+    try:
+        with open(path) as f: return f.read().strip()
+    except: return 'N/A'
+
+def shell(cmd):
+    try: return subprocess.check_output(cmd, shell=True, timeout=5).decode().strip()
+    except: return 'N/A'
+
+os.makedirs(SNAP_DIR, exist_ok=True)
+label = sys.argv[1] if len(sys.argv) > 1 else 'manual'
+ts = datetime.now().strftime('%Y%m%d-%H%M%S')
+
+qb('/api/v2/auth/login', {'username': QB_USER, 'password': QB_PASS}, raw=True)
+transfer = qb('/api/v2/transfer/info')
+torrents = qb('/api/v2/torrents/info?filter=all')
+prefs = qb('/api/v2/app/preferences')
+
+# Speed samples (5 x 2s)
+speeds = []
+for _ in range(5):
+    time.sleep(2)
+    t = qb('/api/v2/transfer/info')
+    speeds.append(t['up_info_speed'] / 1024 / 1024)
+
+states = {}
+for t in torrents:
+    states[t['state']] = states.get(t['state'], 0) + 1
+
+pid = shell('pgrep -x qbittorrent-nox')
+rss_gb = float(shell(f'ps -p {pid} -o rss --no-headers')) / 1024 / 1024 if pid.isdigit() else 0
+
+snap = {
+    'timestamp': datetime.now().isoformat(),
+    'label': label,
+    'upload_speed_mbps': {
+        'instant': transfer['up_info_speed'] / 1024 / 1024,
+        'samples': speeds,
+        'avg': sum(speeds) / len(speeds),
+        'min': min(speeds),
+        'max': max(speeds),
+    },
+    'torrents': {
+        'total': len(torrents),
+        'states': states,
+        'active_uploading': sum(1 for t in torrents if t['upspeed'] > 0),
+        'total_leechers': sum(t['num_leechs'] for t in torrents),
+        'total_uploaded_gb': sum(t.get('uploaded', 0) for t in torrents) / 1024**3,
+    },
+    'system': {
+        'qbt_rss_gb': round(rss_gb, 1),
+        'ram_available_gb': round(int(shell("awk '/MemAvailable/{print $2}' /proc/meminfo")) / 1024 / 1024, 1),
+        'tcp_connections': int(shell(f'ss -tnp | grep -c {pid}')) if pid.isdigit() else 0,
+        'dht_nodes': transfer.get('dht_nodes', 0),
+    },
+    'disk': {
+        'read_ahead_kb': sysval('/sys/block/sda/queue/read_ahead_kb'),
+    },
+    'key_settings': {k: prefs.get(k) for k in [
+        'encryption','disk_cache','disk_io_type','async_io_threads',
+        'send_buffer_watermark','max_connec','max_uploads',
+        'max_uploads_per_torrent','upload_slots_behavior',
+        'upload_choking_algorithm','peer_tos'
+    ]},
+}
+
+fname = f'{SNAP_DIR}/{ts}-{label}.json'
+with open(fname, 'w') as f:
+    json.dump(snap, f, indent=2)
+print(f'Snapshot saved: {fname}')
+print(f'Upload: avg {snap["upload_speed_mbps"]["avg"]:.1f} MB/s (min {snap["upload_speed_mbps"]["min"]:.1f}, max {snap["upload_speed_mbps"]["max"]:.1f})')
+print(f'Torrents: {snap["torrents"]["active_uploading"]} active / {snap["torrents"]["total"]} total | {snap["torrents"]["total_leechers"]} leechers')
+print(f'RAM: {snap["system"]["qbt_rss_gb"]} GB | TCP: {snap["system"]["tcp_connections"]} | DHT: {snap["system"]["dht_nodes"]}')

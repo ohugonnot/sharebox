@@ -274,11 +274,26 @@ function plog(tag, msg, data) {
         plog('PROBE', 'chooseModeFromProbe → ' + _r + ' (codec=' + (d && d.videoCodec || '?') + ' isMP4=' + (d && d.isMP4) + ' isMKV=' + (d && d.isMKV) + ')');
         return _r;
     }
+    // Teste si le navigateur supporte un codec audio nativement via canPlayType
+    var _audioMimeMap = {
+        'aac': 'mp4a.40.2', 'mp3': 'mp3', 'opus': 'opus', 'vorbis': 'vorbis',
+        'ac3': 'ac-3', 'eac3': 'ec-3', 'flac': 'flac',
+        'dts': 'dts+', 'truehd': 'mlpa'
+    };
+    function canPlayAudio(codec) {
+        var c = (codec || '').toLowerCase();
+        var mime = _audioMimeMap[c];
+        if (!mime) return false;
+        return canPlay('audio/mp4; codecs="' + mime + '"') || canPlay('video/mp4; codecs="' + mime + '"');
+    }
+
     function _chooseModeFromProbe(d) {
         if (!d || !d.videoCodec) return 'native';
         var c  = d.videoCodec.toLowerCase();
-        var ac = d.audio && d.audio.length > 0 ? (d.audio[0].codec || '').toLowerCase() : '';
-        var nativeAudio = (ac === 'aac' || ac === 'mp3' || ac === 'opus' || ac === 'vorbis');
+        // Teste la piste audio sélectionnée (S.audioIdx), fallback sur la première
+        var audioArr = d.audio || [];
+        var selectedAudio = audioArr[S.audioIdx] || audioArr[0] || null;
+        var nativeAudio = selectedAudio ? canPlayAudio(selectedAudio.codec) : true;
         if (c === 'h264') {
             if (d.isMP4 && nativeAudio) return 'native';
             return REMUX_ENABLED ? 'remux' : 'transcode';
@@ -291,13 +306,12 @@ function plog(tag, msg, data) {
             if (nativeAudio && (canPlay('video/webm; codecs="av01.0.05M.08"') || canPlay('video/mp4; codecs="av01"'))) return 'native';
             return 'transcode';
         }
-        // HEVC : natif seulement si le navigateur supporte HEVC ET audio compatible
-        // FLAC/AC3/DTS/TrueHD → transcode (le navigateur ne décode pas ces audios)
+        // HEVC : natif si le navigateur supporte HEVC ET audio compatible
         if (c === 'hevc') {
             var hevcSupported = canPlay('video/mp4; codecs="hvc1"') || canPlay('video/mp4; codecs="hev1"')
                 || canPlay('video/webm; codecs="hvc1"') || canPlay('video/x-matroska; codecs="hvc1"');
             if (hevcSupported && nativeAudio && (d.isMP4 || d.isMKV)) return 'native';
-            // Tenter natif d'abord (cascade native→transcode si échec) plutôt que transcoder d'office
+            // Tenter natif d'abord (cascade native→transcode si échec)
             if (nativeAudio && (d.isMP4 || d.isMKV)) return 'native';
             return 'transcode';
         }
@@ -638,9 +652,18 @@ function plog(tag, msg, data) {
             var sel = document.createElement('select'); sel.className = 'track-select'; sel.title = 'Audio';
             d.audio.forEach(function(a) { var o = document.createElement('option'); o.value = a.index; o.textContent = a.label; sel.appendChild(o); });
             sel.addEventListener('change', function() {
-                S.audioIdx = parseInt(sel.value, 10) || 0; S.confirmed = S.step = 'transcode';
-                plog('TRACK', 'audio changed → ' + S.audioIdx);
-                hint.textContent = 'Changement de piste...'; hint.className = 'player-hint transcoding';
+                S.audioIdx = parseInt(sel.value, 10) || 0;
+                // Re-évaluer le mode : natif possible seulement sur piste 0 (serveur sert le fichier brut)
+                var bestMode;
+                if (S.audioIdx === 0) {
+                    var fakeProbe = {videoCodec:d.videoCodec, isMP4:d.isMP4, isMKV:d.isMKV, audio: d.audio[0] ? [d.audio[0]] : []};
+                    bestMode = _chooseModeFromProbe(fakeProbe);
+                } else {
+                    bestMode = 'transcode';
+                }
+                S.confirmed = S.step = bestMode;
+                plog('TRACK', 'audio changed → ' + S.audioIdx + ' mode=' + S.step);
+                hint.textContent = bestMode === 'native' ? '' : 'Changement de piste...'; hint.className = bestMode === 'native' ? 'player-hint' : 'player-hint transcoding';
                 saveCfg(); startStream(realTime());
             });
             if (!savedCfg) {

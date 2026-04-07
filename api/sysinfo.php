@@ -10,6 +10,13 @@ require_once __DIR__ . '/dashboard_helpers.php';
 header('Content-Type: application/json');
 header('Cache-Control: no-store');
 
+// --- Cache 3s pour éviter de bloquer un worker PHP 500ms par requête ---
+$cacheFile = sys_get_temp_dir() . '/sb_sysinfo.json';
+if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < 3) {
+    readfile($cacheFile);
+    exit;
+}
+
 // --- Détection des volumes + device primaire (avant la fenêtre de mesure) ---
 $volumes    = detect_storage_volumes();
 $blockInfo  = detect_block_device(BASE_PATH);
@@ -67,9 +74,12 @@ if ($ds_a !== null && $ds_b !== null) {
     $rd_sec_diff  = (int)$ds_b[5]  - (int)$ds_a[5];
     $wr_sec_diff  = (int)$ds_b[9]  - (int)$ds_a[9];
 
-    $disk_busy_pct  = round(min(100.0, $busy_ms_diff / 500.0 * 100.0), 1);
     $raid_disks     = $blockInfo['raid_disks'];
-    $disk_io_pct    = round(min(100.0, $rq_ms_diff / (500.0 * max(1, $raid_disks)) * 100.0), 1);
+    // Sur RAID0, md0 %util est trompeur (100% ≠ saturé). On normalise par le nombre de disques
+    // ET on cap à busy_ms car rq_ms peut dépasser quand les requêtes se queue.
+    // busy_ms = temps réel pendant lequel au moins 1 disque était actif → meilleur indicateur.
+    $disk_busy_pct  = round(min(100.0, $busy_ms_diff / 500.0 / max(1, $raid_disks) * 100.0), 1);
+    $disk_io_pct    = $disk_busy_pct; // Utiliser busy normalisé — plus stable et réaliste que rq_ms
     $disk_read_mbs  = round(max(0.0, $rd_sec_diff * 512 / 1048576 / 0.5), 2);
     $disk_write_mbs = round(max(0.0, $wr_sec_diff * 512 / 1048576 / 0.5), 2);
 }
@@ -95,7 +105,7 @@ unset($vol);
 $cpu_temp  = read_cpu_package_temp();
 $hdd_temps = read_hdd_temps();
 
-echo json_encode([
+$json = json_encode([
     'cpu_active_pct' => $cpu['active_pct'],
     'cpu_iowait_pct' => $cpu['iowait_pct'],
     'cpu_idle_pct'   => $cpu['idle_pct'],
@@ -117,3 +127,5 @@ echo json_encode([
     'cpu_temp_c'     => $cpu_temp,
     'hdd_temps'      => $hdd_temps ?: null,
 ]);
+@file_put_contents($cacheFile, $json);
+echo $json;

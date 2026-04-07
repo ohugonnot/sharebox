@@ -132,10 +132,11 @@ function sb_has_vnstat(): bool {
             </div>
         </details>
 
-        <!-- Torrents (affiché uniquement si rtorrent est configuré et le socket existe) -->
+        <!-- Torrents (affiché si qBittorrent ou rtorrent configuré) -->
         <?php
+        $qbUrl = defined('QBITTORRENT_URL') ? QBITTORRENT_URL : '';
         $rtSock = defined('RTORRENT_SOCK') ? RTORRENT_SOCK : '';
-        if ($rtSock !== '' && file_exists($rtSock)):
+        if ($qbUrl !== '' || ($rtSock !== '' && file_exists($rtSock))):
         ?>
         <div class="dash-torrents-row">
             <details class="dash-subsection" id="dash-downloads">

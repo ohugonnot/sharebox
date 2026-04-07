@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""
+Ejecte les peers lents ou inactifs qui bloquent des slots upload.
+- Peers avec 0 < up_speed < THRESHOLD : trop lents
+- Peers avec up_speed=0 connectes depuis > IDLE_SEC : bloquent un slot
+Ban temporaire via fichier JSON, unban automatique apres BAN_MINUTES.
+"""
+import sys
+import json
+import os
+import time
+import urllib.request
+import urllib.parse
+from datetime import datetime
+
+QB_URL       = 'http://127.0.0.1:8181'
+QB_USER      = 'ropixv2'
+QB_PASS      = 'Lip8NebW8Z8HrbX'
+THRESHOLD_KB = 50      # kick si upload < 50 KB/s
+MIN_PEERS    = 5       # ne pas vider un torrent avec peu de peers
+BAN_MINUTES  = 30      # duree du ban
+BAN_FILE     = '/tmp/qbt_banned_peers.json'
+
+cookie = None
+
+def log(msg):
+    print(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}', flush=True)
+
+def qb_request(endpoint, data=None):
+    global cookie
+    url = f'{QB_URL}{endpoint}'
+    if data:
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data)
+    if cookie:
+        req.add_header('Cookie', cookie)
+    resp = urllib.request.urlopen(req, timeout=10)
+    sc = resp.headers.get('Set-Cookie')
+    if sc:
+        cookie = sc.split(';')[0]
+    return resp.read().decode()
+
+def login():
+    qb_request('/api/v2/auth/login', {'username': QB_USER, 'password': QB_PASS})
+
+def get_torrents():
+    return json.loads(qb_request('/api/v2/torrents/info?filter=active'))
+
+def get_peers(torrent_hash):
+    return json.loads(qb_request(f'/api/v2/sync/torrentPeers?hash={torrent_hash}')).get('peers', {})
+
+def ban_peers(peers_ips):
+    if peers_ips:
+        qb_request('/api/v2/transfer/banPeers', {'peers': '|'.join(peers_ips)})
+
+def load_bans():
+    try:
+        with open(BAN_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_bans(bans):
+    with open(BAN_FILE, 'w') as f:
+        json.dump(bans, f)
+
+def unban_expired():
+    """Unban peers dont le ban a expire."""
+    bans = load_bans()
+    now = time.time()
+    expired = [ip for ip, ts in bans.items() if now - ts > BAN_MINUTES * 60]
+    if not expired:
+        return
+    # Get current ban list and remove expired
+    try:
+        body = qb_request('/api/v2/app/preferences')
+        prefs = json.loads(body)
+        banned = prefs.get('banned_IPs', '')
+        banned_list = [ip.strip() for ip in banned.split('\n') if ip.strip()]
+        expired_ips = {e.split(':')[0] for e in expired}
+        new_list = [ip for ip in banned_list if ip not in expired_ips]
+        qb_request('/api/v2/app/setPreferences',
+                    {'json': json.dumps({'banned_IPs': '\n'.join(new_list)})})
+        for ip in expired:
+            del bans[ip]
+        save_bans(bans)
+        log(f'unban {len(expired)} peers expires')
+    except Exception as e:
+        log(f'unban error: {e}')
+
+# --- Main ---
+login()
+
+# Phase 1 : unban les peers expires
+unban_expired()
+
+# Phase 2 : scanner et bannir
+torrents = get_torrents()
+threshold = THRESHOLD_KB * 1024
+bans = load_bans()
+total_kicked = 0
+total_idle = 0
+
+for t in torrents:
+    h = t['hash']
+    name = t['name'][:50]
+
+    peers = get_peers(h)
+    if len(peers) < MIN_PEERS:
+        continue
+
+    to_ban = []
+    for ip_port, p in peers.items():
+        up = p.get('up_speed', 0)
+        dl = p.get('dl_speed', 0)
+        flags = p.get('flags', '')
+        addr = p.get('ip', ip_port.split(':')[0])
+        port = p.get('port', 0)
+        peer_addr = f'{addr}:{port}'
+
+        # Deja banni dans cette session
+        if peer_addr in bans:
+            continue
+
+        # Peer lent : uploade mais en dessous du seuil
+        if 0 < up < threshold:
+            to_ban.append(peer_addr)
+            bans[peer_addr] = time.time()
+            log(f'ban SLOW {addr} ({up//1024}KB/s) on "{name}" [{h[:8]}]')
+            total_kicked += 1
+            continue
+
+        # Peer idle : connecte avec un slot upload (U/u dans flags) mais 0 KB/s
+        if up == 0 and ('U' in flags or 'u' in flags):
+            to_ban.append(peer_addr)
+            bans[peer_addr] = time.time()
+            log(f'ban IDLE {addr} (0KB/s, flags:{flags.strip()}) on "{name}" [{h[:8]}]')
+            total_idle += 1
+
+    ban_peers(to_ban)
+
+save_bans(bans)
+
+# Phase 3 : reannonce aux trackers pour trouver de nouveaux peers
+reannounced = 0
+for t in torrents:
+    h = t['hash']
+    peers = get_peers(h)
+    # Reannonce si le torrent a des leechers dans le swarm mais peu de peers connectes
+    connected = len(peers)
+    available = t.get('num_incomplete', 0)
+    if available > connected * 2 or connected < MIN_PEERS:
+        try:
+            qb_request('/api/v2/torrents/reannounce', {'hashes': h})
+            reannounced += 1
+        except Exception:
+            pass
+
+log(f'DONE - {total_kicked} slow + {total_idle} idle bannis, {reannounced} reannonces sur {len(torrents)} torrents')
