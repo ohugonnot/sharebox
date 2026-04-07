@@ -1116,7 +1116,8 @@ body::before {
 .dash-summary {
     display: flex;
     align-items: center;
-    gap: .6rem;
+    flex-wrap: wrap;
+    gap: .4rem .6rem;
     padding: .75rem 1.1rem;
     cursor: pointer;
     user-select: none;
@@ -1148,6 +1149,9 @@ body::before {
     display: flex;
     gap: .4rem;
     align-items: center;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    min-width: 0;
 }
 
 .dash-pill {

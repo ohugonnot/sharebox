@@ -78,12 +78,47 @@ function updateBar(fillEl, pct, color) {
  * Fetch
  * ============================================================ */
 
+// Timing logs pour debug perf dashboard
+const _perfLog = [];
+const _PERF_MAX = 50;
+
 function fetchJSON(url, cb) {
+    const t0 = performance.now();
+    const label = url.replace('/share/api/', '').replace('.php', '');
     fetch(url)
-        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(r => {
+            if (!r.ok) return Promise.reject(r.status);
+            const ttfb = Math.round(performance.now() - t0);
+            return r.json().then(data => {
+                const total = Math.round(performance.now() - t0);
+                const entry = { ts: new Date().toLocaleTimeString(), api: label, ttfb, total, size: JSON.stringify(data).length };
+                _perfLog.push(entry);
+                if (_perfLog.length > _PERF_MAX) _perfLog.shift();
+                console.log(`[dash] ${label}: ttfb=${ttfb}ms total=${total}ms size=${entry.size}b`);
+                if (total > 500) console.warn(`[dash] SLOW: ${label} took ${total}ms`);
+                return data;
+            });
+        })
         .then(cb)
-        .catch(() => {});
+        .catch(err => { console.error(`[dash] ${label}: FAIL`, err); });
 }
+
+/** Affiche le résumé perf dans la console (appeler via console: showPerfLog()) */
+window.showPerfLog = function() {
+    if (!_perfLog.length) { console.log('No perf data yet'); return; }
+    const byApi = {};
+    _perfLog.forEach(e => {
+        if (!byApi[e.api]) byApi[e.api] = [];
+        byApi[e.api].push(e.total);
+    });
+    console.table(Object.entries(byApi).map(([api, times]) => ({
+        api,
+        calls: times.length,
+        avg: Math.round(times.reduce((a,b) => a+b, 0) / times.length) + 'ms',
+        max: Math.max(...times) + 'ms',
+        min: Math.min(...times) + 'ms',
+    })));
+};
 
 /* ============================================================
  * CPU / RAM / Disk
@@ -537,12 +572,13 @@ function updatePillsFromSysinfo(d) {
     id('dash-pill-ram').textContent = 'RAM\u00a0' + fmtPct(ramPct);
     setPillSeverity('dash-pill-ram', pillSeverity(ramPct, 80, 90));
 
-    // HDD : usage % + IO capacity %
+    // HDD : usage % + IO réel (normalisé par nombre de disques RAID)
+    // disk_io_pct = temps I/O normalisé, disk_busy_pct = brut md0 (trompeur sur RAID)
     id('dash-pill-disk').textContent = 'HDD\u00a0' + fmtPct(diskPct)
         + '\u00a0io:' + fmtPct(busyPct);
     setPillSeverity('dash-pill-disk', worstSeverity(
         pillSeverity(diskPct, 80, 93),
-        pillSeverity(busyPct, 75, 97)
+        pillSeverity(busyPct, 80, 95)
     ));
 }
 
@@ -569,16 +605,18 @@ function fetchForPills() {
 function startDashTimers() {
     // Arrêter le timer pill léger — le full sysinfo le remplace (plus fréquent)
     clearInterval(D.pillTimer);
+    // Étaler les premiers appels pour ne pas saturer les workers PHP
+    // sysinfo bloque 500ms (usleep), donc ne pas le lancer en même temps que les autres
     fetchSysinfo();
-    fetchSpeed();
+    setTimeout(fetchSpeed, 600);
+    setTimeout(function() { if (hasTorrents()) fetchTorrents(); }, 700);
+    setTimeout(function() { if (hasQuota()) fetchQuota(); }, 800);
     D.sysTimer   = setInterval(fetchSysinfo, 10000);
     D.speedTimer = setInterval(fetchSpeed,   10000);
     if (hasTorrents()) {
-        fetchTorrents();
         D.torrentTimer = setInterval(fetchTorrents, D.torrentIntervalClosed);
     }
     if (hasQuota()) {
-        fetchQuota();
         D.quotaTimer = setInterval(fetchQuota, D.quotaInterval);
     }
 }
