@@ -86,7 +86,6 @@ if (isset($_GET['posters'])) {
                 if ($row && $row['poster_url'] && $row['poster_url'] !== '__none__' && (int)($row['verified'] ?? 0) > 0 && (int)($row['tmdb_id'] ?? 0) !== $parentTmdbId) {
                     $result[$f] = ['poster' => $row['poster_url'], 'confidence' => (int)($row['verified'] ?? 0)];
                     if ($row['overview']) $result[$f]['overview'] = $row['overview'];
-                    if (isset($row['ia_checked']) && (int)$row['ia_checked'] === 0) $result[$f]['pending_ai'] = true;
                     $seasonFolders[] = $f;
                     continue;
                 }
@@ -100,31 +99,11 @@ if (isset($_GET['posters'])) {
                     $seasonFolders[] = $f;
                     continue;
                 }
-                // Fetch season poster from TMDB
-                poster_log('SEASON fetch | ' . $f . ' num=' . $seasonNum . ' parentId=' . $parentTmdbId . (($row ? ' stale_id=' . ($row['tmdb_id'] ?? 'null') : ' no_cache')));
-                usleep(50000); // rate limit TMDB
-                $seasonUrl = "https://api.themoviedb.org/3/tv/{$parentTmdbId}/season/{$seasonNum}?api_key={$apiKey}&language=fr";
-                $sCtx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
-                $sResp = @file_get_contents($seasonUrl, false, $sCtx);
-                $sData = $sResp ? json_decode($sResp, true) : null;
-                $posterUrl = null;
-                $seasonTitle = null;
-                $seasonOverview = null;
-                if ($sData && !empty($sData['poster_path'])) {
-                    $posterUrl = 'https://image.tmdb.org/t/p/w300' . $sData['poster_path'];
-                    $seasonTitle = $sData['name'] ?? null;
-                    $seasonOverview = $sData['overview'] ?? null;
-                }
+                // Insert for worker — avoid synchronous TMDB API calls in web request
+                poster_log('SEASON pending | ' . $f . ' num=' . $seasonNum . ' parentId=' . $parentTmdbId);
                 try {
-                    $db->prepare("INSERT INTO folder_posters (path, poster_url, tmdb_id, title, overview, tmdb_year, tmdb_type) VALUES (:p, :u, :i, :t, :o, :y, :mt)
-                              ON CONFLICT(path) DO UPDATE SET poster_url = :u, tmdb_id = :i, title = :t, overview = :o, tmdb_year = :y, tmdb_type = :mt, updated_at = datetime('now')")
-                       ->execute([':p' => $fullPath, ':u' => $posterUrl, ':i' => $parentTmdbId, ':t' => $seasonTitle, ':o' => $seasonOverview, ':y' => null, ':mt' => 'tv']);
-                    poster_log('SEASON DB write | ' . $f . ' → ' . ($posterUrl ? $seasonTitle : 'NULL'));
-                } catch (PDOException $e) { poster_log('SEASON DB error | ' . $f . ' → ' . $e->getMessage()); }
-                if ($posterUrl) {
-                    $result[$f] = ['poster' => $posterUrl];
-                    if ($seasonOverview) $result[$f]['overview'] = $seasonOverview;
-                }
+                    $db->prepare("INSERT OR IGNORE INTO folder_posters (path) VALUES (:p)")->execute([':p' => $fullPath]);
+                } catch (PDOException $e) {}
                 $seasonFolders[] = $f;
             }
         }
@@ -167,7 +146,6 @@ if (isset($_GET['posters'])) {
                 if ($row['overview']) $cached[$f]['overview'] = $row['overview'];
                 if ($row['tmdb_year']) $cached[$f]['year'] = $row['tmdb_year'];
                 if ($row['tmdb_rating'] > 0) $cached[$f]['rating'] = (float)$row['tmdb_rating'];
-                if (isset($row['ia_checked']) && (int)$row['ia_checked'] === 0) $cached[$f]['pending_ai'] = true;
                 $posterCount[$row['poster_url']] = ($posterCount[$row['poster_url']] ?? 0) + 1;
                 $posterHitCount++;
             } elseif ((int)($row['verified'] ?? 0) === -1) {

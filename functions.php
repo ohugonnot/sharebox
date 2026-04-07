@@ -168,10 +168,11 @@ function extract_title_year(string $name): array {
         $year = (int)$m[1];
     }
     // Remove season/saison markers before cutting to tech tags (they pollute TMDB search)
-    // Handles: "Saison 3", "Season 2", "34 Saisons", "4 Seasons"
-    $clean = preg_replace('/\b\d*\s*(saisons?|seasons?)\s*\d*\b/i', ' ', $clean);
+    // Handles: "Saison 3", "Season 2", "34 Saisons", "4 Seasons", "Season 1-4", "S01-S07"
+    $clean = preg_replace('/\b\d*\s*(saisons?|seasons?)\s*\d*(?:\s*[-–]\s*\d+)?\b/i', ' ', $clean);
+    $clean = preg_replace('/\bS\d{1,2}\s*[-–]\s*S\d{1,2}\b/i', ' ', $clean);
     // Remove common non-title words that confuse TMDB
-    $clean = preg_replace('/\b(int[eé]grale|collection|custom|restored|remast(?:er)?ed|pack|films?\s+\d+\s+a\s+\d+|oav|mini\s+film)\b/i', ' ', $clean);
+    $clean = preg_replace('/\b(int[eé]grale|collection|custom|restored|remast(?:er)?ed|pack|films?\s+\d+\s+a\s+\d+|oav|mini\s+film)\b/iu', ' ', $clean);
     // Remove site tags like "Torrent911.com"
     $clean = preg_replace('/\b\w+\.(com|org|net|eu|io)\b/i', '', $clean);
     // Remove "HD Remasted" pattern
@@ -379,6 +380,9 @@ function tmdb_fetch(string $url, $ctx, int $maxRetries = 2): ?array {
             }
         }
     }
+    // Log failures for debugging (hide API key)
+    $safeUrl = preg_replace('/api_key=[^&]+/', 'api_key=***', $url);
+    if (function_exists('ai_log')) ai_log('TMDB fetch failed after ' . ($maxRetries + 1) . ' attempts: ' . $safeUrl);
     return null;
 }
 
@@ -439,6 +443,7 @@ function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx,
             $candidates[] = [
                 'id' => $r['id'],
                 'title' => $r['title'] ?? $r['name'] ?? '?',
+                'original_title' => $r['original_title'] ?? $r['original_name'] ?? null,
                 'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
                 'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
                 'overview' => substr($r['overview'] ?? '', 0, 150),
@@ -471,15 +476,36 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
         return trim(preg_replace('/\s+/', ' ', $s));
     };
     $a = $norm($extractedTitle);
+    if ($a === '') return 0;
+
+    // Score against localized title
     $b = $norm($candidate['title'] ?? '');
-    if ($a === '' || $b === '') return 0;
+    $bestPct = 0;
+    $bestB = $b;
+    if ($b !== '') {
+        similar_text($a, $b, $pct);
+        $bestPct = $pct;
+    }
 
-    similar_text($a, $b, $pct);
-    $score += (int)round($pct * 0.65);
+    // Also try original title (handles anime, non-English media)
+    $bOrig = isset($candidate['original_title']) ? $norm($candidate['original_title']) : '';
+    if ($bOrig !== '' && $bOrig !== $b) {
+        similar_text($a, $bOrig, $pctOrig);
+        if ($pctOrig > $bestPct) {
+            $bestPct = $pctOrig;
+            $bestB = $bOrig;
+        }
+    }
 
-    // Bonus: one title contains the other entirely (handles "Naruto" vs "Naruto Shippuden")
-    if ($a !== $b && (str_contains($b, $a) || str_contains($a, $b))) {
-        $score = max($score, 40); // floor at 40 if substring match
+    if ($bestB === '') return 0;
+    $score += (int)round($bestPct * 0.65);
+
+    // Substring bonus — proportional to length ratio to avoid false positives
+    if ($a !== $bestB && (str_contains($bestB, $a) || str_contains($a, $bestB))) {
+        $shorter = min(mb_strlen($a), mb_strlen($bestB));
+        $longer = max(mb_strlen($a), mb_strlen($bestB));
+        $ratio = $longer > 0 ? $shorter / $longer : 0;
+        $score = max($score, max(20, (int)round(50 * $ratio)));
     }
 
     // ── Year (0-15 points) ──
@@ -505,14 +531,18 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
         $score += 3; // wrong preference but still valid media
     }
 
-    // ── Popularity (0-10 points) — avoid obscure homonyms ──
+    // ── Popularity (0-12 points) — finer granularity to break ties ──
     $voteCount = (int)($candidate['vote_count'] ?? 0);
-    if ($voteCount > 500) {
+    if ($voteCount > 3000) {
+        $score += 12;
+    } elseif ($voteCount > 1000) {
         $score += 10;
+    } elseif ($voteCount > 500) {
+        $score += 8;
     } elseif ($voteCount > 100) {
-        $score += 7;
+        $score += 5;
     } elseif ($voteCount > 10) {
-        $score += 3;
+        $score += 2;
     }
 
     return min(100, $score);

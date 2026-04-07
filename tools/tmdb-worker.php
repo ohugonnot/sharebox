@@ -61,7 +61,7 @@ function discover_folders(PDO $db): int {
     );
 
     $batch = 0;
-    // No explicit transaction — autocommit avoids WAL lock contention
+    $db->beginTransaction();
     foreach ($iter as $dir) {
         $path = $dir->getRealPath() ?: $dir->getPathname();
         $rel = ltrim(str_replace($basePath, '', $path), '/');
@@ -73,9 +73,12 @@ function discover_folders(PDO $db): int {
             if ($stmt->rowCount() > 0) $inserted++;
         } catch (PDOException $e) {}
 
-        // (autocommit per INSERT — no batching needed)
+        if (++$batch % 200 === 0) {
+            $db->commit();
+            $db->beginTransaction();
+        }
     }
-    // (autocommit — no explicit commit needed)
+    $db->commit();
 
     return $inserted;
 }
@@ -338,6 +341,7 @@ do {
                             $candidates[] = [
                                 'id' => $r['id'],
                                 'title' => $r['title'] ?? $r['name'] ?? '?',
+                                'original_title' => $r['original_title'] ?? $r['original_name'] ?? null,
                                 'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
                                 'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
                                 'overview' => substr($r['overview'] ?? '', 0, 150),
@@ -478,7 +482,7 @@ do {
             try {
                 // Only propagate to entries that truly have no poster — the WHERE clause ensures
                 // we don't overwrite a match set earlier in this same pass.
-                $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 75, updated_at = datetime('now') WHERE path = ? AND poster_url IS NULL")
+                $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 55, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND poster_url IS NULL")
                    ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath]);
                 if ($db->prepare("SELECT changes()")->execute() && $db->query("SELECT changes()")->fetchColumn() > 0) {
                     $propagated++;
@@ -507,7 +511,7 @@ foreach ($stillPending as $childPath) {
     if (isset($parentMap[$parentPath])) {
         $p = $parentMap[$parentPath];
         try {
-            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 75, updated_at = datetime('now') WHERE path = ? AND poster_url IS NULL")
+            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 55, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND poster_url IS NULL")
                ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath]);
             $finalPropagated++;
         } catch (PDOException $e) {}
@@ -627,6 +631,19 @@ foreach ($seasonRows as $sr) {
     }
 }
 if ($seasonUpdated > 0) ai_log('SEASON | ' . $seasonUpdated . ' entries got season-specific poster (incl. saga/arc)');
+
+// ── GC: remove entries for paths that no longer exist ──
+$gcRows = $db->query("SELECT rowid, path FROM folder_posters ORDER BY RANDOM() LIMIT 1000")->fetchAll();
+$gcRemoved = 0;
+$db->beginTransaction();
+foreach ($gcRows as $gr) {
+    if (!file_exists($gr['path'])) {
+        $db->prepare("DELETE FROM folder_posters WHERE rowid = ?")->execute([$gr['rowid']]);
+        $gcRemoved++;
+    }
+}
+$db->commit();
+if ($gcRemoved > 0) ai_log('GC | removed ' . $gcRemoved . ' orphan entries');
 
 // ── Checkpoint WAL + backup DB after scan ──
 // Ensures the backup captures the post-scan state, not the pre-scan NULL state.
