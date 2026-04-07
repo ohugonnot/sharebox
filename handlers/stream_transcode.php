@@ -10,11 +10,12 @@ if ($mime && str_starts_with($mime, 'video/')) {
     if ($filterMode === 'none' && isHDRFile($db, $resolvedPath)) {
         $filterMode = 'hdr';
     }
-    $burnSub = isset($_GET['burnSub']) ? max(0, (int)$_GET['burnSub']) : -1;
+    $burnSub = validateBurnSub(isset($_GET['burnSub']) ? (int)$_GET['burnSub'] : -1);
     header('Content-Type: video/mp4');
     header('Content-Disposition: inline');
     header('X-Accel-Buffering: no');
     header('Cache-Control: no-cache');
+    header('Accept-Ranges: none');
     $logFile = ffmpeg_log_path();
     $ua = $_SERVER['HTTP_USER_AGENT'] ?? '-';
     $isSafari = str_contains($ua, 'Safari') && !str_contains($ua, 'Chrome');
@@ -50,6 +51,6 @@ if ($mime && str_starts_with($mime, 'video/')) {
     register_shutdown_function(function() use (&$slotFp) { releaseStreamSlot($slotFp); });
     warmFileCache($resolvedPath);
     passthru($cmd);
-    releaseStreamSlot($slotFp);
+    releaseStreamSlot($slotFp); $slotFp = null;
     exit;
 }

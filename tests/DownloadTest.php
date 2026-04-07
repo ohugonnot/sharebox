@@ -114,7 +114,7 @@ class DownloadTest extends TestCase
     {
         $result = buildFmp4MuxerArgs();
         $this->assertStringContainsString('-movflags frag_keyframe+empty_moov+default_base_moof', $result);
-        $this->assertStringContainsString('-min_frag_duration 300000', $result);
+        $this->assertStringContainsString('-min_frag_duration 2000000', $result);
         $this->assertStringContainsString('-avoid_negative_ts make_zero', $result);
     }
 
@@ -352,5 +352,26 @@ class DownloadTest extends TestCase
     {
         $result = buildFfmpegCodecArgs(50);
         $this->assertStringContainsString('-g 50', $result);
+    }
+
+    // ── validateBurnSub ─────────────────────────────────────────────────────
+
+    public function testValidateBurnSubDisabled(): void
+    {
+        $this->assertSame(-1, validateBurnSub(-1));
+    }
+
+    public function testValidateBurnSubValidRange(): void
+    {
+        $this->assertSame(0, validateBurnSub(0));
+        $this->assertSame(5, validateBurnSub(5));
+        $this->assertSame(49, validateBurnSub(49));
+    }
+
+    public function testValidateBurnSubRejectsOutOfRange(): void
+    {
+        $this->assertSame(-1, validateBurnSub(50));
+        $this->assertSame(-1, validateBurnSub(99999));
+        $this->assertSame(-1, validateBurnSub(-100));
     }
 }

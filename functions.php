@@ -541,6 +541,10 @@ function validateFilterMode(string $mode): string {
     return in_array($mode, ALLOWED_FILTER_MODES, true) ? $mode : 'none';
 }
 
+function validateBurnSub(int $burnSub): int {
+    return ($burnSub >= 0 && $burnSub < 50) ? $burnSub : -1;
+}
+
 /**
  * Détecte automatiquement si un fichier nécessite le filtre HDR→SDR.
  * @param PDO $db Database connection
@@ -619,7 +623,7 @@ function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHD
  */
 function buildFmp4MuxerArgs(): string {
     return ' -avoid_negative_ts make_zero -start_at_zero'
-        . ' -max_muxing_queue_size 4096 -min_frag_duration 300000'
+        . ' -max_muxing_queue_size 4096 -min_frag_duration 2000000'
         . ' -movflags frag_keyframe+empty_moov+default_base_moof';
 }
 
