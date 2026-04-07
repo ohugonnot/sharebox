@@ -526,7 +526,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card.has-poster .grid-card-letter { display:none; }
 .grid-card.has-poster .grid-card-icon { display:none; }
 .grid-card-overview { position:absolute; inset:0; background:rgba(6,8,14,.92); backdrop-filter:blur(8px); padding:.6rem; display:flex; flex-direction:column; justify-content:flex-end; opacity:0; transition:opacity .2s; pointer-events:none; }
-.grid-card:hover .grid-card-overview { opacity:1; }
+.grid-card:hover .grid-card-overview, .grid-card.ov-open .grid-card-overview { opacity:1; }
 .grid-card-overview-title { font-size:.85rem; font-weight:700; color:var(--accent); margin-bottom:.35rem; line-height:1.25; }
 .grid-card-overview-text { font-size:.74rem; color:#ccc; line-height:1.5; display:-webkit-box; -webkit-line-clamp:8; -webkit-box-orient:vertical; overflow:hidden; }
 .grid-card-confidence { position:absolute; bottom:.4rem; right:.4rem; width:7px; height:7px; border-radius:50%; opacity:.6; z-index:4; }
@@ -545,6 +545,9 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card-ai-pending svg { width:20px; height:20px; color:var(--accent); opacity:.8; animation:spin 2s linear infinite; }
 .grid-card-ai-pending span { font-size:.65rem; color:rgba(255,255,255,.7); text-align:center; line-height:1.3; padding:0 .5rem; }
 @keyframes spin { to { transform:rotate(360deg); } }
+/* Shimmer during poster loading */
+@keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
+.grid-card:not(.has-poster):not(.poster-resolved) .grid-card-bg { background-image:linear-gradient(110deg,rgba(255,255,255,.02) 30%,rgba(255,255,255,.06) 50%,rgba(255,255,255,.02) 70%); background-size:200% 100%; animation:shimmer 2s ease-in-out infinite; }
 /* Poster picker modal */
 .poster-modal { position:fixed; inset:0; z-index:100; background:rgba(0,0,0,.7); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(4px); animation:fadeUp .15s ease; }
 .poster-modal-card { background:var(--bg-surface); border:1px solid rgba(255,255,255,.1); border-radius:var(--radius-lg); padding:1.5rem; max-width:720px; width:94%; max-height:85vh; overflow-y:auto; }
@@ -567,7 +570,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card-icon { position:absolute; top:.7rem; right:.7rem; opacity:.25; }
 .grid-card-label { padding:.4rem .5rem; background:rgba(0,0,0,.72); text-align:center; height:3rem; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .grid-card-title { font-size:.85rem; font-weight:700; line-height:1.3; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; text-shadow:0 1px 2px rgba(0,0,0,.5); overflow-wrap:break-word; word-break:break-word; hyphens:auto; text-wrap:balance; }
-.grid-card:nth-child(1){animation-delay:.03s}.grid-card:nth-child(2){animation-delay:.06s}.grid-card:nth-child(3){animation-delay:.09s}.grid-card:nth-child(4){animation-delay:.12s}.grid-card:nth-child(5){animation-delay:.15s}.grid-card:nth-child(6){animation-delay:.18s}.grid-card:nth-child(n+7){animation-delay:.21s}
+/* animation-delay set inline per card for smooth stagger beyond 7 items */
 .grid-card.hidden { display:none; }
 /* ── Settings dropdown ── */
 .gear-wrap { position:relative; }
@@ -730,7 +733,8 @@ HTML;
             $dataFolder = $hasVideo ? ' data-folder="' . $folderHtml . '"' : '';
             $folderFullPath = $dirPath . '/' . $folder['name'];
             $folderType = $folderTypes[$folderFullPath] ?? 'series';
-            echo '<a class="grid-card" href="' . $folderUrl . '" style="background:' . $color . '" data-type="folder" data-name="' . $folderHtml . '"' . $dataFolder . ' data-folder-type="' . $folderType . '">';
+            $stagger = round(min(0.03 * ($idx + 1), 0.6), 2);
+            echo '<a class="grid-card" href="' . $folderUrl . '" style="animation-delay:' . $stagger . 's;background:' . $color . '" data-type="folder" data-name="' . $folderHtml . '"' . $dataFolder . ' data-folder-type="' . $folderType . '">';
             echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
             echo '<div class="grid-card-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" opacity=".4"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg></div>';
             if ($hasVideo) {
@@ -750,7 +754,8 @@ HTML;
                 $color = $cardColors[($idx + count($folders)) % count($cardColors)];
                 $letter = mb_strtoupper(mb_substr($vf['name'], 0, 1));
                 $escapedVfName = htmlspecialchars(addcslashes($vf['name'], "'\\"), ENT_QUOTES);
-                echo '<a class="grid-card grid-card-file" href="' . $vfDownloadUrl . '" data-play="' . htmlspecialchars($vfPlayUrl, ENT_QUOTES) . '" style="background:' . $color . '" data-type="file" data-name="' . $vfHtml . '" data-folder="' . $vfHtml . '" data-size="' . $vf['size'] . '">';
+                $stagger = round(min(0.03 * ($idx + count($folders) + 1), 0.6), 2);
+                echo '<a class="grid-card grid-card-file" href="' . $vfDownloadUrl . '" data-play="' . htmlspecialchars($vfPlayUrl, ENT_QUOTES) . '" style="animation-delay:' . $stagger . 's;background:' . $color . '" data-type="file" data-name="' . $vfHtml . '" data-folder="' . $vfHtml . '" data-size="' . $vf['size'] . '">';
                 echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
                 echo '<div class="grid-card-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg></div>';
                 echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();toggleCardMenu(this,\'' . $escapedVfName . '\')" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
@@ -1068,6 +1073,10 @@ function reloadAllPosters() {
                 card.classList.add('has-poster');
                 card.removeAttribute('data-poster');
             };
+            img.onerror = function(){
+                card.classList.add('poster-resolved');
+                card.removeAttribute('data-poster');
+            };
             img.src = url;
             observer.unobserve(card);
         });
@@ -1192,6 +1201,9 @@ function reloadAllPosters() {
                     var delay = SCHEDULE[Math.min(fetchPosters.polls, SCHEDULE.length - 1)];
                     fetchPosters.polls++;
                     setTimeout(fetchPosters, delay);
+                } else if (d.pending === 0) {
+                    // Mark unmatched cards as resolved (stops shimmer)
+                    document.querySelectorAll('.grid-card:not(.has-poster)').forEach(function(c){ c.classList.add('poster-resolved'); });
                 }
             })
             .catch(function(e){
@@ -1204,10 +1216,12 @@ function reloadAllPosters() {
     }
     fetchPosters();
     // Safety poll toutes les 30s — seulement s'il y a des posters pending
-    setInterval(function() {
+    var safetyInterval = setInterval(function() {
         if (!document.hidden && !fetchPosters.inFlight && fetchPosters.pending) {
             fetchPosters.polls = 0;
             fetchPosters();
+        } else if (!fetchPosters.pending) {
+            clearInterval(safetyInterval);
         }
     }, 30000);
     document.addEventListener('visibilitychange', function() {
@@ -1217,6 +1231,9 @@ function reloadAllPosters() {
         }
     });
 })();
+
+// ── Mobile: first tap shows overview, second tap navigates ──
+if('ontouchstart' in window){document.addEventListener('click',function(e){var card=e.target.closest('.grid-card');if(!card||e.target.closest('.grid-card-ctx'))return;var ov=card.querySelector('.grid-card-overview');if(!ov)return;if(!card.classList.contains('ov-open')){e.preventDefault();document.querySelectorAll('.grid-card.ov-open').forEach(function(c){c.classList.remove('ov-open')});card.classList.add('ov-open')}});}
 
 // ── Poster picker modal ──
 function openPosterPicker(folderName) {
