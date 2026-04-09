@@ -19,18 +19,21 @@ const AUTH_MAX_ATTEMPTS       = 10;             // password attempts before lock
 const AUTH_LOCKOUT_SLEEP      = 3;              // sleep seconds on lockout
 const AUTH_FAIL_SLEEP         = 1;              // sleep seconds per failed attempt
 
-// FFmpeg encoding defaults
-const FFMPEG_CRF              = 20;             // x264 quality (lower = better, 18-28 typical)
-const FFMPEG_PRESET           = 'medium';       // x264 preset transcode progressif (temps réel 720p/1080p@24fps avec 12 threads)
-const FFMPEG_PRESET_HLS       = 'slow';         // x264 preset HLS (async, pré-généré en arrière-plan)
-const FFMPEG_THREADS          = 12;             // x264 thread count (4 streams × 12 = 48 cores)
-const FFMPEG_AUDIO_BITRATE    = '192k';         // AAC audio bitrate
-const FFMPEG_AUDIO_CHANNELS   = 2;              // stereo downmix
-const FFMPEG_GOP_SIZE_DEFAULT = 250;            // keyframe interval transcode (10s@25fps)
+// FFmpeg encoding defaults (overridable via config.php)
+defined('FFMPEG_CRF')              || define('FFMPEG_CRF', 22);              // x264 quality (lower = better, 18-28 typical)
+defined('FFMPEG_PRESET')           || define('FFMPEG_PRESET', 'veryfast');    // x264 preset live streaming sur 8 cores
+defined('FFMPEG_PRESET_HLS')       || define('FFMPEG_PRESET_HLS', 'slow');   // x264 preset HLS (async, pré-généré en arrière-plan)
+defined('FFMPEG_THREADS')          || define('FFMPEG_THREADS', 4);           // 50% des 8 cores, laisse marge pour rtorrent/flood/jellyfin
+defined('FFMPEG_AUDIO_BITRATE')    || define('FFMPEG_AUDIO_BITRATE', '192k'); // AAC audio bitrate
+defined('FFMPEG_AUDIO_CHANNELS')   || define('FFMPEG_AUDIO_CHANNELS', 2);    // stereo downmix
+defined('FFMPEG_GOP_SIZE_DEFAULT') || define('FFMPEG_GOP_SIZE_DEFAULT', 50);  // keyframe interval transcode (2s@25fps, seek-friendly)
+defined('FFMPEG_TUNE')             || define('FFMPEG_TUNE', '');              // '' = désactivé, 'film' = archivage (coût CPU élevé en live)
+defined('FFMPEG_BFRAMES')          || define('FFMPEG_BFRAMES', 0);           // 0 = defaults x264, sinon 2-3 (qualité++ mais encode plus lent)
+defined('FFMPEG_REFS')             || define('FFMPEG_REFS', 0);              // 0 = defaults x264, sinon 3-4 (idem)
 
-// FFmpeg HDR tonemapping — CPU-intensif, nécessite plus de threads
-const FFMPEG_HDR_THREADS      = 24;             // tonemapping float32 gourmand (marge pour OS et autres streams)
-const FFMPEG_HDR_CRF          = 20;             // aligné avec SDR (le tonemapping domine le CPU, pas l'encodage)
+// FFmpeg HDR tonemapping — CPU-intensif, nécessite plus de threads (overridable via config.php)
+defined('FFMPEG_HDR_THREADS')      || define('FFMPEG_HDR_THREADS', 6);       // tonemapping float32 gourmand (75% des 8 cores)
+defined('FFMPEG_HDR_CRF')          || define('FFMPEG_HDR_CRF', 22);         // aligné avec SDR (le tonemapping domine le CPU, pas l'encodage)
 
 /**
  * Acquire a stream slot using flock — limits concurrent ffmpeg processes.
@@ -663,10 +666,19 @@ function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHD
     $threads = $isHDR ? FFMPEG_HDR_THREADS : FFMPEG_THREADS;
     $crf = $isHDR ? FFMPEG_HDR_CRF : FFMPEG_CRF;
     $preset = $isHLS ? FFMPEG_PRESET_HLS : FFMPEG_PRESET;
-    $args = ' -c:v libx264 -preset ' . $preset . ' -tune film -crf ' . $crf
-        . ' -profile:v high -level 4.1'
-        . ' -bf 3 -refs 4'
-        . ' -g ' . $gopSize . ' -threads ' . $threads
+    $args = ' -c:v libx264 -preset ' . $preset;
+    if (FFMPEG_TUNE !== '') {
+        $args .= ' -tune ' . FFMPEG_TUNE;
+    }
+    $args .= ' -crf ' . $crf
+        . ' -profile:v high -level 4.1';
+    if (FFMPEG_BFRAMES > 0) {
+        $args .= ' -bf ' . FFMPEG_BFRAMES;
+    }
+    if (FFMPEG_REFS > 0) {
+        $args .= ' -refs ' . FFMPEG_REFS;
+    }
+    $args .= ' -g ' . $gopSize . ' -threads ' . $threads
         . ' -colorspace bt709 -color_primaries bt709 -color_trc bt709'
         . ' -c:a aac -ac ' . FFMPEG_AUDIO_CHANNELS . ' -b:a ' . FFMPEG_AUDIO_BITRATE . ' -shortest';
     if ($isHLS) {

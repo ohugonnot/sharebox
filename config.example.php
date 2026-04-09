@@ -38,3 +38,13 @@ define('MAX_ZIP_SIZE', 10 * 1024 * 1024 * 1024);
 // Get a free key at https://www.themoviedb.org/settings/api
 // Without this, grid view shows letter placeholders instead of posters.
 // define('TMDB_API_KEY', 'your_api_key_here');
+
+// ── FFmpeg encoding (override defaults from functions.php) ──────────────────
+// Adjust for your hardware. Defaults are tuned for an 8-core server.
+// define('FFMPEG_PRESET', 'veryfast');    // ultrafast|superfast|veryfast|faster|fast|medium|slow
+// define('FFMPEG_CRF', 22);              // 18-28 (lower = better quality, more CPU)
+// define('FFMPEG_THREADS', 4);           // half your core count recommended
+// define('FFMPEG_HDR_THREADS', 6);       // tonemapping needs more threads
+// define('FFMPEG_TUNE', '');             // '' or 'film'
+// define('FFMPEG_BFRAMES', 0);           // 0 = x264 defaults, 2-3 for quality
+// define('FFMPEG_REFS', 0);              // 0 = x264 defaults, 3-4 for quality
