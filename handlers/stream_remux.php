@@ -37,21 +37,19 @@ if (!is_resource($proc)) {
     stream_log('REMUX proc_open failed | ' . basename($resolvedPath));
     exit;
 }
-if (true) {
-    $shellPid = proc_get_status($proc)['pid'];
-    stream_set_timeout($pipes[1], 60);
-    while (!feof($pipes[1])) {
-        $chunk = fread($pipes[1], 65536);
-        if ($chunk === false || $chunk === '' || connection_aborted()) break;
-        $meta = stream_get_meta_data($pipes[1]);
-        if ($meta['timed_out']) { stream_log('REMUX pipe timeout — aborting'); break; }
-        echo $chunk;
-    }
-    fclose($pipes[1]);
-    $status = proc_get_status($proc);
-    if ($status['running']) proc_terminate($proc, 15);
-    proc_close($proc);
+$shellPid = proc_get_status($proc)['pid'];
+stream_set_timeout($pipes[1], 60);
+while (!feof($pipes[1])) {
+    $chunk = fread($pipes[1], 65536);
+    if ($chunk === false || $chunk === '' || connection_aborted()) break;
+    $meta = stream_get_meta_data($pipes[1]);
+    if ($meta['timed_out']) { stream_log('REMUX pipe timeout — aborting'); break; }
+    echo $chunk;
 }
+fclose($pipes[1]);
+$status = proc_get_status($proc);
+if ($status['running']) proc_terminate($proc, 15);
+proc_close($proc);
 $shellPid = null;
 // Slot released by shutdown function
 exit;

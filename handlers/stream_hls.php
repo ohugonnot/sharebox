@@ -14,7 +14,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
 
     // Dossier cache unique par fichier+qualité+audio+burnSub+startSec+filterMode
     // Hors de /tmp pour éviter la race condition avec systemd-tmpfiles qui supprime pendant ffmpeg
-    $hlsKey = md5($resolvedPath . '|' . $quality . '|' . $audioTrack . '|' . $burnSub . '|' . $startSec . '|' . $filterMode);
+    $hlsKey = md5($resolvedPath . '|' . filemtime($resolvedPath) . '|' . $quality . '|' . $audioTrack . '|' . $burnSub . '|' . $startSec . '|' . $filterMode);
     $hlsDir = (defined('STREAM_LOG') && STREAM_LOG ? dirname(STREAM_LOG) : sys_get_temp_dir()) . '/hls_cache/hls_' . $hlsKey;
     $m3u8   = $hlsDir . '/stream.m3u8';
     $pidFile = $hlsDir . '/ffmpeg.pid';
@@ -45,6 +45,7 @@ if ($mime && str_starts_with($mime, 'video/')) {
             $prevSize = $curSize;
             usleep(50000);
         }
+        clearstatcache(true, $segPath);
         header('Content-Type: video/mp2t');
         header('Content-Length: ' . filesize($segPath));
         header('Cache-Control: no-cache');

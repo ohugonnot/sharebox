@@ -1,6 +1,6 @@
 <?php
 header('Content-Type: application/json; charset=utf-8');
-$seekSec = max(0.0, (float)($_GET['keyframe'] ?? 0));
+$seekSec = min(86400.0, max(0.0, (float)($_GET['keyframe'] ?? 0)));
 if ($seekSec <= 0.0) { echo json_encode(['pts' => 0.0]); exit; }
 $probeFp = acquireProbeSlot();
 if (!$probeFp) { echo json_encode(['pts' => $seekSec]); exit; }

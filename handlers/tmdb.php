@@ -18,15 +18,22 @@ if (!$apiKey) {
 // ?posters et ?tmdb_set sont exemptés (pas d'appel API ou action ponctuelle)
 if (isset($_GET['tmdb_search']) || isset($_GET['web_search'])) {
     $rlFile = '/tmp/sharebox_rl_' . md5($_SERVER['REMOTE_ADDR'] ?? '') . '.json';
-    $rlData = @json_decode(@file_get_contents($rlFile), true) ?: ['ts' => 0, 'n' => 0];
-    $now = time();
-    if ($now - $rlData['ts'] > 60) { $rlData = ['ts' => $now, 'n' => 0]; }
-    $rlData['n']++;
-    @file_put_contents($rlFile, json_encode($rlData));
-    if ($rlData['n'] > 15) {
-        http_response_code(429);
-        echo json_encode(['error' => 'rate limit exceeded']);
-        exit;
+    $rlFp = @fopen($rlFile, 'c+');
+    if ($rlFp && flock($rlFp, LOCK_EX)) {
+        $rlData = @json_decode(@stream_get_contents($rlFp), true) ?: ['ts' => 0, 'n' => 0];
+        $now = time();
+        if ($now - $rlData['ts'] > 60) { $rlData = ['ts' => $now, 'n' => 0]; }
+        $rlData['n']++;
+        ftruncate($rlFp, 0);
+        rewind($rlFp);
+        fwrite($rlFp, json_encode($rlData));
+        flock($rlFp, LOCK_UN);
+        fclose($rlFp);
+        if ($rlData['n'] > 15) {
+            http_response_code(429);
+            echo json_encode(['error' => 'rate limit exceeded']);
+            exit;
+        }
     }
 }
 
@@ -119,7 +126,7 @@ if (isset($_GET['posters'])) {
                 // Insert for worker — avoid synchronous TMDB API calls in web request
                 poster_log('SEASON pending | ' . $f . ' num=' . $seasonNum . ' parentId=' . $parentTmdbId);
                 try {
-                    $db->prepare("INSERT INTO folder_posters (path) VALUES (:p) ON CONFLICT(path) DO UPDATE SET match_attempts = 0")->execute([':p' => $fullPath]);
+                    $db->prepare("INSERT INTO folder_posters (path) VALUES (:p) ON CONFLICT(path) DO NOTHING")->execute([':p' => $fullPath]);
                 } catch (PDOException $e) {}
                 $seasonFolders[] = $f;
             }
@@ -640,6 +647,12 @@ if (isset($_GET['web_poster_save']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Download image via curl
     $ch = curl_init();
+    // Block SSRF: only allow http/https (no file://, gopher://, etc.)
+    if (!preg_match('#^https?://#i', $imageUrl)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'only http/https URLs allowed']);
+        exit;
+    }
     curl_setopt_array($ch, [
         CURLOPT_URL => $imageUrl,
         CURLOPT_RETURNTRANSFER => true,
@@ -648,6 +661,8 @@ if (isset($_GET['web_poster_save']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         CURLOPT_MAXFILESIZE => 10 * 1024 * 1024,
         CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; ShareBox/1.0)',
         CURLOPT_HTTPHEADER => ['Accept: image/*'],
+        CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+        CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
     ]);
     $imageData = curl_exec($ch);
     $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);

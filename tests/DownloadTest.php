@@ -337,12 +337,10 @@ class DownloadTest extends TestCase
     {
         $result = buildFfmpegCodecArgs();
         $this->assertStringContainsString('-c:v libx264', $result);
-        $this->assertStringContainsString('-preset medium', $result);
-        $this->assertStringContainsString('-tune film', $result);
-        $this->assertStringContainsString('-crf 20', $result);
-        $this->assertStringContainsString('-threads 12', $result);
-        $this->assertStringContainsString('-bf 3', $result);
-        $this->assertStringContainsString('-refs 4', $result);
+        $this->assertStringContainsString('-preset veryfast', $result);
+        $this->assertStringContainsString('-crf 22', $result);
+        $this->assertStringContainsString('-threads 4', $result);
+        $this->assertStringNotContainsString('-tune', $result);
         $this->assertStringContainsString('-c:a aac', $result);
         $this->assertStringContainsString('-ac 2', $result);
         $this->assertStringContainsString('-b:a 192k', $result);

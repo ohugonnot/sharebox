@@ -25,7 +25,8 @@ $cmd = 'timeout ' . SUBTITLE_EXTRACT_TIMEOUT . ' ffmpeg -i ' . escapeshellarg($r
 passthru($cmd);
 $vtt = ob_get_clean();
 echo $vtt;
-if ($vtt) {
+// Ne cacher que du WebVTT valide (évite de servir du contenu corrompu indéfiniment)
+if ($vtt && str_starts_with(trim($vtt), 'WEBVTT')) {
     try {
         $db->prepare("INSERT OR REPLACE INTO subtitle_cache (path, track, mtime, vtt) VALUES (:p, :t, :m, :v)")
            ->execute([':p' => $resolvedPath, ':t' => $trackIdx, ':m' => $mtime, ':v' => $vtt]);
