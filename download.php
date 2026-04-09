@@ -133,13 +133,13 @@ if ($link['password_hash'] !== null) {
 
 // Capturer les données session nécessaires avant de libérer le verrou.
 // Sans session_write_close(), chaque requête HLS (~5s) bloque toutes les autres requêtes PHP.
-$cachedSessionUser = $_SESSION['sharebox_user'] ?? null;
-session_write_close();
+$cachedSessionUser = (session_status() === PHP_SESSION_ACTIVE) ? ($_SESSION['sharebox_user'] ?? null) : null;
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 
 // Sous-chemin dans le dossier partagé (pour la navigation)
 $subPath = $_GET['p'] ?? '';
-// Fix double-encoding: if path still contains %XX after PHP's auto-decode, decode once more
-if (str_contains($subPath, '%')) {
+// Fix double-encoding: only when %25 detected (literal '%' was double-encoded)
+if (str_contains($subPath, '%25')) {
     $subPath = rawurldecode($subPath);
 }
 
@@ -261,8 +261,10 @@ if (is_file($resolvedPath)) {
            ->execute([':id' => $link['id']]);
         $db->prepare("INSERT INTO download_logs (link_id, ip) VALUES (?, ?)")
            ->execute([(int)$link['id'], $_SERVER['REMOTE_ADDR'] ?? '']);
-        if (random_int(1, 100) === 1) {
+        $purgeFlag = sys_get_temp_dir() . '/sharebox_purge_dllogs';
+        if (!file_exists($purgeFlag) || (time() - filemtime($purgeFlag)) > 3600) {
             $db->exec("DELETE FROM download_logs WHERE downloaded_at < datetime('now', '-30 days')");
+            @touch($purgeFlag);
         }
     }
 
@@ -279,15 +281,6 @@ if (is_file($resolvedPath)) {
 // Si c'est un dossier
 if (is_dir($resolvedPath)) {
     stream_log('BROWSE | token=' . $token . ' | ' . ($subPath ?: '(root)') . ' | ' . basename($resolvedPath));
-    if (!$subPath) {
-        $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id")
-           ->execute([':id' => $link['id']]);
-        $db->prepare("INSERT INTO download_logs (link_id, ip) VALUES (?, ?)")
-           ->execute([(int)$link['id'], $_SERVER['REMOTE_ADDR'] ?? '']);
-        if (random_int(1, 100) === 1) {
-            $db->exec("DELETE FROM download_logs WHERE downloaded_at < datetime('now', '-30 days')");
-        }
-    }
 
     // TMDB poster endpoints (search, batch, set)
     if (isset($_GET['posters']) || isset($_GET['tmdb_search']) || isset($_GET['tmdb_set']) || isset($_GET['folder_type_set']) || isset($_GET['ai_recheck']) || isset($_GET['tmdb_reload']) || isset($_GET['web_search']) || isset($_GET['web_poster_save'])) {
@@ -536,6 +529,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .grid-card-overview-meta { font-size:.72rem; color:rgba(255,255,255,.5); margin-bottom:.28rem; }
 .grid-card-ctx { position:absolute; top:.5rem; right:.5rem; width:26px; height:26px; border-radius:50%; background:rgba(0,0,0,.55); border:1px solid rgba(255,255,255,.15); display:flex; align-items:center; justify-content:center; cursor:pointer; opacity:0; transition:opacity .15s; z-index:5; color:rgba(255,255,255,.8); }
 .grid-card:hover .grid-card-ctx, .grid-card.poster-broken .grid-card-ctx { opacity:1; }
+@media(hover:none){ .grid-card-ctx { opacity:1; } }
 .grid-card-ctx:hover { background:rgba(0,0,0,.8); border-color:var(--accent); color:var(--accent); }
 .grid-card.menu-elevated { z-index:10; position:relative; }
 .grid-card-menu { position:absolute; top:calc(.5rem + 30px); right:.5rem; background:#1a1a2e; border:1px solid rgba(255,255,255,.15); border-radius:8px; padding:.3rem 0; min-width:160px; z-index:20; box-shadow:0 4px 12px rgba(0,0,0,.5); display:none; max-height:calc(100vh - 4rem); overflow-y:auto; }
@@ -742,8 +736,7 @@ HTML;
             echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
             echo '<div class="grid-card-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" opacity=".4"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg></div>';
             if ($hasVideo) {
-                $escapedName = htmlspecialchars(addcslashes($folder['name'], "'\\"), ENT_QUOTES);
-                echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();toggleCardMenu(this,\'' . $escapedName . '\')" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
+                echo '<div class="grid-card-ctx" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
             }
             echo '<div class="grid-card-label"><div class="grid-card-title">' . $folderHtml . '</div></div>';
             echo '</a>';
@@ -757,14 +750,13 @@ HTML;
                 $vfDownloadUrl = $baseUrl . '?p=' . rawurlencode($vfPath);
                 $color = $cardColors[($idx + count($folders)) % count($cardColors)];
                 $letter = mb_strtoupper(mb_substr($vf['name'], 0, 1));
-                $escapedVfName = htmlspecialchars(addcslashes($vf['name'], "'\\"), ENT_QUOTES);
                 $totalIdx = $idx + count($folders);
                 $stagger = $totalIdx < 20 ? round(0.03 * ($totalIdx + 1), 2) : 0;
                 $animStyle = $stagger > 0 ? 'animation-delay:' . $stagger . 's;' : 'animation:none;';
                 echo '<a class="grid-card grid-card-file" href="' . $vfDownloadUrl . '" data-play="' . htmlspecialchars($vfPlayUrl, ENT_QUOTES) . '" style="' . $animStyle . 'background:' . $color . '" data-type="file" data-name="' . $vfHtml . '" data-folder="' . $vfHtml . '" data-size="' . $vf['size'] . '">';
                 echo '<div class="grid-card-bg"><div class="grid-card-letter">' . htmlspecialchars($letter) . '</div></div>';
                 echo '<div class="grid-card-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--green)"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg></div>';
-                echo '<div class="grid-card-ctx" onclick="event.preventDefault();event.stopPropagation();toggleCardMenu(this,\'' . $escapedVfName . '\')" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
+                echo '<div class="grid-card-ctx" title="Options"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></div>';
                 echo '<div class="grid-card-label"><div class="grid-card-title">' . $vfHtml . '</div></div>';
                 echo '</a>';
             }
@@ -960,7 +952,7 @@ function tri(btn, key) {
         return mul * a.dataset.name.localeCompare(b.dataset.name, 'fr', {numeric: true, sensitivity: 'base'});
     });
     const upLink = panel.querySelector('.row:not([data-type])');
-    if (upLink) panel.appendChild(upLink);
+    if (upLink) panel.prepend(upLink);
     folders.forEach(f => panel.appendChild(f));
     files.forEach(f => panel.appendChild(f));
     // Also sort grid cards
@@ -1522,14 +1514,20 @@ function selectPoster(folderName, posterUrl, tmdbId, title, overview, year, rati
     }
 }
 
-// ── Card dropdown menu ──
-// Fermer le menu contextuel au clic extérieur
+// ── Card dropdown menu (event delegation — no inline onclick) ──
 document.addEventListener('click', function(e) {
-    if (!e.target.closest('.grid-card-ctx') && !e.target.closest('.grid-card-menu')) {
+    var ctx = e.target.closest('.grid-card-ctx');
+    if (ctx) {
+        e.preventDefault();
+        e.stopPropagation();
+        var card = ctx.closest('.grid-card');
+        toggleCardMenu(ctx, card ? card.dataset.name : '');
+        return;
+    }
+    if (!e.target.closest('.grid-card-menu')) {
         var openMenu = document.querySelector('.grid-card-menu');
         if (openMenu) openMenu.remove();
         document.querySelectorAll('.grid-card-ctx').forEach(function(b){ b.dataset.menuOpen = ''; });
-        // Retirer le z-index surélevé
         document.querySelectorAll('.grid-card.menu-elevated').forEach(function(c){ c.classList.remove('menu-elevated'); });
     }
 });
@@ -1728,14 +1726,6 @@ function requestAIRecheck(name) {
     }).catch(function(){});
 }
 
-// Close menu on outside click
-document.addEventListener('click', function(e) {
-    if (!e.target.closest('.grid-card-ctx') && !e.target.closest('.grid-card-menu')) {
-        var m = document.querySelector('.grid-card-menu');
-        if (m) m.remove();
-        document.querySelectorAll('.grid-card-ctx').forEach(function(b){ b.dataset.menuOpen = ''; });
-    }
-});
 </script>
 </body>
 </html>
@@ -1808,6 +1798,8 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     // Base des URLs avec le sous-chemin
     $pParam = $subPath ? 'p=' . rawurlencode($subPath) . '&amp;' : '';
     $pParamJs = $subPath ? 'p=' . rawurlencode($subPath) . '&' : '';
+    $pParamJsEnc = json_encode($pParamJs, JSON_HEX_TAG | JSON_HEX_APOS);
+    $baseUrlJs = json_encode($baseUrl, JSON_HEX_TAG | JSON_HEX_APOS);
 
     $dlUrl = $subPath
         ? $baseUrl . '?p=' . rawurlencode($subPath)
@@ -1942,8 +1934,8 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
 var PLAYER_CONFIG = {
     remuxEnabled: {$remuxEnabled},
     isVideo: {$isVideo},
-    baseUrl: '{$baseUrl}',
-    pp: '{$pParamJs}',
+    baseUrl: {$baseUrlJs},
+    pp: {$pParamJsEnc},
     episodeNav: {$episodeNavJson},
     watchPath: {$watchPathJs},
     watchCsrf: {$watchCsrfJs}

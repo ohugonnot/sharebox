@@ -89,6 +89,7 @@ function acquireProbeSlot(): mixed {
 }
 
 function releaseProbeSlot(mixed $fp): void {
+    if (!is_resource($fp)) return;
     flock($fp, LOCK_UN);
     fclose($fp);
 }
@@ -789,7 +790,12 @@ function log_activity(string $event_type, ?string $username, ?string $ip, ?strin
         $db->prepare(
             "INSERT INTO activity_logs (event_type, username, ip, details) VALUES (?, ?, ?, ?)"
         )->execute([$event_type, $username, $ip, $details]);
-        $db->exec("DELETE FROM activity_logs WHERE created_at < datetime('now', '-90 days')");
+        // Purge vieux logs max 1x/heure (évite un DELETE full-scan à chaque insert)
+        $purgeFlag = sys_get_temp_dir() . '/sharebox_purge_actlogs';
+        if (!file_exists($purgeFlag) || (time() - filemtime($purgeFlag)) > 3600) {
+            $db->exec("DELETE FROM activity_logs WHERE created_at < datetime('now', '-90 days')");
+            @touch($purgeFlag);
+        }
     } catch (\Throwable $e) {
         // Silencieux — les logs ne doivent pas casser l'app
     }

@@ -26,7 +26,14 @@ if (!$probeFp) {
 
 $cmd = 'timeout ' . PROBE_TIMEOUT . ' ffprobe -v error -show_entries format=duration,format_name -show_entries stream=index,codec_type,codec_name,width,height,color_transfer,color_primaries,color_space:stream_tags=language,title -of json '
     . escapeshellarg($resolvedPath) . ' 2>/dev/null';
+try {
 $output = shell_exec($cmd);
+if ($output === null) {
+    stream_log('PROBE failed (null output) | ' . basename($resolvedPath));
+    http_response_code(500);
+    echo json_encode(['error' => 'probe_failed']);
+    exit;
+}
 $data = json_decode($output, true);
 $duration = (float)($data['format']['duration'] ?? 0);
 $formatName = $data['format']['format_name'] ?? '';
@@ -70,9 +77,10 @@ try {
     $db->prepare("INSERT OR REPLACE INTO probe_cache (path, mtime, result) VALUES (:p, :m, :r)")
        ->execute([':p' => $resolvedPath, ':m' => $mtime, ':r' => $result]);
 } catch (PDOException $e) { /* lock résiduel — le probe sera recalculé au prochain appel */ }
-
-releaseProbeSlot($probeFp);
 echo $result;
+} finally {
+    releaseProbeSlot($probeFp);
+}
 
 // Pré-cache du PREMIER sous-titre texte en background (évite l'attente au premier clic)
 // Un seul pour ne pas lancer N ffmpeg en parallèle sur un gros fichier

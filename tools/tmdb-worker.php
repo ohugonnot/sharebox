@@ -111,9 +111,15 @@ if (!flock($cronFp, LOCK_EX | LOCK_NB)) {
     if ((time() - filemtime($cronLock)) > 900) {
         $stalePid = (int)@file_get_contents($cronLock);
         if ($stalePid > 1 && file_exists("/proc/$stalePid")) {
-            ai_log("SCAN stale lock detected (>15min), killing old PID $stalePid");
-            posix_kill($stalePid, SIGTERM);
-            usleep(200000);
+            // Verify PID is actually a tmdb-worker before killing (PID reuse protection)
+            $cmdline = @file_get_contents("/proc/$stalePid/cmdline");
+            if ($cmdline && str_contains($cmdline, 'tmdb-worker')) {
+                ai_log("SCAN stale lock detected (>15min), killing old PID $stalePid");
+                posix_kill($stalePid, SIGTERM);
+                usleep(200000);
+            } else {
+                ai_log("SCAN stale lock (>15min) but PID $stalePid is not tmdb-worker — breaking lock only");
+            }
         } else {
             ai_log('SCAN stale lock detected (>15min), breaking it');
         }
@@ -511,9 +517,9 @@ do {
             try {
                 // Propagate to entries with no poster OR very weak matches (verified <= 40)
                 // Don't overwrite entries that have a different tmdb_id (direct match, even weak)
-                $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 60, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND (poster_url IS NULL OR (verified <= 40 AND verified >= 0 AND (tmdb_id IS NULL OR tmdb_id = 0 OR tmdb_id = ?)))")
-                   ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath, $p['tmdb_id']]);
-                $propagated++;
+                $stmt = $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 60, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND (poster_url IS NULL OR (verified <= 40 AND verified >= 0 AND (tmdb_id IS NULL OR tmdb_id = 0 OR tmdb_id = ?)))");
+                $stmt->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath, $p['tmdb_id']]);
+                if ($stmt->rowCount() > 0) $propagated++;
             } catch (PDOException $e) {
                 ai_log('DB error (propagate): ' . $e->getMessage());
             }
@@ -538,8 +544,8 @@ foreach ($stillPending as $childPath) {
     if (isset($parentMap[$parentPath])) {
         $p = $parentMap[$parentPath];
         try {
-            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 60, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND (poster_url IS NULL OR (verified <= 40 AND verified >= 0))")
-               ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath]);
+            $db->prepare("UPDATE folder_posters SET poster_url = ?, tmdb_id = ?, title = ?, overview = ?, tmdb_year = ?, tmdb_type = ?, tmdb_rating = ?, verified = 60, ia_checked = 1, updated_at = datetime('now') WHERE path = ? AND (poster_url IS NULL OR (verified <= 40 AND verified >= 0 AND (tmdb_id IS NULL OR tmdb_id = 0 OR tmdb_id = ?)))")
+               ->execute([$p['poster_url'], $p['tmdb_id'], $p['title'], $p['overview'], $p['tmdb_year'], $p['tmdb_type'], $p['tmdb_rating'] ?? null, $childPath, $p['tmdb_id']]);
             $finalPropagated++;
         } catch (PDOException $e) {}
     }

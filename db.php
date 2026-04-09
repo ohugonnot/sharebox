@@ -29,8 +29,6 @@ function get_db(): PDO {
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
 
-    $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
     // WAL : lectures concurrentes sans bloquer les écritures
     $statements = [
         'PRAGMA journal_mode=WAL',
@@ -106,6 +104,7 @@ function get_db(): PDO {
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
     $targetVersion = 19; // bump when adding migrations
+    if ($version >= $targetVersion) return $db;
 
     if ($version < 1) {
         // v1 : supprimer password_plain si elle existe (ancienne colonne insecure)

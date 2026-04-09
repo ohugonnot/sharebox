@@ -72,12 +72,17 @@ function plog(tag, msg, data) {
         keyframeAbort: null,
         // timers
         fsHideTimer: null, videoWidthTimer: null,
-        seekDebounce: null, stallTimer: null, stallInterval: null
+        seekDebounce: null, stallTimer: null, stallInterval: null,
+        autoNextTimer: null, positionSaveInterval: null
     };
 
     // ── localStorage (try/catch : private browsing peut throw) ───────────────
     function lsGet(k, def) { try { var v = localStorage.getItem(k); return v !== null ? v : def; } catch(e) { return def; } }
     function lsSet(k, v)   { try { localStorage.setItem(k, v); } catch(e) {} }
+
+    // AbortController pour cleanup SPA — tous les listeners document/window passent par _ac
+    var _ac = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var _sig = _ac ? { signal: _ac.signal } : {};
 
     // ── Utilitaires ───────────────────────────────────────────────────────────
     function fmtTime(s) {
@@ -199,7 +204,7 @@ function plog(tag, msg, data) {
     window.addEventListener('resize', function() {
         if (isLandscapeMobile() && !player.paused) showFsControls();
         if (!isLandscapeMobile() && !isFs()) { clearTimeout(S.fsHideTimer); playerCtrl.classList.remove('fs-hidden'); if (fsTitle) fsTitle.classList.remove('fs-hidden'); playerCard.classList.remove('hide-cursor'); }
-    });
+    }, _sig);
 
     // ── Zoom ─────────────────────────────────────────────────────────────────
     function applyZoom() {
@@ -257,10 +262,14 @@ function plog(tag, msg, data) {
             player.load();
             player.playbackRate = S.speed;
             var seekTarget = resumeAt;
-            player.addEventListener('loadedmetadata', function onMeta() {
-                player.removeEventListener('loadedmetadata', onMeta);
+            if (player.readyState >= 1) {
                 player.currentTime = seekTarget;
-            });
+            } else {
+                player.addEventListener('loadedmetadata', function onMeta() {
+                    player.removeEventListener('loadedmetadata', onMeta);
+                    player.currentTime = seekTarget;
+                });
+            }
             player.play().catch(function(e) { if (e && e.name === 'NotAllowedError') hint.textContent = 'Appuyer sur \u25B6 pour lire'; });
             return;
         }
@@ -343,7 +352,7 @@ function plog(tag, msg, data) {
             hint.textContent = 'Erreur r\u00E9seau, retry #' + S.failRetries + '...'; hint.className = 'player-hint';
             setTimeout(function() {
                 // Ne pas retry si l'onglet est caché (évite les ffmpeg orphelins)
-                if (document.hidden) { plog('ERROR', 'tab hidden, deferring retry'); S.hasFailed = false; return; }
+                if (document.hidden) { plog('ERROR', 'tab hidden, deferring retry'); S.hasFailed = true; return; }
                 startStream(pos);
             }, 1500);
             return;
@@ -419,6 +428,7 @@ function plog(tag, msg, data) {
         unlockSize();
         Subs.resetIdx();
         clearStallWatchdog();
+        clearTimeout(S.videoWidthTimer);
         S.failRetries = 0;
         clearTimeout(stableTimer);
         stableTimer = setTimeout(function() { S.stallCount = 0; }, 30000);
@@ -557,10 +567,10 @@ function plog(tag, msg, data) {
             pos();
             player.addEventListener('loadedmetadata', pos);
             player.addEventListener('resize', pos);
-            document.addEventListener('fullscreenchange', function() { setTimeout(pos, 50); });
-            document.addEventListener('webkitfullscreenchange', function() { setTimeout(pos, 50); });
+            document.addEventListener('fullscreenchange', function() { setTimeout(pos, 50); }, _sig);
+            document.addEventListener('webkitfullscreenchange', function() { setTimeout(pos, 50); }, _sig);
             if (window.ResizeObserver) { this._ro = new ResizeObserver(pos); this._ro.observe(player); }
-            else { this._resizeHandler = pos; window.addEventListener('resize', pos); }
+            else { this._resizeHandler = pos; window.addEventListener('resize', pos, _sig); }
             // iOS fullscreen natif : afficher/masquer le <track> (seul moyen d'avoir les sous-titres)
             if (isIOS) {
                 player.addEventListener('webkitbeginfullscreen', function() {
@@ -601,7 +611,7 @@ function plog(tag, msg, data) {
     }
     function updateBuffered() {
         if (S.duration <= 0 || !player.buffered || !player.buffered.length) return;
-        seekBuffered.style.width = Math.min(100, (S.offset + player.buffered.end(player.buffered.length - 1)) / S.duration * 100) + '%';
+        try { seekBuffered.style.width = Math.min(100, (S.offset + player.buffered.end(player.buffered.length - 1)) / S.duration * 100) + '%'; } catch(e) {}
     }
     function getFraction(e) {
         var rect = seekBar.getBoundingClientRect();
@@ -664,10 +674,10 @@ function plog(tag, msg, data) {
     });
     seekBar.addEventListener('mousedown',  function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); });
     seekBar.addEventListener('touchstart', function(e) { if (!S.duration || e.touches.length !== 1) return; var rect = seekBar.getBoundingClientRect(); var ty = e.touches[0].clientY; if (ty < rect.top - 10 || ty > rect.bottom + 10) return; e.preventDefault(); S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); if (seekTooltip) { var f = getFraction(e); seekTooltip.textContent = fmtTime(f * S.duration); seekTooltip.style.left = (f * 100) + '%'; seekTooltip.style.display = 'block'; } }, {passive:false});
-    document.addEventListener('mousemove', function(e) { if (S.dragging) seekToFraction(getFraction(e)); });
+    document.addEventListener('mousemove', function(e) { if (S.dragging) seekToFraction(getFraction(e)); }, _sig);
     seekBar.addEventListener('touchmove', function(e) { if (S.dragging) { e.preventDefault(); seekToFraction(getFraction(e)); if (seekTooltip) { var f = getFraction(e); seekTooltip.textContent = fmtTime(f * S.duration); seekTooltip.style.left = (f * 100) + '%'; seekTooltip.style.display = 'block'; } } }, {passive:false});
-    document.addEventListener('mouseup',   function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } });
-    document.addEventListener('touchend',  function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); if (seekTooltip) seekTooltip.style.display = 'none'; } });
+    document.addEventListener('mouseup',   function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } }, _sig);
+    document.addEventListener('touchend',  function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); if (seekTooltip) seekTooltip.style.display = 'none'; } }, _sig);
     seekBar.addEventListener('mousemove', function(e) {
         if (!S.duration || !seekTooltip) return;
         var rect = seekBar.getBoundingClientRect(), frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -1013,7 +1023,7 @@ function plog(tag, msg, data) {
         // iOS Safari ignore playbackRate sur HLS — masquer le bouton vitesse
         if (isIOS && speedBtn) speedBtn.style.display = 'none';
         // Sauvegarde de position toutes les 15s (30s min, 30s avant fin)
-        setInterval(function() {
+        S.positionSaveInterval = setInterval(function() {
             if (player.paused || S.duration <= 0) return;
             var t = realTime();
             if (t > 30 && t < S.duration - 30) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
@@ -1051,19 +1061,20 @@ function plog(tag, msg, data) {
             acts.appendChild(playNow); acts.appendChild(cancel);
             overlay.appendChild(t1); overlay.appendChild(t2); overlay.appendChild(t3); overlay.appendChild(acts);
             player.parentNode.appendChild(overlay);
-            var cdt = setInterval(function() {
+            if (S.autoNextTimer) clearInterval(S.autoNextTimer);
+            S.autoNextTimer = setInterval(function() {
                 remaining--;
-                if (remaining <= 0) { clearInterval(cdt); navigateEpisode('next'); }
+                if (remaining <= 0) { clearInterval(S.autoNextTimer); S.autoNextTimer = null; navigateEpisode('next'); }
                 else t3.textContent = 'Lecture dans ' + remaining + 's\u2026';
             }, 1000);
-            playNow.addEventListener('click', function() { clearInterval(cdt); navigateEpisode('next'); });
-            cancel.addEventListener('click', function() { clearInterval(cdt); overlay.remove(); });
+            playNow.addEventListener('click', function() { clearInterval(S.autoNextTimer); S.autoNextTimer = null; navigateEpisode('next'); });
+            cancel.addEventListener('click', function() { clearInterval(S.autoNextTimer); S.autoNextTimer = null; overlay.remove(); });
         });
         window.addEventListener('pagehide', function() {
             var t = realTime();
             if (S.duration > 0 && t > 30 && t < S.duration - 60) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
             clearStallWatchdog(); clearTimeout(stableTimer);
-        });
+        }, _sig);
         // Retry deferred quand l'onglet redevient visible
         document.addEventListener('visibilitychange', function() {
             if (!document.hidden && S.hasFailed && !player.paused) {
@@ -1071,7 +1082,7 @@ function plog(tag, msg, data) {
                 S.hasFailed = false;
                 startStream(realTime());
             }
-        });
+        }, _sig);
 
         // Bouton Resync
         var resyncBtn = document.createElement('button');
@@ -1219,7 +1230,7 @@ function plog(tag, msg, data) {
             else if (e.key === 'Escape') {
                 if (!kbOverlay.classList.contains('hidden')) { e.preventDefault(); kbOverlay.classList.add('hidden'); }
             }
-        });
+        }, _sig);
     }
 
     // ── Restauration config sauvegardée ────────────────────────────────────
@@ -1390,4 +1401,20 @@ function plog(tag, msg, data) {
         });
         startStream(0);
     }
+
+    // ── Cleanup pour SPA / destroy ──────────────────────────────────────────
+    window.__destroyPlayer = function() {
+        if (_ac) _ac.abort();
+        clearInterval(S.positionSaveInterval);
+        clearInterval(S.autoNextTimer);
+        clearStallWatchdog();
+        clearTimeout(S.videoWidthTimer);
+        clearTimeout(stableTimer);
+        clearTimeout(S.fsHideTimer);
+        clearTimeout(S.seekDebounce);
+        if (Subs._ro) Subs._ro.disconnect();
+        player.pause();
+        player.removeAttribute('src');
+        player.load();
+    };
 })();
