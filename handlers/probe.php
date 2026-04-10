@@ -1,6 +1,12 @@
 <?php
 header('Content-Type: application/json; charset=utf-8');
 
+// Refresh forcé : invalider l'entrée cache avant de relancer ffprobe
+if (isset($_GET['refresh']) && $_GET['refresh'] === '1') {
+    $db->prepare("DELETE FROM probe_cache WHERE path = :p")->execute([':p' => $resolvedPath]);
+    stream_log('PROBE refresh | ' . basename($resolvedPath));
+}
+
 // Cache SQLite : évite de relancer ffprobe si le fichier n'a pas changé
 $mtime = filemtime($resolvedPath);
 $cached = $db->prepare("SELECT result FROM probe_cache WHERE path = :p AND mtime = :m");

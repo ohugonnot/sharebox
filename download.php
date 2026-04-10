@@ -254,7 +254,7 @@ if (is_file($resolvedPath)) {
         require __DIR__ . '/handlers/stream_hls.php';
     }
 
-    // Téléchargement direct via nginx
+    // Téléchargement direct
     stream_log('DOWNLOAD | ' . basename($resolvedPath) . ' | size=' . format_taille(filesize($resolvedPath)));
     if (!$subPath) {
         $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id")
@@ -268,14 +268,13 @@ if (is_file($resolvedPath)) {
         }
     }
 
-    $encodedPath = XACCEL_PREFIX . str_replace('%2F', '/', rawurlencode($resolvedPath));
     $fileName = basename($resolvedPath);
-
-    header('Content-Type: application/octet-stream');
     $safeFileName = preg_replace('/[\r\n\0]/', '', $fileName);
-    header('Content-Disposition: attachment; filename="' . addcslashes($safeFileName, '"\\') . '"');
-    header('X-Accel-Redirect: ' . $encodedPath);
-    exit;
+    serve_file(
+        $resolvedPath,
+        'application/octet-stream',
+        'attachment; filename="' . addcslashes($safeFileName, '"\\') . '"'
+    );
 }
 
 // Si c'est un dossier
