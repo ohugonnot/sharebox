@@ -1256,8 +1256,34 @@ function reloadAllPosters() {
     });
 })();
 
-// ── Mobile: first tap shows overview, second tap navigates ──
-if(window.matchMedia('(hover:none) and (pointer:coarse)').matches){document.addEventListener('click',function(e){var card=e.target.closest('.grid-card');if(!card||e.target.closest('.grid-card-ctx')){document.querySelectorAll('.grid-card.ov-open').forEach(function(c){c.classList.remove('ov-open')});return}var ov=card.querySelector('.grid-card-overview');if(!ov)return;if(!card.classList.contains('ov-open')){e.preventDefault();document.querySelectorAll('.grid-card.ov-open').forEach(function(c){c.classList.remove('ov-open')});card.classList.add('ov-open')}});var _scrollTimer=null;window.addEventListener('scroll',function(){if(_scrollTimer)return;_scrollTimer=requestAnimationFrame(function(){_scrollTimer=null;var open=document.querySelector('.grid-card.ov-open');if(open)open.classList.remove('ov-open')})},{passive:true});}
+// ── Mobile: long-press shows overview, tap navigates directly ──
+if(window.matchMedia('(hover:none) and (pointer:coarse)').matches){(function(){
+    var _lpTimer=null,_lpCard=null,_lpMoved=false;
+    function closeAll(){document.querySelectorAll('.grid-card.ov-open').forEach(function(c){c.classList.remove('ov-open')})}
+    document.addEventListener('touchstart',function(e){
+        var card=e.target.closest('.grid-card');
+        if(!card||!card.querySelector('.grid-card-overview')||e.target.closest('.grid-card-ctx')){_lpCard=null;return}
+        _lpCard=card;_lpMoved=false;
+        _lpTimer=setTimeout(function(){
+            if(_lpMoved)return;
+            _lpCard=null; // consumed — prevent click navigation
+            closeAll();card.classList.add('ov-open');
+        },400);
+    },{passive:true});
+    document.addEventListener('touchmove',function(){_lpMoved=true;if(_lpTimer){clearTimeout(_lpTimer);_lpTimer=null}},{passive:true});
+    document.addEventListener('touchend',function(){if(_lpTimer){clearTimeout(_lpTimer);_lpTimer=null}},{passive:true});
+    document.addEventListener('click',function(e){
+        var card=e.target.closest('.grid-card');
+        // Close any open overview when tapping elsewhere
+        if(!card||e.target.closest('.grid-card-ctx')){closeAll();return}
+        // If long-press consumed the card ref, block navigation (overview just opened)
+        if(!_lpCard&&card.classList.contains('ov-open')){e.preventDefault();return}
+        // Tap on card with overview open → close it and navigate
+        if(card.classList.contains('ov-open'))closeAll();
+    });
+    var _scrollTimer=null;
+    window.addEventListener('scroll',function(){if(_scrollTimer)return;_scrollTimer=requestAnimationFrame(function(){_scrollTimer=null;closeAll()})},{passive:true});
+})();}
 
 // ── Poster picker modal ──
 function openPosterPicker(folderName) {
