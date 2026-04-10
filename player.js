@@ -1090,7 +1090,13 @@ function plog(tag, msg, data) {
         resyncBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg> Resync';
         resyncBtn.addEventListener('click', function() {
             if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 3); return; }
-            hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(realTime());
+            hint.textContent = 'Resync...'; hint.className = 'player-hint';
+            fetch(base + '?' + pp + 'probe=1&refresh=1', {credentials: 'same-origin'})
+                .then(function() {
+                    lsSet(posKey, realTime().toFixed(1));
+                    location.reload();
+                })
+                .catch(function() { startStream(realTime()); });
         });
         var grpPlayback = document.createElement('div'); grpPlayback.className = 'track-group';
         grpPlayback.appendChild(resyncBtn);

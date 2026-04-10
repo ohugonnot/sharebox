@@ -800,3 +800,71 @@ function log_activity(string $event_type, ?string $username, ?string $ip, ?strin
         // Silencieux — les logs ne doivent pas casser l'app
     }
 }
+
+/**
+ * Serve a file — nginx (X-Accel-Redirect) or PHP direct with Range support.
+ * Auto-detects based on XACCEL_PREFIX: non-empty → nginx, empty → PHP.
+ */
+function serve_file(string $path, string $contentType, string $disposition): void
+{
+    header('Content-Type: ' . $contentType);
+    header('Content-Disposition: ' . $disposition);
+
+    // nginx: delegate to X-Accel-Redirect (zero-copy, supports resume natively)
+    if (defined('XACCEL_PREFIX') && XACCEL_PREFIX !== '') {
+        $encodedPath = XACCEL_PREFIX . str_replace('%2F', '/', rawurlencode($path));
+        header('X-Accel-Redirect: ' . $encodedPath);
+        exit;
+    }
+
+    // Apache / PHP direct: serve with Range support
+    $size = filesize($path);
+    set_time_limit(0);
+    while (ob_get_level()) {
+        ob_end_clean();
+    }
+
+    header('Accept-Ranges: bytes');
+    $rangeHeader = $_SERVER['HTTP_RANGE'] ?? '';
+
+    if ($rangeHeader && preg_match('/bytes=(\d*)-(\d*)/', $rangeHeader, $m)) {
+        if ($m[1] === '' && $m[2] !== '') {
+            // Suffix range: bytes=-N → last N bytes
+            $start = max(0, $size - (int)$m[2]);
+            $end   = $size - 1;
+        } else {
+            $start = $m[1] !== '' ? (int)$m[1] : 0;
+            $end   = $m[2] !== '' ? (int)$m[2] : $size - 1;
+        }
+        $end = min($end, $size - 1);
+
+        if ($start > $end || $start >= $size) {
+            header('HTTP/1.1 416 Range Not Satisfiable');
+            header('Content-Range: bytes */' . $size);
+            exit;
+        }
+
+        $length = $end - $start + 1;
+        header('HTTP/1.1 206 Partial Content');
+        header('Content-Range: bytes ' . $start . '-' . $end . '/' . $size);
+        header('Content-Length: ' . $length);
+
+        $fh = fopen($path, 'rb');
+        if ($fh === false) { http_response_code(500); exit; }
+        fseek($fh, $start);
+        $remaining = $length;
+        ignore_user_abort(false);
+        while ($remaining > 0 && !feof($fh) && !connection_aborted()) {
+            $chunk = fread($fh, min(65536, $remaining));
+            echo $chunk;
+            flush();
+            $remaining -= strlen($chunk);
+        }
+        fclose($fh);
+    } else {
+        header('Content-Length: ' . $size);
+        readfile($path);
+    }
+
+    exit;
+}
