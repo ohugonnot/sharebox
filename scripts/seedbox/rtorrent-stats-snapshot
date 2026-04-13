@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Snapshot détaillé rtorrent toutes les 5 minutes.
-Enregistre : upload global, peers, top torrents, FD count, détection crash.
+Snapshot détaillé seedbox toutes les 5 minutes.
+Enregistre : upload global, peers, top torrents, FD count.
+Supporte qBittorrent (API REST) avec fallback rtorrent (SCGI).
 Lancé par cron → /var/www/sharebox/data/logs/rtorrent-stats.log
 """
 import sys
@@ -9,75 +10,150 @@ import os
 import sqlite3
 import subprocess
 import json
-import xml.etree.ElementTree as ET
+import urllib.request
+import urllib.parse
 from datetime import datetime
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rtorrent_scgi import scgi_call, download_list, multicall
 
 LOG_FILE   = '/var/www/sharebox/data/logs/rtorrent-stats.log'
 CRASH_LOG  = '/var/www/sharebox/data/logs/rtorrent-crashes.log'
 STATE_FILE = '/var/www/sharebox/data/rtorrent-snapshot-state.json'
 STATS_DB   = '/var/www/sharebox/data/torrent-stats.db'
 NVME_MOUNT = '/mnt/nvme-seedbox'
+
+# qBittorrent config
+QB_URL  = 'http://127.0.0.1:8181'
+QB_USER = 'ropixv2'
+QB_PASS = 'Lip8NebW8Z8HrbX'
+
+# rtorrent config (fallback)
 RT_USER    = 'ropixv2'
 RT_SERVICE = 'rtorrent@ropixv2.service'
 
-FIELDS = ['d.name', 'd.up.rate', 'd.peers_connected', 'd.ratio',
-          'd.is_active', 'd.complete', 'd.directory',
-          'd.up.total', 'd.size_bytes', 'd.timestamp.finished']
-N = len(FIELDS)
+
+# ── qBittorrent API ─────────────────────────────────────────────────────────────
+
+_qb_cookie = None
+
+def qb_request(endpoint, data=None):
+    global _qb_cookie
+    url = f'{QB_URL}{endpoint}'
+    if data:
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data)
+    if _qb_cookie:
+        req.add_header('Cookie', _qb_cookie)
+    resp = urllib.request.urlopen(req, timeout=10)
+    sc = resp.headers.get('Set-Cookie')
+    if sc:
+        _qb_cookie = sc.split(';')[0]
+    return resp.read().decode()
 
 
-def get_torrent_stats():
-    """Récupère les stats de tous les torrents via system.multicall."""
+def qb_login():
+    qb_request('/api/v2/auth/login', {'username': QB_USER, 'password': QB_PASS})
+
+
+def qb_get_torrents():
+    """Récupère les stats de tous les torrents via qBittorrent API."""
+    raw = json.loads(qb_request('/api/v2/torrents/info'))
+    torrents = []
+    for t in raw:
+        directory = t.get('save_path', '') or t.get('content_path', '')
+        torrents.append({
+            'hash':        t['hash'],
+            'name':        (t.get('name') or '')[:50],
+            'up_kbps':     t.get('upspeed', 0) // 1024,
+            'up_rate':     t.get('upspeed', 0),
+            'peers':       t.get('num_leechs', 0),
+            'ratio':       round(t.get('ratio', 0), 3),
+            'seeding':     t.get('state', '') in ('uploading', 'stalledUP', 'forcedUP'),
+            'active':      t.get('state', '') not in ('pausedUP', 'pausedDL', 'stoppedUP', 'stoppedDL'),
+            'complete':    t.get('progress', 0) >= 1.0,
+            'location':    'nvme' if NVME_MOUNT in directory else 'raid',
+            'up_total':    t.get('uploaded', 0),
+            'size_bytes':  t.get('total_size', 0) or t.get('size', 0),
+            'finished_ts': t.get('completion_on', 0) if t.get('completion_on', 0) > 0 else 0,
+        })
+    return torrents
+
+
+def qb_get_global_rates():
+    """Upload + download global en MB/s via qBittorrent."""
+    raw = json.loads(qb_request('/api/v2/transfer/info'))
+    up = raw.get('up_info_speed', 0) // 1048576
+    dn = raw.get('dl_info_speed', 0) // 1048576
+    return up, dn
+
+
+# ── rtorrent fallback ────────────────────────────────────────────────────────────
+
+def rt_available():
+    """Vérifie si rtorrent est accessible."""
     try:
-        hashes = download_list()
-        if not hashes:
-            return []
-        calls = []
-        for h in hashes:
-            for field in FIELDS:
-                calls.append({'method': field, 'params': [h]})
-        flat = multicall(calls)
-        # multicall retourne une liste plate : [name0, up0, peers0, ..., name1, ...]
-        torrents = []
-        for i, h in enumerate(hashes):
-            base = i * N
-            if base + N - 1 >= len(flat):
-                break
-            name        = flat[base]
-            up_bytes    = int(flat[base + 1] or 0)
-            peers       = int(flat[base + 2] or 0)
-            ratio_raw   = int(flat[base + 3] or 0)
-            active      = flat[base + 4] == '1'
-            complete    = flat[base + 5] == '1'
-            directory   = flat[base + 6] or ''
-            up_total    = int(flat[base + 7] or 0)
-            size_bytes  = int(flat[base + 8] or 0)
-            finished_ts = int(flat[base + 9] or 0)
-            torrents.append({
-                'hash':        h,
-                'name':        name[:50],
-                'up_kbps':     up_bytes // 1024,
-                'up_rate':     up_bytes,
-                'peers':       peers,
-                'ratio':       ratio_raw / 1000.0,
-                'seeding':     active and complete,
-                'active':      active,
-                'complete':    complete,
-                'location':    'nvme' if NVME_MOUNT in directory else 'raid',
-                'up_total':    up_total,
-                'size_bytes':  size_bytes,
-                'finished_ts': finished_ts,
-            })
-        return torrents
+        sock = os.environ.get('RTORRENT_SOCK', '/var/run/rtorrent/ropixv2.sock')
+        return os.path.exists(sock)
     except Exception:
+        return False
+
+
+def rt_get_torrents():
+    """Récupère les stats via rtorrent SCGI (ancien code)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from rtorrent_scgi import scgi_call, download_list, multicall
+    import xml.etree.ElementTree as ET
+
+    FIELDS = ['d.name', 'd.up.rate', 'd.peers_connected', 'd.ratio',
+              'd.is_active', 'd.complete', 'd.directory',
+              'd.up.total', 'd.size_bytes', 'd.timestamp.finished']
+    N = len(FIELDS)
+
+    hashes = download_list()
+    if not hashes:
         return []
+    calls = []
+    for h in hashes:
+        for field in FIELDS:
+            calls.append({'method': field, 'params': [h]})
+    flat = multicall(calls)
+    torrents = []
+    for i, h in enumerate(hashes):
+        base = i * N
+        if base + N - 1 >= len(flat):
+            break
+        name        = flat[base]
+        up_bytes    = int(flat[base + 1] or 0)
+        peers       = int(flat[base + 2] or 0)
+        ratio_raw   = int(flat[base + 3] or 0)
+        active      = flat[base + 4] == '1'
+        complete    = flat[base + 5] == '1'
+        directory   = flat[base + 6] or ''
+        up_total    = int(flat[base + 7] or 0)
+        size_bytes  = int(flat[base + 8] or 0)
+        finished_ts = int(flat[base + 9] or 0)
+        torrents.append({
+            'hash':        h,
+            'name':        name[:50],
+            'up_kbps':     up_bytes // 1024,
+            'up_rate':     up_bytes,
+            'peers':       peers,
+            'ratio':       ratio_raw / 1000.0,
+            'seeding':     active and complete,
+            'active':      active,
+            'complete':    complete,
+            'location':    'nvme' if NVME_MOUNT in directory else 'raid',
+            'up_total':    up_total,
+            'size_bytes':  size_bytes,
+            'finished_ts': finished_ts,
+        })
+    return torrents
 
 
-def get_global_rates():
-    """Upload + download global en MB/s."""
+def rt_get_global_rates():
+    """Upload + download global via rtorrent SCGI."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from rtorrent_scgi import scgi_call
+    import xml.etree.ElementTree as ET
+
     xml = (
         '<?xml version="1.0"?><methodCall><methodName>system.multicall</methodName>'
         '<params><param><value><array><data>'
@@ -91,22 +167,42 @@ def get_global_rates():
         '</struct></value>'
         '</data></array></value></param></params></methodCall>'
     )
-    try:
-        resp = scgi_call(xml)
-        root = ET.fromstring(resp)
-        vals = [n.text for n in root.iter() if n.tag in ('i8', 'i4', 'int') and n.text]
-        up = int(vals[0]) // 1048576 if len(vals) > 0 else 0
-        dn = int(vals[1]) // 1048576 if len(vals) > 1 else 0
-        return up, dn
-    except Exception:
-        return 0, 0
+    resp = scgi_call(xml)
+    root = ET.fromstring(resp)
+    vals = [n.text for n in root.iter() if n.tag in ('i8', 'i4', 'int') and n.text]
+    up = int(vals[0]) // 1048576 if len(vals) > 0 else 0
+    dn = int(vals[1]) // 1048576 if len(vals) > 1 else 0
+    return up, dn
 
 
-def get_rtorrent_fds():
-    """Retourne (pid, fd_count) du process rtorrent de l'utilisateur."""
+# ── Détection backend ────────────────────────────────────────────────────────────
+
+def detect_backend():
+    """Détecte si qBittorrent ou rtorrent est actif. Retourne 'qbt' ou 'rt'."""
     try:
-        r = subprocess.run(['pgrep', '-u', RT_USER, 'rtorrent'],
+        r = subprocess.run(['pgrep', '-x', 'qbittorrent-nox'],
                            capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            return 'qbt'
+    except Exception:
+        pass
+    if rt_available():
+        return 'rt'
+    # Default: try qbt anyway
+    return 'qbt'
+
+
+# ── Fonctions communes ──────────────────────────────────────────────────────────
+
+def get_process_fds(backend):
+    """Retourne (pid, fd_count) du process torrent."""
+    try:
+        if backend == 'qbt':
+            r = subprocess.run(['pgrep', '-x', 'qbittorrent-nox'],
+                               capture_output=True, text=True, timeout=3)
+        else:
+            r = subprocess.run(['pgrep', '-u', RT_USER, 'rtorrent'],
+                               capture_output=True, text=True, timeout=3)
         pid = r.stdout.strip().split('\n')[0]
         if pid and pid.isdigit():
             fds = len(os.listdir(f'/proc/{pid}/fd'))
@@ -114,18 +210,6 @@ def get_rtorrent_fds():
     except Exception:
         pass
     return None, 0
-
-
-def get_restart_count():
-    """Nombre de restarts systemd (NRestarts) depuis le démarrage du service."""
-    try:
-        r = subprocess.run(
-            ['systemctl', 'show', RT_SERVICE, '--property=NRestarts', '--value'],
-            capture_output=True, text=True, timeout=3
-        )
-        return int(r.stdout.strip() or '0')
-    except Exception:
-        return -1
 
 
 def load_state():
@@ -229,24 +313,27 @@ def update_stats_db(torrents, now):
 def main():
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     state = load_state()
-    restarts = get_restart_count()
-    prev_restarts = state.get('restarts', restarts)  # première run : pas de faux crash
 
-    up_mbps, dn_mbps = get_global_rates()
-    torrents = get_torrent_stats()
-    pid, fds = get_rtorrent_fds()
+    # ── Détection du backend ────────────────────────────────────────────────────
+    backend = detect_backend()
 
-    # ── Détection crash via compteur systemd ─────────────────────────────────────
-    if restarts > prev_restarts and prev_restarts >= 0:
-        n = restarts - prev_restarts
-        ctx = (f"up={state.get('last_up','?')}MB/s "
-               f"peers={state.get('last_peers','?')} "
-               f"fds={state.get('last_fds','?')}")
-        append_log(CRASH_LOG,
-            f"{now_str} [CRASH] rtorrent redémarré {n}x "
-            f"(total restarts={restarts}) | dernier contexte: {ctx}")
+    # ── Collecte données ────────────────────────────────────────────────────────
+    try:
+        if backend == 'qbt':
+            qb_login()
+            torrents = qb_get_torrents()
+            up_mbps, dn_mbps = qb_get_global_rates()
+        else:
+            torrents = rt_get_torrents()
+            up_mbps, dn_mbps = rt_get_global_rates()
+    except Exception as e:
+        append_log(LOG_FILE, f"{now_str} | ERROR [{backend}] {e}")
+        torrents = []
+        up_mbps, dn_mbps = 0, 0
 
-    # ── Agrégats globaux ─────────────────────────────────────────────────────────
+    pid, fds = get_process_fds(backend)
+
+    # ── Agrégats globaux ────────────────────────────────────────────────────────
     total    = len(torrents)
     seeding  = sum(1 for t in torrents if t['seeding'])
     leeching = sum(1 for t in torrents if t['active'] and not t['complete'])
@@ -254,16 +341,15 @@ def main():
     total_peers = sum(t['peers'] for t in torrents)
 
     snap = (
-        f"{now_str} | SNAP "
+        f"{now_str} | SNAP [{backend}] "
         f"up={up_mbps}MB/s dn={dn_mbps}MB/s | "
         f"torrents={total}({seeding}s {leeching}d {stopped}p) | "
         f"peers={total_peers} | "
-        f"fds={fds} | "
-        f"restarts={restarts}"
+        f"fds={fds}"
     )
     append_log(LOG_FILE, snap)
 
-    # ── Top 5 par vitesse d'upload ───────────────────────────────────────────────
+    # ── Top 5 par vitesse d'upload ──────────────────────────────────────────────
     top = sorted(torrents, key=lambda t: t['up_kbps'], reverse=True)[:5]
     for t in top:
         if t['up_kbps'] > 0:
@@ -271,15 +357,15 @@ def main():
                 f"{now_str} | TOP  [{t['location'].upper()}] {t['name']:<40} "
                 f"up={t['up_kbps']}KB/s peers={t['peers']} ratio={t['ratio']:.2f}")
 
-    # ── Stats long-terme (torrent-stats.db) ──────────────────────────────────────
+    # ── Stats long-terme (torrent-stats.db) ─────────────────────────────────────
     try:
         update_stats_db(torrents, int(datetime.now().timestamp()))
-    except Exception as e:
-        pass  # ne jamais faire planter le snapshot à cause des stats
+    except Exception:
+        pass
 
-    # ── Mise à jour état ─────────────────────────────────────────────────────────
+    # ── Mise à jour état ────────────────────────────────────────────────────────
     save_state({
-        'restarts':   restarts,
+        'backend':    backend,
         'last_up':    up_mbps,
         'last_peers': total_peers,
         'last_fds':   fds,

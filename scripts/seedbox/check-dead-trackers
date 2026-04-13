@@ -2,54 +2,54 @@
 """
 Surveille les trackers HTTP des torrents.
 Retire un tracker seulement s'il echoue >= FAIL_THRESHOLD fois sur WINDOW_DAYS jours.
-Stocke l'historique dans STATE_FILE.
+Supporte qBittorrent (API REST) avec fallback rtorrent (session files).
 """
-import sys, os, json, time, socket, glob
+import sys
+import os
+import json
+import time
+import socket
+import subprocess
+import urllib.request
+import urllib.parse
 from datetime import datetime
 
-_data_dir   = os.environ.get('SEEDBOX_STATE_DIR', '/var/www/sharebox/data')
-STATE_FILE  = os.path.join(_data_dir, 'trackers-state.json')
-SESSION_DIR = os.environ.get('RTORRENT_SESSION', '/home/storage/users/ropixv2/.rtorrent.session')
-FAIL_THRESHOLD = 3     # echecs necessaires pour supprimer
-WINDOW_DAYS    = 7     # fenetre glissante en jours
-CHECK_TIMEOUT  = 5     # secondes par test TCP
+_data_dir      = os.environ.get('SEEDBOX_STATE_DIR', '/var/www/sharebox/data')
+STATE_FILE     = os.path.join(_data_dir, 'trackers-state.json')
+FAIL_THRESHOLD = 3
+WINDOW_DAYS    = 7
+CHECK_TIMEOUT  = 5
+
+# qBittorrent config
+QB_URL  = 'http://127.0.0.1:8181'
+QB_USER = 'ropixv2'
+QB_PASS = 'Lip8NebW8Z8HrbX'
+
+_qb_cookie = None
+
 
 def log(msg):
     print(f'[{datetime.now().strftime("%Y-%m-%d %H:%M")}] {msg}', flush=True)
 
-# -- bdecode/bencode -------------------------------------------------------
-def bdecode(data, pos=0):
-    if data[pos:pos+1] == b'i':
-        end = data.index(b'e', pos); return int(data[pos+1:end]), end+1
-    elif data[pos:pos+1] == b'l':
-        pos += 1; lst = []
-        while data[pos:pos+1] != b'e':
-            v, pos = bdecode(data, pos); lst.append(v)
-        return lst, pos+1
-    elif data[pos:pos+1] == b'd':
-        pos += 1; d = {}
-        while data[pos:pos+1] != b'e':
-            k, pos = bdecode(data, pos); v, pos = bdecode(data, pos); d[k] = v
-        return d, pos+1
-    else:
-        colon = data.index(b':', pos); n = int(data[pos:colon])
-        return data[colon+1:colon+1+n], colon+1+n
 
-def bencode(v):
-    if isinstance(v, int): return b'i' + str(v).encode() + b'e'
-    if isinstance(v, bytes): return str(len(v)).encode() + b':' + v
-    if isinstance(v, str): e = v.encode(); return str(len(e)).encode() + b':' + e
-    if isinstance(v, list): return b'l' + b''.join(bencode(i) for i in v) + b'e'
-    if isinstance(v, dict):
-        keys = sorted(v.keys(), key=lambda k: k if isinstance(k, bytes) else k.encode())
-        return b'd' + b''.join(bencode(k) + bencode(v[k]) for k in keys) + b'e'
-
-# -- Test connectivite TCP -------------------------------------------------
-def test_tracker(url):
-    """Retourne True si le tracker repond, False sinon."""
+def detect_backend():
     try:
-        url_str = url.decode() if isinstance(url, bytes) else url
-        if not url_str.startswith('http'): return True  # UDP = pas de test TCP
+        r = subprocess.run(['pgrep', '-x', 'qbittorrent-nox'],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            return 'qbt'
+    except Exception:
+        pass
+    return 'rt'
+
+
+# ── Test connectivite TCP ────────────────────────────────────────────────────
+
+def test_tracker(url):
+    try:
+        url_str = url if isinstance(url, str) else url.decode()
+        if not url_str.startswith('http'):
+            return True  # UDP = pas de test TCP
         parts = url_str.split('/')
         host_port = parts[2] if len(parts) > 2 else ''
         if ':' in host_port:
@@ -63,89 +63,234 @@ def test_tracker(url):
         s.connect((host, port))
         s.close()
         return True
-    except:
+    except Exception:
         return False
 
-# -- Extraction des trackers HTTP des torrents ----------------------------
-def get_http_trackers():
-    """Retourne {url: [torrent_file, ...]}"""
+
+# ── qBittorrent ──────────────────────────────────────────────────────────────
+
+def qb_request(endpoint, data=None):
+    global _qb_cookie
+    url = f'{QB_URL}{endpoint}'
+    if data:
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data)
+    if _qb_cookie:
+        req.add_header('Cookie', _qb_cookie)
+    resp = urllib.request.urlopen(req, timeout=10)
+    sc = resp.headers.get('Set-Cookie')
+    if sc:
+        _qb_cookie = sc.split(';')[0]
+    return resp.read().decode()
+
+
+def qb_login():
+    qb_request('/api/v2/auth/login', {'username': QB_USER, 'password': QB_PASS})
+
+
+def qb_get_http_trackers():
+    """Retourne {url: [torrent_hash, ...]} pour tous les trackers HTTP."""
+    torrents = json.loads(qb_request('/api/v2/torrents/info'))
     tracker_map = {}
-    for f in glob.glob(os.path.join(SESSION_DIR, '*.torrent')):
+    for t in torrents:
+        h = t['hash']
+        trackers = json.loads(qb_request(f'/api/v2/torrents/trackers?hash={h}'))
+        for tr in trackers:
+            url = tr.get('url', '')
+            if url.startswith('http'):
+                tracker_map.setdefault(url, []).append(h)
+    return tracker_map
+
+
+def qb_remove_tracker(torrent_hash, tracker_url):
+    """Supprime un tracker d'un torrent via l'API qBittorrent."""
+    qb_request('/api/v2/torrents/removeTrackers', {
+        'hash': torrent_hash,
+        'urls': tracker_url,
+    })
+
+
+def qb_run():
+    qb_login()
+
+    now = int(time.time())
+    cutoff = now - WINDOW_DAYS * 86400
+
+    state = {}
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            state = json.load(f)
+
+    tracker_map = qb_get_http_trackers()
+    log(f"{len(tracker_map)} trackers HTTP uniques trouves")
+
+    removed_total = 0
+
+    for url, torrent_hashes in sorted(tracker_map.items()):
+        alive = test_tracker(url)
+        host = url.split('/')[2] if '/' in url else url
+
+        if alive:
+            if url in state:
+                del state[url]
+            log(f"OK {host}")
+            continue
+
+        # Tracker mort : enregistrer l'echec
+        if url not in state:
+            state[url] = []
+        state[url].append(now)
+        state[url] = [t for t in state[url] if t > cutoff]
+
+        fails = len(state[url])
+        first_fail = datetime.fromtimestamp(state[url][0]).strftime('%Y-%m-%d')
+        log(f"DEAD ({fails}/{FAIL_THRESHOLD}) {host} since={first_fail}")
+
+        if fails >= FAIL_THRESHOLD:
+            log(f"  -> suppression de {len(torrent_hashes)} torrent(s)")
+            for h in torrent_hashes:
+                try:
+                    qb_remove_tracker(h, url)
+                    log(f"     {h[:8]}")
+                    removed_total += 1
+                except Exception as e:
+                    log(f"     {h[:8]} ERREUR: {e}")
+            del state[url]
+
+    # Nettoyer les entrees obsoletes
+    for url in list(state.keys()):
+        if url not in tracker_map:
+            del state[url]
+
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=2)
+
+    log(f"DONE - {removed_total} tracker(s) supprimes definitivement")
+
+
+# ── rtorrent fallback ────────────────────────────────────────────────────────
+
+def rt_run():
+    import glob as glob_mod
+
+    SESSION_DIR = os.environ.get('RTORRENT_SESSION',
+                                 '/home/storage/users/ropixv2/.rtorrent.session')
+
+    def bdecode(data, pos=0):
+        if data[pos:pos+1] == b'i':
+            end = data.index(b'e', pos); return int(data[pos+1:end]), end+1
+        elif data[pos:pos+1] == b'l':
+            pos += 1; lst = []
+            while data[pos:pos+1] != b'e':
+                v, pos = bdecode(data, pos); lst.append(v)
+            return lst, pos+1
+        elif data[pos:pos+1] == b'd':
+            pos += 1; d = {}
+            while data[pos:pos+1] != b'e':
+                k, pos = bdecode(data, pos); v, pos = bdecode(data, pos); d[k] = v
+            return d, pos+1
+        else:
+            colon = data.index(b':', pos); n = int(data[pos:colon])
+            return data[colon+1:colon+1+n], colon+1+n
+
+    def bencode(v):
+        if isinstance(v, int): return b'i' + str(v).encode() + b'e'
+        if isinstance(v, bytes): return str(len(v)).encode() + b':' + v
+        if isinstance(v, str): e = v.encode(); return str(len(e)).encode() + b':' + e
+        if isinstance(v, list): return b'l' + b''.join(bencode(i) for i in v) + b'e'
+        if isinstance(v, dict):
+            keys = sorted(v.keys(), key=lambda k: k if isinstance(k, bytes) else k.encode())
+            return b'd' + b''.join(bencode(k) + bencode(v[k]) for k in keys) + b'e'
+
+    def remove_tracker_from_file(torrent_file, dead_url):
+        with open(torrent_file, 'rb') as fp:
+            data, _ = bdecode(fp.read())
+        changed = False
+        dead_b = dead_url.encode() if isinstance(dead_url, str) else dead_url
+        if b'announce-list' in data:
+            new_list = []
+            for tier in data[b'announce-list']:
+                new_tier = [t for t in tier if t != dead_b]
+                if new_tier: new_list.append(new_tier)
+            if len(new_list) != len(data[b'announce-list']):
+                data[b'announce-list'] = new_list; changed = True
+        if data.get(b'announce') == dead_b:
+            del data[b'announce']; changed = True
+        if changed:
+            with open(torrent_file, 'wb') as fp:
+                fp.write(bencode(data))
+        return changed
+
+    now = int(time.time())
+    cutoff = now - WINDOW_DAYS * 86400
+
+    state = {}
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE) as f:
+            state = json.load(f)
+
+    tracker_map = {}
+    for f in glob_mod.glob(os.path.join(SESSION_DIR, '*.torrent')):
         try:
-            with open(f, 'rb') as fp: data, _ = bdecode(fp.read())
+            with open(f, 'rb') as fp:
+                data, _ = bdecode(fp.read())
             urls = set()
             if b'announce-list' in data:
                 for tier in data[b'announce-list']:
-                    for t in tier: urls.add(t)
-            if b'announce' in data: urls.add(data[b'announce'])
+                    for t in tier:
+                        urls.add(t)
+            if b'announce' in data:
+                urls.add(data[b'announce'])
             for url in urls:
                 url_str = url.decode('utf-8', errors='ignore') if isinstance(url, bytes) else url
                 if url_str.startswith('http'):
                     tracker_map.setdefault(url_str, []).append(f)
-        except: pass
-    return tracker_map
+        except Exception:
+            pass
 
-# -- Suppression d'un tracker d'un fichier torrent ------------------------
-def remove_tracker_from_file(torrent_file, dead_url):
-    with open(torrent_file, 'rb') as fp: data, _ = bdecode(fp.read())
-    changed = False
-    dead_b = dead_url.encode() if isinstance(dead_url, str) else dead_url
-    if b'announce-list' in data:
-        new_list = []
-        for tier in data[b'announce-list']:
-            new_tier = [t for t in tier if t != dead_b]
-            if new_tier: new_list.append(new_tier)
-        if len(new_list) != len(data[b'announce-list']):
-            data[b'announce-list'] = new_list; changed = True
-    if data.get(b'announce') == dead_b:
-        del data[b'announce']; changed = True
-    if changed:
-        with open(torrent_file, 'wb') as fp: fp.write(bencode(data))
-    return changed
+    log(f"{len(tracker_map)} trackers HTTP uniques trouves")
+    removed_total = 0
 
-# -- Main -----------------------------------------------------------------
-now = int(time.time())
-cutoff = now - WINDOW_DAYS * 86400
+    for url, torrent_files in sorted(tracker_map.items()):
+        alive = test_tracker(url)
+        host = url.split('/')[2] if '/' in url else url
 
-state = {}
-if os.path.exists(STATE_FILE):
-    with open(STATE_FILE) as f: state = json.load(f)
+        if alive:
+            if url in state: del state[url]
+            log(f"OK {host}")
+            continue
 
-tracker_map = get_http_trackers()
-log(f"{len(tracker_map)} trackers HTTP uniques trouves")
+        if url not in state: state[url] = []
+        state[url].append(now)
+        state[url] = [t for t in state[url] if t > cutoff]
 
-removed_total = 0
+        fails = len(state[url])
+        first_fail = datetime.fromtimestamp(state[url][0]).strftime('%Y-%m-%d')
+        log(f"DEAD ({fails}/{FAIL_THRESHOLD}) {host} since={first_fail}")
 
-for url, torrent_files in sorted(tracker_map.items()):
-    alive = test_tracker(url)
-    host = url.split('/')[2] if '/' in url else url
+        if fails >= FAIL_THRESHOLD:
+            log(f"  -> suppression de {len(torrent_files)} torrent(s)")
+            for tf in torrent_files:
+                if remove_tracker_from_file(tf, url):
+                    log(f"     {os.path.basename(tf)[:40]}")
+                    removed_total += 1
+            del state[url]
 
-    if alive:
-        if url in state: del state[url]
-        log(f"OK {host}")
-        continue
+    for url in list(state.keys()):
+        if url not in tracker_map: del state[url]
 
-    # Tracker mort : enregistrer l'echec
-    if url not in state: state[url] = []
-    state[url].append(now)
-    state[url] = [t for t in state[url] if t > cutoff]
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f, indent=2)
 
-    fails = len(state[url])
-    first_fail = datetime.fromtimestamp(state[url][0]).strftime('%Y-%m-%d')
-    log(f"DEAD ({fails}/{FAIL_THRESHOLD}) {host} since={first_fail}")
+    log(f"DONE - {removed_total} tracker(s) supprimes definitivement")
 
-    if fails >= FAIL_THRESHOLD:
-        log(f"  -> suppression de {len(torrent_files)} torrent(s)")
-        for tf in torrent_files:
-            if remove_tracker_from_file(tf, url):
-                log(f"     {os.path.basename(tf)[:40]}")
-                removed_total += 1
-        del state[url]
 
-# Nettoyer les entrees obsoletes
-for url in list(state.keys()):
-    if url not in tracker_map: del state[url]
+# ── Main ─────────────────────────────────────────────────────────────────────
 
-with open(STATE_FILE, 'w') as f: json.dump(state, f, indent=2)
-
-log(f"DONE - {removed_total} tracker(s) supprimes definitivement")
+if __name__ == '__main__':
+    backend = detect_backend()
+    log(f'Backend: {backend}')
+    if backend == 'qbt':
+        qb_run()
+    else:
+        rt_run()

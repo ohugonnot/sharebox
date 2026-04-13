@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""
+nvme-gatekeeper — Maintient les symlinks NVMe <-> RAID, tourne chaque minute.
+
+1. Cree les symlinks RAID/name -> NVMe/name pour les torrents sur NVMe
+   (ShareBox browse le dossier RAID, sans symlink les torrents NVMe sont invisibles)
+2. Nettoie les symlinks casses SEULEMENT si le torrent n'est plus en cours de move
+   et que le vrai fichier existe sur RAID
+"""
+
+import os
+import json
+import urllib.request
+import urllib.parse
+from datetime import datetime
+from pathlib import Path
+
+
+def load_conf():
+    path = Path(__file__).parent / 'seedbox.conf'
+    conf = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                k, v = line.split('=', 1)
+                conf[k.strip()] = v.strip()
+    return conf
+
+
+_qb_cookie = None
+QB_URL = QB_USER = QB_PASS = None
+
+
+def qb_request(endpoint, data=None):
+    global _qb_cookie
+    url = f'{QB_URL}{endpoint}'
+    if data:
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data)
+    if _qb_cookie:
+        req.add_header('Cookie', _qb_cookie)
+    resp = urllib.request.urlopen(req, timeout=10)
+    sc = resp.headers.get('Set-Cookie')
+    if sc:
+        _qb_cookie = sc.split(';')[0]
+    return resp.read().decode()
+
+
+def qb_login():
+    qb_request('/api/v2/auth/login', {'username': QB_USER, 'password': QB_PASS})
+
+
+def log(msg):
+    print(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}', flush=True)
+
+
+def main():
+    global QB_URL, QB_USER, QB_PASS
+
+    conf = load_conf()
+    nvme_path = conf['NVME_DOWNLOADS']
+    raid_path = conf['RAID_DOWNLOADS']
+    QB_URL    = conf.get('QBITTORRENT_URL', 'http://127.0.0.1:8181')
+    QB_USER   = conf.get('QBITTORRENT_USER', 'ropixv2')
+    QB_PASS   = conf.get('QBITTORRENT_PASS', 'Lip8NebW8Z8HrbX')
+
+    qb_login()
+    torrents = json.loads(qb_request('/api/v2/torrents/info'))
+
+    # Index des torrents par nom pour lookup rapide
+    torrent_by_name = {}
+    for t in torrents:
+        name = t.get('name', '')
+        if name:
+            torrent_by_name[name] = t
+
+    symlinks_created = 0
+
+    # ── 1. Creer les symlinks pour les torrents sur NVMe ─────────────────────
+    for t in torrents:
+        save_path = t.get('save_path', '')
+        name = t.get('name', '')
+        state = t.get('state', '')
+
+        if not save_path.startswith(nvme_path) or not name:
+            continue
+        if state.startswith('moving'):
+            continue
+
+        symlink = Path(raid_path) / name
+        nvme_target = Path(nvme_path) / name
+
+        # La source doit exister sur NVMe
+        if not nvme_target.exists():
+            continue
+
+        # Ne pas ecraser un vrai fichier/dossier sur RAID
+        if symlink.exists() and not symlink.is_symlink():
+            continue
+
+        # Creer le symlink s'il n'existe pas
+        if not symlink.exists() and not symlink.is_symlink():
+            symlink.symlink_to(nvme_target)
+            log(f'SYMLINK {name[:55]} -> NVMe')
+            symlinks_created += 1
+
+        # Reparer un symlink qui pointe ailleurs
+        elif symlink.is_symlink() and os.readlink(str(symlink)) != str(nvme_target):
+            symlink.unlink()
+            symlink.symlink_to(nvme_target)
+            log(f'SYMLINK fix {name[:55]} -> NVMe')
+            symlinks_created += 1
+
+    # ── 2. Nettoyer les symlinks casses vers NVMe ────────────────────────────
+    # Un symlink est "safe a supprimer" SEULEMENT si :
+    #   - la cible NVMe n'existe plus
+    #   - le torrent n'est PAS en etat moving
+    #   - le torrent a son save_path sur RAID (move termine)
+    #   - OU le torrent n'existe plus dans qBittorrent (supprime)
+    cleaned = 0
+    try:
+        for entry in os.listdir(raid_path):
+            full = Path(raid_path) / entry
+            if not full.is_symlink():
+                continue
+            target = os.readlink(str(full))
+            if nvme_path not in target:
+                continue
+            # Symlink OK (cible existe)
+            if full.exists():
+                continue
+
+            # Symlink casse : la cible NVMe n'existe plus
+            t = torrent_by_name.get(entry)
+
+            if t and t.get('state', '').startswith('moving'):
+                # Move en cours, ne pas toucher
+                continue
+
+            if t and t.get('save_path', '').startswith(nvme_path):
+                # qBittorrent dit encore NVMe mais le fichier n'y est plus
+                # -> move en cours ou probleme, ne pas toucher
+                continue
+
+            # Safe : le torrent est sur RAID ou n'existe plus
+            # Verifier que le vrai fichier existe bien sur RAID avant de virer le symlink
+            if t:
+                raid_file = Path(raid_path) / entry
+                # On ne peut pas verifier l'existence car le symlink masque le vrai fichier
+                # Mais si save_path = RAID, qBittorrent a termine le move
+                if not t.get('save_path', '').startswith(raid_path):
+                    continue  # ni RAID ni NVMe, bizarre, ne pas toucher
+
+            full.unlink()
+            log(f'CLEANUP symlink casse: {entry[:55]}')
+            cleaned += 1
+
+    except Exception:
+        pass
+
+    if symlinks_created or cleaned:
+        log(f'DONE - {symlinks_created} symlinks crees, {cleaned} nettoyes')
+
+
+if __name__ == '__main__':
+    main()

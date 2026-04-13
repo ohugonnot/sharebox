@@ -7,13 +7,7 @@ Criteres de migration :
   2. (Pression) espace libre NVMe < NVME_MIN_FREE_GB → eviction par pire ratio
      efficacite (avg_upload / size_gb) parmi les completes
 
-Migration atomique :
-  pause → rsync vers NAME.nvme-tmp → d.directory.set RAID0 → d.save_full_session
-  → supprime symlink → rename .nvme-tmp → NAME → resume → rm source NVMe
-
-Le symlink RAID_DOWNLOADS/NAME → NVME est cree par rtorrent-check-space a l'ajout.
-Apres migration il est remplace par le vrai dossier. Les paths folder_posters (TMDB)
-sont mis a jour via sudo www-data php pour rester coherents (realpath change apres move).
+Supporte qBittorrent (API REST) avec fallback rtorrent (SCGI).
 """
 
 import sys
@@ -22,11 +16,12 @@ import json
 import time
 import shutil
 import subprocess
+import urllib.request
+import urllib.parse
 from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rtorrent_scgi import download_list, multicall, scgi_simple
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -41,7 +36,7 @@ def load_conf():
                 conf[k.strip()] = v.strip()
     return conf
 
-# Globals initialisés par main() - déclarés ici pour que les fonctions y accèdent
+# Globals initialisés par main()
 NVME_DOWNLOADS     = None
 RAID_DOWNLOADS     = None
 NVME_MIN_FREE_GB   = 0
@@ -50,10 +45,148 @@ COLD_THRESHOLD_BPS = 0
 MIN_HISTORY_H      = 0
 STATE_FILE         = ''
 
+# qBittorrent config (from seedbox.conf in main)
+QB_URL  = None
+QB_USER = None
+QB_PASS = None
+
+_qb_cookie = None
+
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 def log(msg):
     print(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}', flush=True)
+
+
+# ── Backend detection ────────────────────────────────────────────────────────
+
+def detect_backend():
+    try:
+        r = subprocess.run(['pgrep', '-x', 'qbittorrent-nox'],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            return 'qbt'
+    except Exception:
+        pass
+    sock = os.environ.get('RTORRENT_SOCK', '/var/run/rtorrent/ropixv2.sock')
+    if os.path.exists(sock):
+        return 'rt'
+    return 'qbt'
+
+
+# ── qBittorrent API ─────────────────────────────────────────────────────────
+
+def qb_request(endpoint, data=None):
+    global _qb_cookie
+    url = f'{QB_URL}{endpoint}'
+    if data:
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data)
+    if _qb_cookie:
+        req.add_header('Cookie', _qb_cookie)
+    resp = urllib.request.urlopen(req, timeout=10)
+    sc = resp.headers.get('Set-Cookie')
+    if sc:
+        _qb_cookie = sc.split(';')[0]
+    return resp.read().decode()
+
+
+def qb_login():
+    qb_request('/api/v2/auth/login', {'username': QB_USER, 'password': QB_PASS})
+
+
+def qb_get_torrents():
+    """Retourne la liste des torrents avec les champs necessaires."""
+    raw = json.loads(qb_request('/api/v2/torrents/info'))
+    torrents = []
+    for t in raw:
+        save_path = t.get('save_path', '') or t.get('content_path', '')
+        name = t.get('name', '')
+        # Determine if multi-file by checking content_path vs save_path
+        content_path = t.get('content_path', '')
+        is_multi = 1 if content_path and content_path != os.path.join(save_path, name) else 0
+        # Actually check via files count
+        torrents.append({
+            'hash':        t['hash'],
+            'name':        name,
+            'complete':    1 if t.get('progress', 0) >= 1.0 else 0,
+            'directory':   save_path,
+            'up_total':    t.get('uploaded', 0),
+            'is_open':     1 if t.get('state', '') not in ('pausedUP', 'pausedDL', 'stoppedUP', 'stoppedDL') else 0,
+            'is_multi':    is_multi,
+            'size_bytes':  t.get('total_size', 0) or t.get('size', 0),
+            'ts_finished': t.get('completion_on', 0) if t.get('completion_on', 0) > 0 else 0,
+        })
+    return torrents
+
+
+def qb_pause(torrent_hash):
+    qb_request('/api/v2/torrents/pause', {'hashes': torrent_hash})
+
+
+def qb_resume(torrent_hash):
+    qb_request('/api/v2/torrents/resume', {'hashes': torrent_hash})
+
+
+def qb_set_location(torrent_hash, new_path):
+    """Change le save_path d'un torrent dans qBittorrent."""
+    qb_request('/api/v2/torrents/setLocation', {
+        'hashes': torrent_hash,
+        'location': new_path,
+    })
+
+
+# ── rtorrent fallback ────────────────────────────────────────────────────────
+
+def rt_get_torrents():
+    from rtorrent_scgi import download_list, multicall
+    hashes = download_list()
+    if not hashes:
+        return []
+
+    FIELDS = (
+        'd.name', 'd.complete', 'd.directory', 'd.up.total',
+        'd.is_open', 'd.is_multi_file', 'd.size_bytes', 'd.timestamp.finished',
+    )
+    calls = [{'method': m, 'params': [h]} for h in hashes for m in FIELDS]
+    vals = multicall(calls)
+    N = len(FIELDS)
+
+    torrents = []
+    for i, h in enumerate(hashes):
+        base = i * N
+        if base + N > len(vals):
+            continue
+        torrents.append({
+            'hash':        h,
+            'name':        vals[base] or '',
+            'complete':    int(vals[base+1] or 0),
+            'directory':   vals[base+2] or '',
+            'up_total':    int(vals[base+3] or 0),
+            'is_open':     int(vals[base+4] or 0),
+            'is_multi':    int(vals[base+5] or 0),
+            'size_bytes':  int(vals[base+6] or 0),
+            'ts_finished': int(vals[base+7] or 0),
+        })
+    return torrents
+
+
+def rt_pause(torrent_hash):
+    from rtorrent_scgi import scgi_simple
+    scgi_simple('d.pause', torrent_hash)
+
+
+def rt_resume(torrent_hash):
+    from rtorrent_scgi import scgi_simple
+    scgi_simple('d.resume', torrent_hash)
+
+
+def rt_set_location(torrent_hash, new_path):
+    from rtorrent_scgi import scgi_simple
+    scgi_simple('d.directory.set', torrent_hash, new_path)
+    scgi_simple('d.save_full_session', torrent_hash)
+
 
 # ── Etat vitesses ─────────────────────────────────────────────────────────────
 
@@ -78,7 +211,6 @@ def update_sample(state, hash_, up_total, now):
     state[hash_] = entry
 
 def avg_speed_bps(state, hash_):
-    """Vitesse moyenne en octets/s. None si historique < MIN_HISTORY_H."""
     samples = state.get(hash_, {}).get('samples', [])
     if len(samples) < 2:
         return None
@@ -89,7 +221,7 @@ def avg_speed_bps(state, hash_):
         return None
     delta = newest['up'] - oldest['up']
     if delta < 0:
-        return None  # up.total remis a zero (redemarrage rtorrent)
+        return None
     return delta / span
 
 def purge_state(state, active_hashes):
@@ -97,18 +229,16 @@ def purge_state(state, active_hashes):
         if h not in active_hashes:
             del state[h]
 
+
 # ── Espace disque ─────────────────────────────────────────────────────────────
 
 def nvme_free_gb():
     return shutil.disk_usage(NVME_DOWNLOADS).free / (1024 ** 3)
 
+
 # ── Symlinks ──────────────────────────────────────────────────────────────────
 
 def ensure_symlink(name):
-    """
-    Cree le symlink RAID_DOWNLOADS/name → NVME_DOWNLOADS/name s'il n'existe pas.
-    Appele en debut de run pour les torrents NVMe sans symlink (cas de reprise).
-    """
     symlink = Path(RAID_DOWNLOADS) / name
     if not symlink.exists() and not symlink.is_symlink():
         target = Path(NVME_DOWNLOADS) / name
@@ -116,61 +246,60 @@ def ensure_symlink(name):
         symlink.symlink_to(target)
         log(f'  symlink cree (reprise) : {name}')
 
+
 # ── Migration ─────────────────────────────────────────────────────────────────
 
-def migrate(t):
-    """
-    Deplace un torrent du NVMe vers RAID0.
-    Remplace le symlink RAID_DOWNLOADS/name par le vrai dossier.
-    Retourne True si succes.
-    """
+def migrate(t, backend):
     name     = t['name']
     hash_    = t['hash']
     is_multi = t['is_multi']
-    was_open = t['is_open']   # is_open=1 : torrent ouvert (seed ou pret a seeder)
+    was_open = t['is_open']
 
-    src      = Path(NVME_DOWNLOADS) / name
-    dst_tmp  = Path(RAID_DOWNLOADS) / (name + '.nvme-tmp')
-    dst_final = Path(RAID_DOWNLOADS) / name  # actuellement un symlink → NVMe
+    src       = Path(NVME_DOWNLOADS) / name
+    dst_tmp   = Path(RAID_DOWNLOADS) / (name + '.nvme-tmp')
+    dst_final = Path(RAID_DOWNLOADS) / name
 
     if not src.exists():
         log(f'  WARN source introuvable : {src}')
         return False
 
-    # Nettoyer un eventuel tmp residuel d'un run precedent
     if dst_tmp.exists():
         shutil.rmtree(dst_tmp) if dst_tmp.is_dir() else dst_tmp.unlink()
 
     Path(RAID_DOWNLOADS).mkdir(parents=True, exist_ok=True)
 
     log(f'  pause  {name[:70]}')
-    scgi_simple('d.pause', hash_)
+    if backend == 'qbt':
+        qb_pause(hash_)
+    else:
+        rt_pause(hash_)
     time.sleep(2)
 
     try:
-        # 1. rsync vers tmp (pas vers dst_final qui est encore le symlink NVMe)
-        # ionice -c3 (idle) + --bwlimit=150000 KB/s pour ne pas saturer le NVMe
-        # et déclencher le bug SocketManager libtorrent 0.16.8 (FDS > 2500 → crash)
         if is_multi:
-            cmd = ['ionice', '-c3', 'rsync', '-a', '--bwlimit=150000', '--delete', str(src) + '/', str(dst_tmp) + '/']
+            cmd = ['ionice', '-c3', 'rsync', '-a', '--bwlimit=150000', '--delete',
+                   str(src) + '/', str(dst_tmp) + '/']
         else:
-            cmd = ['ionice', '-c3', 'rsync', '-a', '--bwlimit=150000', str(src), str(dst_tmp)]
+            cmd = ['ionice', '-c3', 'rsync', '-a', '--bwlimit=150000',
+                   str(src), str(dst_tmp)]
 
-        log(f'  rsync  {"multi" if is_multi else "single"} → {dst_tmp.name}')
+        log(f'  rsync  {"multi" if is_multi else "single"} -> {dst_tmp.name}')
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f'rsync exit {result.returncode}: {result.stderr.strip()}')
 
-        # 2. Mettre a jour rtorrent pour pointer vers RAID0
-        scgi_simple('d.directory.set', hash_, str(Path(RAID_DOWNLOADS)))
-        scgi_simple('d.save_full_session', hash_)
+        # Update torrent client to point to RAID0
+        if backend == 'qbt':
+            qb_set_location(hash_, str(Path(RAID_DOWNLOADS)))
+        else:
+            rt_set_location(hash_, str(Path(RAID_DOWNLOADS)))
 
-        # 3. Supprimer le symlink et renommer le tmp → chemin final (atomique)
+        # Remove symlink and rename tmp -> final
         if dst_final.is_symlink():
             dst_final.unlink()
         dst_tmp.rename(dst_final)
 
-        # 4. Supprimer la source NVMe
+        # Remove NVMe source
         if is_multi:
             shutil.rmtree(src)
         else:
@@ -179,10 +308,9 @@ def migrate(t):
         size_gb = t['size_bytes'] / (1024 ** 3)
         log(f'  OK     {name[:70]} ({size_gb:.1f} GB)')
 
-        # Mettre à jour les chemins folder_posters dans la DB ShareBox
-        # (les entrées TMDB utilisent realpath → /mnt/nvme-seedbox/... pendant le symlink)
-        nvme_path = str(src)        # /mnt/nvme-seedbox/.../Name
-        raid_path = str(dst_final)  # /home/storage/.../Name
+        # Update folder_posters paths in ShareBox DB
+        nvme_path = str(src)
+        raid_path = str(dst_final)
         php = (
             'require "/var/www/sharebox/db.php"; '
             '$db=get_db(); '
@@ -207,21 +335,24 @@ def migrate(t):
 
     except Exception as e:
         log(f'  ERREUR {name[:70]}: {e}')
-        # Nettoyage du tmp si echec
         if dst_tmp.exists():
             shutil.rmtree(dst_tmp) if dst_tmp.is_dir() else dst_tmp.unlink()
         return False
 
     finally:
         if was_open:
-            # d.resume sort le torrent de l'etat pause mis par d.pause
-            scgi_simple('d.resume', hash_)
+            if backend == 'qbt':
+                qb_resume(hash_)
+            else:
+                rt_resume(hash_)
+
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     global NVME_DOWNLOADS, RAID_DOWNLOADS, NVME_MIN_FREE_GB
     global SPEED_WINDOW_H, COLD_THRESHOLD_BPS, MIN_HISTORY_H, STATE_FILE
+    global QB_URL, QB_USER, QB_PASS
 
     conf = load_conf()
     NVME_DOWNLOADS     = conf['NVME_DOWNLOADS']
@@ -231,45 +362,25 @@ def main():
     COLD_THRESHOLD_BPS = int(conf['COLD_THRESHOLD_KBPS']) * 1024
     MIN_HISTORY_H      = int(conf['SPEED_MIN_HISTORY_H'])
     STATE_FILE         = conf['NVME_SPEED_STATE']
+    QB_URL             = conf.get('QBITTORRENT_URL', 'http://127.0.0.1:8181')
+    QB_USER            = conf.get('QBITTORRENT_USER', 'ropixv2')
+    QB_PASS            = conf.get('QBITTORRENT_PASS', 'Lip8NebW8Z8HrbX')
 
-    hashes = download_list()
-    if not hashes:
+    backend = detect_backend()
+    log(f'Backend: {backend}')
+
+    if backend == 'qbt':
+        qb_login()
+        torrents = qb_get_torrents()
+    else:
+        torrents = rt_get_torrents()
+
+    if not torrents:
         log('Aucun torrent')
         sys.exit(0)
 
     now   = int(time.time())
     state = load_state()
-
-    FIELDS = (
-        'd.name',
-        'd.complete',
-        'd.directory',
-        'd.up.total',
-        'd.is_open',
-        'd.is_multi_file',
-        'd.size_bytes',
-        'd.timestamp.finished',
-    )
-    calls = [{'method': m, 'params': [h]} for h in hashes for m in FIELDS]
-    vals  = multicall(calls)
-    N     = len(FIELDS)
-
-    torrents = []
-    for i, h in enumerate(hashes):
-        base = i * N
-        if base + N > len(vals):
-            continue
-        torrents.append({
-            'hash':        h,
-            'name':        vals[base]     or '',
-            'complete':    int(vals[base+1] or 0),
-            'directory':   vals[base+2]   or '',
-            'up_total':    int(vals[base+3] or 0),
-            'is_open':     int(vals[base+4] or 0),
-            'is_multi':    int(vals[base+5] or 0),
-            'size_bytes':  int(vals[base+6] or 0),
-            'ts_finished': int(vals[base+7] or 0),
-        })
 
     # Completes sur NVMe
     nvme_done = [t for t in torrents
@@ -294,7 +405,7 @@ def main():
     migrated   = 0
     cold_hashes = set()
 
-    # ── 1. Migration par vitesse froide ──────────────────────────────────────────
+    # 1. Migration par vitesse froide
     for t in nvme_done:
         avg = avg_speed_bps(state, t['hash'])
         if avg is None:
@@ -303,13 +414,13 @@ def main():
         avg_kb = avg / 1024
         if avg < COLD_THRESHOLD_BPS:
             log(f'migre (froid) "{t["name"][:60]}" avg={avg_kb:.0f} KB/s')
-            if migrate(t):
+            if migrate(t, backend):
                 migrated += 1
                 cold_hashes.add(t['hash'])
         else:
             log(f'  chaud  {t["name"][:60]} avg={avg_kb:.0f} KB/s')
 
-    # ── 2. Eviction par pression espace ──────────────────────────────────────────
+    # 2. Eviction par pression espace
     free_gb = nvme_free_gb()
     if free_gb < NVME_MIN_FREE_GB:
         log(f'PRESSION NVMe : {free_gb:.1f} GB libre < {NVME_MIN_FREE_GB} GB seuil')
@@ -321,7 +432,7 @@ def main():
             return avg / (t['size_bytes'] / (1024 ** 3))
 
         remaining = [t for t in nvme_done if t['hash'] not in cold_hashes]
-        remaining.sort(key=efficiency)  # pire efficacite en premier
+        remaining.sort(key=efficiency)
 
         for t in remaining:
             free_gb = nvme_free_gb()
@@ -329,7 +440,7 @@ def main():
                 break
             eff = efficiency(t)
             log(f'migre (pression {free_gb:.1f} GB) "{t["name"][:55]}" eff={eff:.1f} B/s/GB')
-            if migrate(t):
+            if migrate(t, backend):
                 migrated += 1
 
     log(f'DONE - {migrated} torrent(s) migre(s) | NVMe libre {nvme_free_gb():.1f} GB')
@@ -340,7 +451,7 @@ if __name__ == '__main__':
     if lock.exists():
         pid = lock.read_text().strip()
         if Path(f'/proc/{pid}').exists():
-            sys.exit(0)  # migration déjà en cours
+            sys.exit(0)
     lock.write_text(str(os.getpid()))
     try:
         main()

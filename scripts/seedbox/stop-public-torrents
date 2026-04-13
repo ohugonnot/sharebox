@@ -2,18 +2,20 @@
 """
 Stoppe les torrents termines sur trackers publics ou sans ratio (ygg.gratis, etc.)
 des que le ratio atteint STOP_RATIO.
+Supporte qBittorrent (API REST) avec fallback rtorrent (SCGI).
 """
 import sys
 import os
-import xml.etree.ElementTree as ET
+import json
+import subprocess
+import urllib.request
+import urllib.parse
 from datetime import datetime
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rtorrent_scgi import scgi_call, download_list, multicall, scgi_simple
 
-# Ratio minimum pour stopper (2.0 = 2000 en interne rtorrent)
-STOP_RATIO = 2000
+STOP_RATIO = 2.0
 
-# Trackers "sans ratio" -- flag prive pour DHT/PEX mais pas de ratio cote tracker
 NO_RATIO_HOSTS = [
     'ygg.re', 'ygg.gratis', 'yggtorrent.pics', 'yggtorrent.si',
     'anidex.info', 'nyaa.si', 'animebytes.tv',
@@ -22,75 +24,187 @@ NO_RATIO_HOSTS = [
     '9.rarbg.to', '9.rarbg.me',
 ]
 
+# qBittorrent config
+QB_URL  = 'http://127.0.0.1:8181'
+QB_USER = 'ropixv2'
+QB_PASS = 'Lip8NebW8Z8HrbX'
+
+_qb_cookie = None
+
+
 def log(msg):
     print(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}', flush=True)
 
-def is_no_ratio_host(url: str) -> bool:
+
+def is_no_ratio_host(url):
     from urllib.parse import urlparse
-    host = urlparse(url).hostname or ''
-    host = host.lower()
+    host = (urlparse(url).hostname or '').lower()
     return any(host == d or host.endswith('.' + d) for d in NO_RATIO_HOSTS)
 
-def tracker_urls(hash_: str) -> list:
-    xml = (
-        '<?xml version="1.0"?><methodCall><methodName>t.multicall</methodName><params>'
-        f'<param><value><string>{hash_}</string></value></param>'
-        '<param><value><string></string></value></param>'
-        '<param><value><string>t.url=</string></value></param>'
-        '</params></methodCall>'
-    )
-    resp = scgi_call(xml)
-    root = ET.fromstring(resp)
-    urls = []
-    for s in root.iter('string'):
-        u = s.text.strip() if s.text else ''
-        if u.startswith('http') or u.startswith('udp'):
-            urls.append(u)
-    return urls
 
-def should_stop(is_private: int, urls: list) -> bool:
-    if is_private == 0:
-        return True  # tracker public classique
-    # Prive : stopper seulement si TOUS les trackers sont dans la liste sans ratio
-    if not urls:
-        return False
-    return all(is_no_ratio_host(u) for u in urls)
+# ── Backend detection ────────────────────────────────────────────────────────
 
-hashes = download_list()
-if not hashes:
-    log('Aucun torrent actif')
-    sys.exit(0)
+def detect_backend():
+    try:
+        r = subprocess.run(['pgrep', '-x', 'qbittorrent-nox'],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            return 'qbt'
+    except Exception:
+        pass
+    sock = os.environ.get('RTORRENT_SOCK', '/var/run/rtorrent/ropixv2.sock')
+    if os.path.exists(sock):
+        return 'rt'
+    return 'qbt'
 
-# Batch : name + complete + is_private + is_active + ratio
-calls = []
-for h in hashes:
-    for method in ('d.name', 'd.complete', 'd.is_private', 'd.is_active', 'd.ratio'):
-        calls.append({'method': method, 'params': [h]})
 
-vals = multicall(calls)
-total_stopped = 0
+# ── qBittorrent ──────────────────────────────────────────────────────────────
 
-for i, h in enumerate(hashes):
-    base = i * 5
-    name       = vals[base]     if base   < len(vals) else ''
-    complete   = int(vals[base+1]) if base+1 < len(vals) else 0
-    is_private = int(vals[base+2]) if base+2 < len(vals) else 1
-    is_active  = int(vals[base+3]) if base+3 < len(vals) else 0
-    ratio      = int(vals[base+4]) if base+4 < len(vals) else 0
+def qb_request(endpoint, data=None):
+    global _qb_cookie
+    url = f'{QB_URL}{endpoint}'
+    if data:
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data)
+    if _qb_cookie:
+        req.add_header('Cookie', _qb_cookie)
+    resp = urllib.request.urlopen(req, timeout=10)
+    sc = resp.headers.get('Set-Cookie')
+    if sc:
+        _qb_cookie = sc.split(';')[0]
+    return resp.read().decode()
 
-    if complete != 1 or is_active != 1 or ratio < STOP_RATIO:
-        continue
 
-    urls = tracker_urls(h) if is_private == 1 else []
+def qb_login():
+    qb_request('/api/v2/auth/login', {'username': QB_USER, 'password': QB_PASS})
 
-    if not should_stop(is_private, urls):
-        continue
 
-    scgi_simple('d.stop', h)
-    scgi_simple('d.close', h)
+def qb_get_tracker_hosts(torrent_hash):
+    """Retourne la liste des hosts tracker d'un torrent."""
+    trackers = json.loads(qb_request(f'/api/v2/torrents/trackers?hash={torrent_hash}'))
+    hosts = []
+    for t in trackers:
+        url = t.get('url', '')
+        if url.startswith('http') or url.startswith('udp'):
+            hosts.append(url)
+    return hosts
 
-    tracker_host = urls[0].split('/')[2] if urls else 'public'
-    log(f'stop "{name[:60]}" ratio={ratio/1000:.1f}x private={is_private} tracker={tracker_host}')
-    total_stopped += 1
 
-log(f'DONE - {total_stopped} torrent(s) stoppes sur {len(hashes)} verifies')
+def qb_run():
+    qb_login()
+    torrents = json.loads(qb_request('/api/v2/torrents/info'))
+    total_stopped = 0
+
+    for t in torrents:
+        progress = t.get('progress', 0)
+        ratio = t.get('ratio', 0)
+        state = t.get('state', '')
+
+        # Only completed, active torrents above ratio threshold
+        if progress < 1.0 or ratio < STOP_RATIO:
+            continue
+        if state in ('pausedUP', 'pausedDL', 'stoppedUP', 'stoppedDL'):
+            continue
+
+        h = t['hash']
+        name = (t.get('name') or '')[:60]
+
+        # Check tracker URLs (single API call)
+        tracker_urls = qb_get_tracker_hosts(h)
+
+        # Public = all trackers are in no-ratio list, or no trackers at all
+        all_no_ratio = all(is_no_ratio_host(u) for u in tracker_urls) if tracker_urls else False
+        should_stop = all_no_ratio or not tracker_urls
+
+        if not should_stop:
+            continue
+
+        # Pause the torrent
+        qb_request('/api/v2/torrents/pause', {'hashes': h})
+
+        tracker_host = tracker_urls[0].split('/')[2] if tracker_urls else 'public'
+        log(f'stop "{name}" ratio={ratio:.1f}x tracker={tracker_host}')
+        total_stopped += 1
+
+    log(f'DONE - {total_stopped} torrent(s) stoppes sur {len(torrents)} verifies')
+
+
+# ── rtorrent fallback ────────────────────────────────────────────────────────
+
+def rt_run():
+    import xml.etree.ElementTree as ET
+    from rtorrent_scgi import scgi_call, download_list, multicall, scgi_simple
+
+    STOP_RATIO_RT = int(STOP_RATIO * 1000)
+
+    def tracker_urls(hash_):
+        xml = (
+            '<?xml version="1.0"?><methodCall><methodName>t.multicall</methodName><params>'
+            f'<param><value><string>{hash_}</string></value></param>'
+            '<param><value><string></string></value></param>'
+            '<param><value><string>t.url=</string></value></param>'
+            '</params></methodCall>'
+        )
+        resp = scgi_call(xml)
+        root = ET.fromstring(resp)
+        urls = []
+        for s in root.iter('string'):
+            u = s.text.strip() if s.text else ''
+            if u.startswith('http') or u.startswith('udp'):
+                urls.append(u)
+        return urls
+
+    def should_stop(is_private, urls):
+        if is_private == 0:
+            return True
+        if not urls:
+            return False
+        return all(is_no_ratio_host(u) for u in urls)
+
+    hashes = download_list()
+    if not hashes:
+        log('Aucun torrent actif')
+        return
+
+    calls = []
+    for h in hashes:
+        for method in ('d.name', 'd.complete', 'd.is_private', 'd.is_active', 'd.ratio'):
+            calls.append({'method': method, 'params': [h]})
+
+    vals = multicall(calls)
+    total_stopped = 0
+
+    for i, h in enumerate(hashes):
+        base = i * 5
+        name       = vals[base]     if base   < len(vals) else ''
+        complete   = int(vals[base+1]) if base+1 < len(vals) else 0
+        is_private = int(vals[base+2]) if base+2 < len(vals) else 1
+        is_active  = int(vals[base+3]) if base+3 < len(vals) else 0
+        ratio      = int(vals[base+4]) if base+4 < len(vals) else 0
+
+        if complete != 1 or is_active != 1 or ratio < STOP_RATIO_RT:
+            continue
+
+        urls = tracker_urls(h) if is_private == 1 else []
+        if not should_stop(is_private, urls):
+            continue
+
+        scgi_simple('d.stop', h)
+        scgi_simple('d.close', h)
+
+        tracker_host = urls[0].split('/')[2] if urls else 'public'
+        log(f'stop "{name[:60]}" ratio={ratio/1000:.1f}x private={is_private} tracker={tracker_host}')
+        total_stopped += 1
+
+    log(f'DONE - {total_stopped} torrent(s) stoppes sur {len(hashes)} verifies')
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+if __name__ == '__main__':
+    backend = detect_backend()
+    log(f'Backend: {backend}')
+    if backend == 'qbt':
+        qb_run()
+    else:
+        rt_run()

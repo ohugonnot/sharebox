@@ -1,27 +1,24 @@
 #!/usr/bin/env python3
 """
-raid-to-nvme — Déplace manuellement un torrent du RAID0 vers le NVMe.
+raid-to-nvme — Deplace manuellement un torrent du RAID0 vers le NVMe.
 
 Usage : python3 raid-to-nvme <nom_ou_motif>
 
-Recherche un torrent dont le nom contient le motif (insensible à la casse).
-Lève une erreur si plusieurs torrents correspondent.
-
-Migration :
-  pause → rsync RAID→NVMe.nvme-tmp → d.directory.set NVMe → d.save_full_session
-  → remplace le dossier RAID par un symlink → NVMe → resume → rm source RAID
+Supporte qBittorrent (API REST) avec fallback rtorrent (SCGI).
 """
 
 import sys
 import os
+import json
 import shutil
 import subprocess
 import time
+import urllib.request
+import urllib.parse
 from pathlib import Path
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from rtorrent_scgi import download_list, multicall, scgi_simple
 
 
 def load_conf():
@@ -40,18 +37,133 @@ def log(msg):
     print(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}', flush=True)
 
 
-def main():
-    if len(sys.argv) < 2:
-        print(f'Usage: {sys.argv[0]} <nom_ou_motif>', file=sys.stderr)
+def detect_backend():
+    try:
+        r = subprocess.run(['pgrep', '-x', 'qbittorrent-nox'],
+                           capture_output=True, text=True, timeout=3)
+        if r.returncode == 0 and r.stdout.strip():
+            return 'qbt'
+    except Exception:
+        pass
+    sock = os.environ.get('RTORRENT_SOCK', '/var/run/rtorrent/ropixv2.sock')
+    if os.path.exists(sock):
+        return 'rt'
+    return 'qbt'
+
+
+# ── qBittorrent ──────────────────────────────────────────────────────────────
+
+_qb_cookie = None
+QB_URL = QB_USER = QB_PASS = None
+
+
+def qb_request(endpoint, data=None):
+    global _qb_cookie
+    url = f'{QB_URL}{endpoint}'
+    if data:
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data)
+    if _qb_cookie:
+        req.add_header('Cookie', _qb_cookie)
+    resp = urllib.request.urlopen(req, timeout=30)
+    sc = resp.headers.get('Set-Cookie')
+    if sc:
+        _qb_cookie = sc.split(';')[0]
+    return resp.read().decode()
+
+
+def qb_login():
+    qb_request('/api/v2/auth/login', {'username': QB_USER, 'password': QB_PASS})
+
+
+def qb_run(pattern, nvme, raid):
+    qb_login()
+    torrents = json.loads(qb_request('/api/v2/torrents/info'))
+
+    matches = [t for t in torrents if pattern in t.get('name', '').lower()]
+
+    if not matches:
+        log(f'Aucun torrent ne correspond a "{pattern}"')
+        sys.exit(1)
+    if len(matches) > 1:
+        log(f'{len(matches)} torrents correspondent, sois plus precis :')
+        for m in matches:
+            log(f'  {m["name"]}')
         sys.exit(1)
 
-    pattern = sys.argv[1].lower()
+    t = matches[0]
+    name     = t['name']
+    h        = t['hash']
+    save_path = t.get('save_path', '')
+    size_gb  = (t.get('total_size', 0) or t.get('size', 0)) / (1024 ** 3)
+    is_active = t.get('state', '') not in ('pausedUP', 'pausedDL', 'stoppedUP', 'stoppedDL')
 
-    conf = load_conf()
-    nvme = conf['NVME_DOWNLOADS']
-    raid = conf['RAID_DOWNLOADS']
+    log(f'Torrent : {name}')
+    log(f'  repertoire actuel : {save_path}')
+    log(f'  taille : {size_gb:.1f} GB  |  actif : {is_active}')
 
-    # ── Trouver le torrent ────────────────────────────────────────────────────
+    if save_path.startswith(nvme):
+        log(f'ERREUR : le torrent est deja sur NVMe ({save_path})')
+        sys.exit(1)
+
+    if not save_path.startswith(raid):
+        log(f'ERREUR : le torrent n\'est pas sur RAID ({save_path})')
+        sys.exit(1)
+
+    free_gb = shutil.disk_usage(nvme).free / (1024 ** 3)
+    if free_gb < size_gb + 50:
+        log(f'ERREUR : NVMe trop plein ({free_gb:.1f} GB libre, besoin de {size_gb + 50:.1f} GB)')
+        sys.exit(1)
+
+    log(f'NVMe libre : {free_gb:.1f} GB - OK')
+
+    # qBittorrent setLocation deplace les fichiers automatiquement
+    log('Deplacement via setLocation...')
+    qb_request('/api/v2/torrents/setLocation', {
+        'hashes': h,
+        'location': nvme,
+    })
+    qb_request('/api/v2/torrents/setCategory', {
+        'hashes': h,
+        'category': 'hot',
+    })
+
+    # Creer symlink RAID/name → NVMe/name pour que ShareBox voie le torrent
+    symlink = Path(raid) / name
+    nvme_target = Path(nvme) / name
+
+    # Attendre que qBittorrent deplace les fichiers
+    log('Attente du deplacement...')
+    for _ in range(120):  # max 2 min
+        time.sleep(1)
+        if nvme_target.exists():
+            break
+    else:
+        log('WARN : timeout attente deplacement, le symlink sera peut-etre premature')
+
+    # Supprimer l'ancien dossier/fichier RAID et creer le symlink
+    if symlink.exists() and not symlink.is_symlink():
+        # qBittorrent a deja deplace, mais l'ancien dossier vide peut rester
+        try:
+            if symlink.is_dir():
+                shutil.rmtree(symlink)
+            else:
+                symlink.unlink()
+        except Exception:
+            pass
+
+    if not symlink.exists() and not symlink.is_symlink():
+        symlink.symlink_to(nvme_target)
+        log(f'Symlink cree : {symlink} -> {nvme_target}')
+
+    log(f'OK - {name} est maintenant sur NVMe')
+
+
+# ── rtorrent fallback ────────────────────────────────────────────────────────
+
+def rt_run(pattern, nvme, raid):
+    from rtorrent_scgi import download_list, multicall, scgi_simple
+
     hashes = download_list()
     if not hashes:
         log('Aucun torrent dans rtorrent')
@@ -77,10 +189,10 @@ def main():
             })
 
     if not matches:
-        log(f'Aucun torrent ne correspond à "{pattern}"')
+        log(f'Aucun torrent ne correspond a "{pattern}"')
         sys.exit(1)
     if len(matches) > 1:
-        log(f'{len(matches)} torrents correspondent, sois plus précis :')
+        log(f'{len(matches)} torrents correspondent, sois plus precis :')
         for m in matches:
             log(f'  {m["name"]}')
         sys.exit(1)
@@ -93,10 +205,9 @@ def main():
     size_gb  = t['size'] / (1024 ** 3)
 
     log(f'Torrent : {name}')
-    log(f'  répertoire actuel : {t["dir"]}')
+    log(f'  repertoire actuel : {t["dir"]}')
     log(f'  taille : {size_gb:.1f} GB  |  ouvert : {was_open}')
 
-    # ── Vérifications ─────────────────────────────────────────────────────────
     if not t['dir'].startswith(raid):
         log(f'ERREUR : le torrent n\'est pas sur RAID ({t["dir"]})')
         sys.exit(1)
@@ -113,9 +224,8 @@ def main():
 
     log(f'NVMe libre : {free_gb:.1f} GB - OK')
 
-    # ── Migration ─────────────────────────────────────────────────────────────
-    dst_nvme  = Path(nvme) / name
-    dst_tmp   = Path(nvme) / (name + '.raid-tmp')
+    dst_nvme = Path(nvme) / name
+    dst_tmp  = Path(nvme) / (name + '.raid-tmp')
     Path(nvme).mkdir(parents=True, exist_ok=True)
 
     if was_open:
@@ -130,16 +240,14 @@ def main():
         else:
             cmd = ['rsync', '-a', '--info=progress2', str(src), str(dst_tmp)]
 
-        log(f'rsync {"multi" if is_multi else "single"} -> {dst_tmp.name}  (peut prendre plusieurs minutes)')
+        log(f'rsync {"multi" if is_multi else "single"} -> {dst_tmp.name}')
         result = subprocess.run(cmd)
         if result.returncode != 0:
             raise RuntimeError(f'rsync exit {result.returncode}')
 
-        # Pointer rtorrent vers NVMe
         scgi_simple('d.directory.set', hash_, nvme)
         scgi_simple('d.save_full_session', hash_)
 
-        # Remplacer le dossier RAID par un symlink → NVMe
         if src.is_symlink():
             src.unlink()
         elif src.is_dir():
@@ -147,10 +255,7 @@ def main():
         else:
             src.unlink()
 
-        # Rename tmp → dossier final NVMe
         dst_tmp.rename(dst_nvme)
-
-        # Créer symlink RAID/name → NVMe/name
         src.symlink_to(dst_nvme)
 
         log(f'OK - {name} est maintenant sur NVMe, symlink cree sur RAID')
@@ -165,6 +270,32 @@ def main():
         if was_open:
             scgi_simple('d.resume', hash_)
             log('resume')
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    global QB_URL, QB_USER, QB_PASS
+
+    if len(sys.argv) < 2:
+        print(f'Usage: {sys.argv[0]} <nom_ou_motif>', file=sys.stderr)
+        sys.exit(1)
+
+    pattern = sys.argv[1].lower()
+    conf = load_conf()
+    nvme = conf['NVME_DOWNLOADS']
+    raid = conf['RAID_DOWNLOADS']
+
+    backend = detect_backend()
+    log(f'Backend: {backend}')
+
+    if backend == 'qbt':
+        QB_URL  = conf.get('QBITTORRENT_URL', 'http://127.0.0.1:8181')
+        QB_USER = conf.get('QBITTORRENT_USER', 'ropixv2')
+        QB_PASS = conf.get('QBITTORRENT_PASS', 'Lip8NebW8Z8HrbX')
+        qb_run(pattern, nvme, raid)
+    else:
+        rt_run(pattern, nvme, raid)
 
 
 if __name__ == '__main__':
