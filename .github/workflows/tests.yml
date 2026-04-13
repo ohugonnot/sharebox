@@ -31,12 +31,7 @@ jobs:
           node-version: '22'
 
       - name: ESLint
-        run: |
-          npx --yes eslint@9 --no-eslintrc \
-            -c '{"rules":{"no-undef":"warn","no-unused-vars":"warn","no-redeclare":"error","no-dupe-keys":"error","no-constant-condition":"warn","no-unreachable":"error"}}' \
-            --env browser --env es2020 \
-            --ignore-pattern 'vendor/' --ignore-pattern 'node_modules/' \
-            *.js || true
+        run: npx --yes eslint@9 || true
 
       - name: Composer audit
         run: |
