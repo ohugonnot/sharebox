@@ -470,6 +470,7 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
     if ($a === '') return 0;
     // Tronquer pour éviter O(n³) de similar_text sur des noms de release longs
     if (mb_strlen($a) > 80) $a = mb_substr($a, 0, 80);
+    $lenA = mb_strlen($a);
 
     // Score against localized title
     $b = $norm($candidate['title'] ?? '');
@@ -478,8 +479,8 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
     if ($b !== '') {
         similar_text($a, $b, $pct);
         // Penalize length divergence to avoid short-title false positives ("One" vs "One Piece")
-        $lenA = mb_strlen($a); $lenB = mb_strlen($b);
-        $lenRatio = max($lenA, $lenB) > 0 ? min($lenA, $lenB) / max($lenA, $lenB) : 1;
+        $lenB = mb_strlen($b);
+        $lenRatio = min($lenA, $lenB) / max($lenA, $lenB);
         if ($lenRatio < 0.5) $pct *= $lenRatio * 1.5;
         $bestPct = $pct;
     }
@@ -490,7 +491,7 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
         similar_text($a, $bOrig, $pctOrig);
         // Same length penalty for original title
         $lenBO = mb_strlen($bOrig);
-        $lenRatioO = max($lenA, $lenBO) > 0 ? min($lenA, $lenBO) / max($lenA, $lenBO) : 1;
+        $lenRatioO = min($lenA, $lenBO) / max($lenA, $lenBO);
         if ($lenRatioO < 0.5) $pctOrig *= $lenRatioO * 1.5;
         if ($pctOrig > $bestPct) {
             $bestPct = $pctOrig;
@@ -506,7 +507,7 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
     if ($a !== $bestB && mb_strlen($a) >= 4 && (str_contains($bestB, $a) || str_contains($a, $bestB))) {
         $shorter = min(mb_strlen($a), mb_strlen($bestB));
         $longer = max(mb_strlen($a), mb_strlen($bestB));
-        $ratio = $longer > 0 ? $shorter / $longer : 0;
+        $ratio = $shorter / $longer;
         $score += (int)round(8 * $ratio);
     }
 
@@ -668,14 +669,17 @@ function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHD
     $crf = $isHDR ? FFMPEG_HDR_CRF : FFMPEG_CRF;
     $preset = $isHLS ? FFMPEG_PRESET_HLS : FFMPEG_PRESET;
     $args = ' -c:v libx264 -preset ' . $preset;
+    /** @phpstan-ignore notIdentical.alwaysFalse */
     if (FFMPEG_TUNE !== '') {
         $args .= ' -tune ' . FFMPEG_TUNE;
     }
     $args .= ' -crf ' . $crf
         . ' -profile:v high -level 4.1';
+    /** @phpstan-ignore greater.alwaysFalse */
     if (FFMPEG_BFRAMES > 0) {
         $args .= ' -bf ' . FFMPEG_BFRAMES;
     }
+    /** @phpstan-ignore greater.alwaysFalse */
     if (FFMPEG_REFS > 0) {
         $args .= ' -refs ' . FFMPEG_REFS;
     }
