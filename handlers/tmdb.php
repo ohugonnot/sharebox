@@ -55,7 +55,7 @@ if (isset($_GET['posters'])) {
         . ')/iu';
     // Sous-ensemble du skipPattern : dossiers de saison (on peut leur trouver un poster TMDB via le parent)
     // Matche les dossiers saison/saga avec OU sans numéro : "Season 2", "Arc - East Blue", "Saga Alabasta"
-    $seasonPattern = '/(?:^|\b)(?:season|saison|saga|arc|part(?:ie)?)[\s._-]*(\d+)?/i';
+    $seasonPattern = '/(?:^|\b)(?:season|saison|saga|arc|part(?:ie)?)[\s._-]*(\d+)?|^S(\d+)$/i';
 
     $result = [];
 
@@ -98,7 +98,7 @@ if (isset($_GET['posters'])) {
     if ($parentTmdbId) {
         foreach ($folders as $f) {
             if (preg_match($seasonPattern, $f, $m)) {
-                $seasonNum = !empty($m[1]) ? (int)$m[1] : 0;
+                $seasonNum = !empty($m[1]) ? (int)$m[1] : (!empty($m[2]) ? (int)$m[2] : 0);
                 $fullPath = $resolvedPath . '/' . $f;
                 // Check cache — si le tmdb_id matche le parent, c'est un vrai poster de saison
                 // Sinon c'est un vieux match foireux (ex: "S01" → série chinoise) → re-fetch

@@ -657,7 +657,7 @@ function plog(tag, msg, data) {
             requestAnimationFrame(function() { S.rafPending = false; updateSeekUI(); updateTitle(); });
         }
         updateBuffered();
-        if (!S.rafPending) Subs.render();
+        Subs.render();
         // Watch history : marquer vu à 85% (une seule fois par lecture)
         if (!watchMarked && watchPath && watchCsrf && S.duration > 60) {
             if (realTime() / S.duration >= 0.85) {
