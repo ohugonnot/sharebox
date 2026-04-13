@@ -1,0 +1,391 @@
+#!/usr/bin/env python3
+"""
+nvme-tiering — Gestion intelligente du placement NVMe / RAID.
+
+Toutes les 15 min :
+  - PROMOTE : torrents RAID avec >= 5 leechers -> NVMe
+  - DEMOTE  : torrents NVMe avec < 3 leechers depuis 2h -> RAID
+  - Pression espace : si NVMe < 200 GB libre, demotion forcee
+  - Nettoyage : supprime les fichiers orphelins sur NVMe
+
+Max 2 moves par run pour ne pas bloquer l'API qBittorrent.
+Les symlinks RAID/name -> NVMe/name sont geres par nvme-gatekeeper (cron 1 min).
+"""
+
+import sys
+import os
+import json
+import shutil
+import time
+import urllib.request
+import urllib.parse
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+def load_conf():
+    path = Path(__file__).parent / 'seedbox.conf'
+    conf = {}
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                k, v = line.split('=', 1)
+                conf[k.strip()] = v.strip()
+    return conf
+
+
+# Tiering thresholds
+PROMOTE_MIN_PEERS   = 5     # promote si >= 5 leechers
+DEMOTE_BELOW_PEERS  = 3     # demote si < 3 leechers pendant DEMOTE_STABLE_H
+DEMOTE_STABLE_H     = 2     # heures sous le seuil avant demote (evite le yoyo)
+PROMOTE_MAX_SIZE_GB = 100   # ne pas promouvoir les torrents > 100 GB (move trop long)
+MAX_MOVES_PER_RUN   = 2     # max 2 setLocation par run (evite de bloquer l'API)
+MIN_FREE_GB         = 200   # espace minimum sur NVMe
+
+
+# ── qBittorrent API ─────────────────────────────────────────────────────────
+
+_qb_cookie = None
+QB_URL = QB_USER = QB_PASS = None
+
+
+def qb_request(endpoint, data=None):
+    global _qb_cookie
+    url = f'{QB_URL}{endpoint}'
+    if data:
+        data = urllib.parse.urlencode(data).encode()
+    req = urllib.request.Request(url, data=data)
+    if _qb_cookie:
+        req.add_header('Cookie', _qb_cookie)
+    resp = urllib.request.urlopen(req, timeout=30)
+    sc = resp.headers.get('Set-Cookie')
+    if sc:
+        _qb_cookie = sc.split(';')[0]
+    return resp.read().decode()
+
+
+def qb_login():
+    qb_request('/api/v2/auth/login', {'username': QB_USER, 'password': QB_PASS})
+
+
+def qb_set_category(torrent_hash, category):
+    qb_request('/api/v2/torrents/setCategory', {
+        'hashes': torrent_hash,
+        'category': category,
+    })
+
+
+def qb_set_location(torrent_hash, location):
+    qb_request('/api/v2/torrents/setLocation', {
+        'hashes': torrent_hash,
+        'location': location,
+    })
+
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+def log(msg):
+    print(f'[{datetime.now().strftime("%H:%M:%S")}] {msg}', flush=True)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+STATE_FILE = '/var/www/sharebox/data/nvme-tiering-state.json'
+
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, 'w') as f:
+        json.dump(state, f)
+
+
+def is_on_nvme(save_path, nvme_path):
+    return save_path.startswith(nvme_path)
+
+
+def nvme_free_gb(nvme_path):
+    return shutil.disk_usage(nvme_path).free / (1024 ** 3)
+
+
+def update_folder_posters(old_path, new_path, name):
+    """Met a jour les chemins dans la DB ShareBox apres un deplacement."""
+    import subprocess
+    old = os.path.join(old_path, name)
+    new = os.path.join(new_path, name)
+    php = (
+        'require "/var/www/sharebox/db.php"; '
+        '$db=get_db(); '
+        '$old=' + repr(old) + '; $new=' + repr(new) + '; '
+        '$n=$db->prepare("UPDATE folder_posters SET path = :new || SUBSTR(path, LENGTH(:old)+1) '
+        'WHERE path = :old OR path LIKE :pfx")'
+        '->execute([":old"=>$old,":new"=>$new,":pfx"=>$old."/%"]); '
+        'echo $db->query("SELECT changes()")->fetchColumn();'
+    )
+    try:
+        r = subprocess.run(['sudo', '-u', 'www-data', 'php', '-r', php],
+                           capture_output=True, text=True, timeout=10)
+        changed = r.stdout.strip()
+        if r.returncode == 0 and changed and changed != '0':
+            log(f'  DB folder_posters: {changed} entrees')
+    except Exception:
+        pass
+
+
+def manage_symlink(name, nvme_path, raid_path, direction):
+    """
+    Gere les symlinks pour que ShareBox voie tous les torrents au meme endroit.
+    Le gatekeeper (1 min) sert de filet de securite.
+    """
+    raid_entry = Path(raid_path) / name
+    nvme_target = Path(nvme_path) / name
+
+    if direction == 'to_nvme':
+        if raid_entry.is_symlink():
+            raid_entry.unlink()
+        if not raid_entry.exists() and nvme_target.exists():
+            raid_entry.symlink_to(nvme_target)
+            log(f'  symlink cree: {name[:50]} -> NVMe')
+        else:
+            log(f'  symlink differe: gatekeeper creera dans ~1 min')
+
+    elif direction == 'to_raid':
+        if raid_entry.is_symlink():
+            raid_entry.unlink()
+            log(f'  symlink supprime: {name[:50]}')
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    global QB_URL, QB_USER, QB_PASS
+
+    conf = load_conf()
+    nvme_path = conf['NVME_DOWNLOADS']
+    raid_path = conf['RAID_DOWNLOADS']
+    QB_URL    = conf.get('QBITTORRENT_URL', 'http://127.0.0.1:8181')
+    QB_USER   = conf.get('QBITTORRENT_USER', 'ropixv2')
+    QB_PASS   = conf.get('QBITTORRENT_PASS', 'Lip8NebW8Z8HrbX')
+
+    qb_login()
+    torrents = json.loads(qb_request('/api/v2/torrents/info'))
+    now = time.time()
+
+    free_gb = nvme_free_gb(nvme_path)
+    log(f'{len(torrents)} torrents | NVMe libre: {free_gb:.1f} GB')
+
+    nvme_torrents = []
+    raid_torrents = []
+
+    moving_count = 0
+    for t in torrents:
+        save_path = t.get('save_path', '')
+        state = t.get('state', '')
+        t['_on_nvme'] = is_on_nvme(save_path, nvme_path)
+        t['_complete'] = t.get('progress', 0) >= 1.0
+        t['_age_h'] = (now - t.get('completion_on', 0)) / 3600 if t.get('completion_on', 0) > 0 else 0
+        t['_peers'] = t.get('num_leechs', 0)
+        t['_size_gb'] = (t.get('total_size', 0) or t.get('size', 0)) / (1024 ** 3)
+
+        if state.startswith('moving'):
+            moving_count += 1
+            continue
+
+        if not t['_complete']:
+            continue
+
+        if t['_on_nvme']:
+            nvme_torrents.append(t)
+        else:
+            raid_torrents.append(t)
+
+    if moving_count:
+        log(f'  {moving_count} torrent(s) en cours de deplacement, skip')
+        # Ne pas lancer de nouveaux moves tant que les precedents ne sont pas finis
+        log(f'DONE - attente fin des moves en cours')
+        return
+
+    demoted_hashes = set()
+    promoted_hashes = set()
+    total_moves = 0
+
+    # ── DEMOTE : NVMe -> RAID ────────────────────────────────────────────────
+    state = load_state()
+    nvme_torrents.sort(key=lambda t: (t['_peers'], -t['_age_h']))
+
+    for t in nvme_torrents:
+        if total_moves >= MAX_MOVES_PER_RUN:
+            log(f'  max moves atteint ({MAX_MOVES_PER_RUN}), suite au prochain run')
+            break
+
+        name = t.get('name', '')
+        h = t['hash']
+
+        if t['_peers'] >= DEMOTE_BELOW_PEERS:
+            state.pop(h, None)
+            continue
+
+        if h not in state:
+            state[h] = now
+            log(f'  froid {name[:50]} ({t["_peers"]}p) - timer demarre')
+            continue
+
+        cold_hours = (now - state[h]) / 3600
+        if cold_hours < DEMOTE_STABLE_H:
+            continue
+
+        log(f'DEMOTE "{name[:55]}" {t["_peers"]}p depuis {cold_hours:.1f}h size={t["_size_gb"]:.1f}GB')
+        qb_set_location(h, raid_path)
+        qb_set_category(h, 'cold')
+        manage_symlink(name, nvme_path, raid_path, 'to_raid')
+        update_folder_posters(nvme_path, raid_path, name)
+        demoted_hashes.add(h)
+        state.pop(h, None)
+        total_moves += 1
+
+    nvme_hashes = {t['hash'] for t in nvme_torrents}
+    for h in list(state.keys()):
+        if h not in nvme_hashes:
+            del state[h]
+    save_state(state)
+
+    # ── PROMOTE : RAID -> NVMe ───────────────────────────────────────────────
+    free_gb = nvme_free_gb(nvme_path)
+
+    promote_candidates = []
+    for t in raid_torrents:
+        if t['_size_gb'] > PROMOTE_MAX_SIZE_GB:
+            continue
+        if t['_peers'] >= PROMOTE_MIN_PEERS:
+            t['_promote_reason'] = f'{t["_peers"]} leechers'
+            promote_candidates.append(t)
+
+    promote_candidates.sort(key=lambda t: -t['_peers'])
+
+    for t in promote_candidates:
+        if total_moves >= MAX_MOVES_PER_RUN:
+            log(f'  max moves atteint ({MAX_MOVES_PER_RUN}), suite au prochain run')
+            break
+
+        name = t.get('name', '')
+        h = t['hash']
+
+        needed = t['_size_gb'] + MIN_FREE_GB
+        if free_gb < needed:
+            log(f'  skip promote "{name[:50]}" espace ({free_gb:.0f} < {needed:.0f} GB)')
+            break
+
+        log(f'PROMOTE "{name[:55]}" {t["_promote_reason"]} size={t["_size_gb"]:.1f}GB')
+        qb_set_location(h, nvme_path)
+        qb_set_category(h, 'hot')
+        manage_symlink(name, nvme_path, raid_path, 'to_nvme')
+        update_folder_posters(raid_path, nvme_path, name)
+        free_gb -= t['_size_gb']
+        promoted_hashes.add(h)
+        total_moves += 1
+
+    # ── PRESSION ESPACE ──────────────────────────────────────────────────────
+    free_gb = nvme_free_gb(nvme_path)
+    if free_gb < MIN_FREE_GB:
+        log(f'PRESSION NVMe: {free_gb:.1f} GB < {MIN_FREE_GB} GB')
+        remaining = [t for t in nvme_torrents if t['hash'] not in demoted_hashes]
+        remaining.sort(key=lambda t: t['_peers'] / max(t['_size_gb'], 0.1))
+        for t in remaining:
+            if total_moves >= MAX_MOVES_PER_RUN:
+                break
+            free_gb = nvme_free_gb(nvme_path)
+            if free_gb >= MIN_FREE_GB:
+                break
+            name = t.get('name', '')
+            h = t['hash']
+            log(f'DEMOTE (pression) "{name[:55]}" peers={t["_peers"]} size={t["_size_gb"]:.1f}GB')
+            qb_set_location(h, raid_path)
+            qb_set_category(h, 'cold')
+            manage_symlink(name, nvme_path, raid_path, 'to_raid')
+            update_folder_posters(nvme_path, raid_path, name)
+            demoted_hashes.add(h)
+            total_moves += 1
+
+    # ── Nettoyage orphelins NVMe ─────────────────────────────────────────────
+    # Fichiers sur NVMe dont le torrent pointe vers RAID (move termine mais source pas supprimee)
+    # Conditions pour supprimer : le torrent dit save_path=RAID, pas en moving, ET le fichier RAID existe
+    cleaned = 0
+    try:
+        torrent_by_name = {t.get('name'): t for t in torrents if t.get('name')}
+        nvme_legit = {t.get('name') for t in torrents
+                      if is_on_nvme(t.get('save_path', ''), nvme_path)
+                      or t.get('state', '').startswith('moving')}
+
+        for entry in os.listdir(nvme_path):
+            if entry in nvme_legit:
+                continue
+
+            t = torrent_by_name.get(entry)
+
+            # Torrent en moving -> ne pas toucher
+            if t and t.get('state', '').startswith('moving'):
+                continue
+
+            # Le vrai fichier doit exister sur RAID (pas un symlink)
+            raid_copy = os.path.join(raid_path, entry)
+            if not os.path.exists(raid_copy) or os.path.islink(raid_copy):
+                continue  # RAID pas pret, on ne supprime pas
+
+            full = os.path.join(nvme_path, entry)
+            if os.path.isdir(full):
+                shutil.rmtree(full)
+            else:
+                os.unlink(full)
+            log(f'  orphelin NVMe supprime: {entry[:50]}')
+            cleaned += 1
+    except Exception:
+        pass
+
+    # ── Assigner la categorie aux torrents sans categorie ────────────────────
+    uncategorized = 0
+    for t in torrents:
+        if t.get('category', ''):
+            continue
+        if t.get('progress', 0) < 1.0:
+            continue
+        if t.get('state', '').startswith('moving'):
+            continue
+        h = t['hash']
+        if h in promoted_hashes or h in demoted_hashes:
+            continue
+        if is_on_nvme(t.get('save_path', ''), nvme_path):
+            qb_set_category(h, 'hot')
+        else:
+            qb_set_category(h, 'cold')
+        uncategorized += 1
+
+    parts = [f'{len(demoted_hashes)} demotes', f'{len(promoted_hashes)} promus']
+    if cleaned:
+        parts.append(f'{cleaned} orphelins')
+    if uncategorized:
+        parts.append(f'{uncategorized} categorises')
+    log(f'DONE - {", ".join(parts)} | NVMe: {nvme_free_gb(nvme_path):.1f} GB')
+
+
+if __name__ == '__main__':
+    lock = Path('/tmp/nvme-tiering.lock')
+    if lock.exists():
+        pid = lock.read_text().strip()
+        if Path(f'/proc/{pid}').exists():
+            sys.exit(0)
+    lock.write_text(str(os.getpid()))
+    try:
+        main()
+    finally:
+        lock.unlink(missing_ok=True)
