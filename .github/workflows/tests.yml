@@ -55,6 +55,7 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           extensions: pdo_sqlite, mbstring
+          coverage: xdebug
 
       - name: Cache Composer dependencies
         uses: actions/cache@v4
@@ -67,7 +68,7 @@ jobs:
         run: composer install --no-interaction --prefer-dist
 
       - name: Run tests
-        run: vendor/bin/phpunit
+        run: vendor/bin/phpunit ${{ matrix.php == '8.3' && '--coverage-text' || '' }}
 
   phpstan:
     runs-on: ubuntu-latest
