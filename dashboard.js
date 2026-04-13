@@ -37,11 +37,6 @@ function fmtGbUnit(gb) { return gb >= 1000 ? 'TB' : 'GB'; }
 function fmtGb(gb)    { return fmtGbVal(gb) + '\u00a0' + fmtGbUnit(gb); }
 
 function fmtMbs(mbs)  { return mbs.toFixed(1) + '\u00a0MB/s'; }
-function fmtTime(ts)  {
-    const d = new Date(ts * 1000);
-    return d.toLocaleDateString('fr-FR', { month: 'short', day: 'numeric' })
-         + ' ' + d.getHours() + 'h';
-}
 
 /* ============================================================
  * Couleur dynamique selon seuil

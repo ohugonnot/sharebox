@@ -399,6 +399,7 @@ function svgSpinner() {
 /**
  * Appelle l'API pour créer un nouveau lien de partage
  */
+// eslint-disable-next-line no-unused-vars
 async function creerLien(path, password, expiresStr, container) {
     const expires = expiresStr ? parseInt(expiresStr) : null;
 
@@ -480,6 +481,7 @@ async function rafraichirLiens() {
 /**
  * Supprime un lien de partage après confirmation
  */
+// eslint-disable-next-line no-unused-vars
 async function supprimerLien(id) {
     if (!confirm('Supprimer ce lien de partage ?')) return;
 
@@ -518,6 +520,7 @@ function formatTaille(bytes) {
  * Copie le lien (+ mot de passe si présent) dans le presse-papiers
  * Appelé depuis les cartes de liens actifs
  */
+// eslint-disable-next-line no-unused-vars
 async function copierInfoLien(url, hasPwd, pwd, btn) {
     const fullUrl = window.location.origin + url;
     let text = fullUrl;
@@ -539,6 +542,7 @@ async function copierInfoLien(url, hasPwd, pwd, btn) {
  * Envoie un lien de partage par email via l'API
  * Demande l'adresse email dans un prompt
  */
+// eslint-disable-next-line no-unused-vars
 async function envoyerEmail(linkId) {
     const email = prompt('Adresse email du destinataire :');
     if (!email || !email.trim()) return;
@@ -566,6 +570,7 @@ async function envoyerEmail(linkId) {
 /**
  * Affiche un QR code en popup pour un lien de partage
  */
+// eslint-disable-next-line no-unused-vars
 function afficherQR(url, btn) {
     // Fermer un popup existant
     const old = document.getElementById('qr-popup');
@@ -744,7 +749,6 @@ function qrEncode(text) {
         let gen = [1];
         for (let i = 0; i < ecLen; i++) {
             const ng = new Array(gen.length + 1).fill(0);
-            const factor = (1 << i) > 255 ? (1 << i) ^ 0x11D : (1 << i); // simplified
             let a = 1;
             for (let j = 0; j < i; j++) a = gfMul(a, 2);
             for (let j = 0; j < gen.length; j++) {
