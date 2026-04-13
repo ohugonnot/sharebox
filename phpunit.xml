@@ -9,4 +9,17 @@
             <directory>tests</directory>
         </testsuite>
     </testsuites>
+    <source>
+        <include>
+            <directory>.</directory>
+        </include>
+        <exclude>
+            <directory>vendor</directory>
+            <directory>tests</directory>
+            <directory>docker</directory>
+            <directory>docs</directory>
+            <directory>scripts</directory>
+            <directory>data</directory>
+        </exclude>
+    </source>
 </phpunit>
