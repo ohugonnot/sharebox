@@ -110,7 +110,7 @@ docker compose up -d
 | `SHAREBOX_ADMIN_PASS` | `sharebox` | Admin panel password |
 | `SHAREBOX_MEDIA_DIR` | `/media/` | Media path inside the container |
 | `SHAREBOX_TMDB_API_KEY` | *(none)* | TMDB API key for poster grid |
-| `SHAREBOX_DEMO_DATA` | `false` | Create sample media for demo |
+| `SHAREBOX_DEMO_DATA` | `false` | Create rich sample media (10s clips, dual audio/subtitles, TMDB posters) |
 | `SHAREBOX_STREAM_MAX_CONCURRENT` | `4` | Max simultaneous ffmpeg processes |
 | `SHAREBOX_STREAM_REMUX_ENABLED` | `false` | Enable remux for H.264 MKV |
 | `SHAREBOX_BANDWIDTH_QUOTA_TB` | `100` | Monthly bandwidth quota (TB) |
