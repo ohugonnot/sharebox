@@ -57,26 +57,30 @@ fi
 
 # ── Auto-share : créer un lien public vers /media si la DB est vide ────────
 # Pratique pour les démos — le dossier est partagé dès le premier lancement
-if [ ! -f /data/share.db ]; then
+if [ ! -f /data/share.db ] || [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
     SHAREBOX_AUTO_SHARE="yes"
 fi
 if [ "${SHAREBOX_AUTO_SHARE:-}" = "yes" ]; then
     php -r '
+        $mediaDir = $argv[1];
         require "/app/db.php";
         $db = get_db();
-        $c = $db->query("SELECT COUNT(*) FROM links")->fetchColumn();
-        if ($c == 0) {
-            $db->prepare("INSERT INTO links (token, path, type, name) VALUES (?, ?, ?, ?)")
-               ->execute(["browse", "$MEDIA_DIR", "directory", "ShareBox"]);
-            echo "Auto-share: /dl/browse\n";
-        }
-    ' 2>/dev/null || true
+        // Upsert: create or fix the browse link
+        $db->prepare("INSERT INTO links (token, path, type, name) VALUES (?, ?, ?, ?)
+                      ON CONFLICT(token) DO UPDATE SET path = excluded.path")
+           ->execute(["browse", $mediaDir, "directory", "ShareBox Demo"]);
+        echo "Auto-share: /dl/browse -> $mediaDir\n";
+    ' -- "$MEDIA_DIR" 2>/dev/null || true
     chown -R www-data:www-data /data
 fi
 
 # ── Demo data (optional) ────────────────────────────────────────────────────
 if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
-    /bin/sh /docker/demo-data.sh
+    /bin/sh /docker/demo-data.sh "$MEDIA_DIR"
+    # Seed TMDB posters/overviews/ratings if API key is set
+    if [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
+        php /docker/seed-tmdb.php "$MEDIA_DIR" "${SHAREBOX_TMDB_API_KEY}" || true
+    fi
 fi
 
 # ── PHP limits (streaming + large uploads) ──────────────────────────────────
