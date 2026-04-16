@@ -62,7 +62,7 @@ CSS;
 .player-card:fullscreen video,
 .player-card:-webkit-full-screen video { position:absolute; inset:0; width:100%; height:100%; max-height:none; }
 .player-card:fullscreen .player-controls,
-.player-card:-webkit-full-screen .player-controls { position:absolute; bottom:0; left:0; right:0; z-index:20; background:linear-gradient(transparent 0%, rgba(8,10,18,.4) 40%, rgba(8,10,18,.92) 100%) !important; padding-top:3rem; transition:opacity .25s; border-top:none !important; padding-left:max(1.5rem, env(safe-area-inset-left)); padding-right:max(1.5rem, env(safe-area-inset-right)); padding-bottom:max(.5rem, env(safe-area-inset-bottom)); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px); }
+.player-card:-webkit-full-screen .player-controls { position:absolute; bottom:0; left:0; right:0; z-index:20; background:linear-gradient(transparent 0%, rgba(0,0,0,.75) 100%) !important; padding-top:3rem; transition:opacity .25s; border-top:none !important; padding-left:max(1.5rem, env(safe-area-inset-left)); padding-right:max(1.5rem, env(safe-area-inset-right)); padding-bottom:max(.5rem, env(safe-area-inset-bottom)); }
 .player-card:fullscreen .player-controls .ctrl-row button,
 .player-card:-webkit-full-screen .player-controls .ctrl-row button,
 .player-card:fullscreen .player-controls .ctrl-row svg,
@@ -138,7 +138,7 @@ audio { display:block; width:100%; padding:2rem 1.5rem; background:rgba(26,29,40
 .player-card{border-radius:0;border:none;position:fixed;inset:0;z-index:10}
 .player-video-wrap{height:100vh;height:100dvh}
 video{max-height:100vh !important;height:100vh !important;max-height:100dvh !important;height:100dvh !important}
-.player-controls{position:fixed;bottom:0;left:0;right:0;z-index:20;background:linear-gradient(transparent 0%,rgba(8,10,18,.4) 40%,rgba(8,10,18,.92) 100%) !important;padding-top:2.5rem;border-top:none !important;transition:opacity .25s;padding-left:max(1.5rem,env(safe-area-inset-left));padding-right:max(1.5rem,env(safe-area-inset-right));padding-bottom:max(.5rem,env(safe-area-inset-bottom))}
+.player-controls{position:fixed;bottom:0;left:0;right:0;z-index:20;background:linear-gradient(transparent 0%,rgba(0,0,0,.75) 100%) !important;padding-top:2rem;border-top:none !important;transition:opacity .25s;padding-left:max(1.5rem,env(safe-area-inset-left));padding-right:max(1.5rem,env(safe-area-inset-right));padding-bottom:max(.5rem,env(safe-area-inset-bottom))}
 .fs-title{display:block;position:fixed;top:0;left:0;right:0;z-index:30;padding:.8rem max(1rem,env(safe-area-inset-left)) .8rem max(1rem,env(safe-area-inset-right));background:linear-gradient(rgba(8,10,18,.8) 0%,transparent 100%);transition:opacity .25s}
 .player-controls.fs-hidden{opacity:0;pointer-events:none}
 .player-card.hide-cursor .player-toolbar{opacity:0;pointer-events:none}
