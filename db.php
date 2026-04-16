@@ -41,7 +41,7 @@ function get_db(): PDO {
         $purgeFlag = sys_get_temp_dir() . '/sharebox_purge_links';
         if (!file_exists($purgeFlag) || (time() - filemtime($purgeFlag)) > 3600) {
             $db->exec("DELETE FROM links WHERE expires_at IS NOT NULL AND expires_at != '' AND expires_at < datetime('now')");
-            touch($purgeFlag);
+            @touch($purgeFlag);
         }
     }
 
