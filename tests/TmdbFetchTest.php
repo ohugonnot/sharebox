@@ -282,6 +282,66 @@ class TmdbFetchTest extends TestCase
         $db->prepare("DELETE FROM tmdb_cache WHERE cache_key = ?")->execute([$key]);
     }
 
+    // ── Iter 3 : TTL refresh folder_posters ──────────────────────────────
+
+    public function testWorkerHasTtlRefreshPhase(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        $this->assertStringContainsString(
+            'TMDB_REFRESH_DAYS',
+            $source,
+            'Worker doit utiliser une constante TMDB_REFRESH_DAYS overridable'
+        );
+        $this->assertStringContainsString(
+            'TMDB_REFRESH_BATCH',
+            $source,
+            'Worker doit utiliser TMDB_REFRESH_BATCH pour limiter le nombre par run'
+        );
+    }
+
+    public function testWorkerRefreshOnlyAffectsNonVerified(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        // La phase refresh doit cibler verified < 100 (pas les choix humains)
+        $this->assertMatchesRegularExpression(
+            '/REFRESH start.*?verified < 100/s',
+            $source,
+            'La phase refresh doit cibler uniquement les entries verified < 100'
+        );
+        // Le UPDATE doit aussi inclure verified < 100 dans le WHERE
+        $this->assertStringContainsString(
+            'WHERE path = :p AND verified < 100',
+            $source,
+            'Le UPDATE refresh doit avoir un WHERE verified < 100 (race condition guard)'
+        );
+    }
+
+    public function testWorkerRefreshUsesDirectFetchNotCache(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        // La phase refresh veut data fraîche → tmdb_fetch direct, PAS tmdb_fetch_cached
+        preg_match('/REFRESH start.*?REFRESH done/s', $source, $m);
+        $this->assertNotEmpty($m, 'La phase refresh doit exister');
+        $this->assertStringContainsString(
+            'tmdb_fetch(',
+            $m[0],
+            'refresh doit utiliser tmdb_fetch (pas le cached) pour avoir donnée fraîche'
+        );
+    }
+
+    public function testWorkerRefreshTouchesOnFailureToAvoidLoop(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        preg_match('/REFRESH start.*?REFRESH done/s', $source, $m);
+        $this->assertNotEmpty($m);
+        // Si le fetch échoue, on touche updated_at pour ne pas re-trier la même entry au prochain run
+        $this->assertStringContainsString(
+            'Touch updated_at',
+            $m[0],
+            'En cas d\'échec fetch, refresh doit touch updated_at pour avancer le curseur'
+        );
+    }
+
     public function testTmdbFetchCachedExpiredEntryNotReturned(): void
     {
         $db = get_db();
