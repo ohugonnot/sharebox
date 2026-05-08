@@ -322,7 +322,7 @@ if (isset($_GET['tmdb_search'])) {
     $searchType = $_GET['tmdb_type'] ?? 'multi';
     if (!in_array($searchType, ['multi', 'tv', 'movie', 'company'], true)) $searchType = 'multi';
     poster_log('SEARCH manual | query="' . $searchName . '" type=' . $searchType);
-    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
+    $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);  // legacy, kept for search_wikimedia_logos
     $results = [];
 
     // ── Multi-source search for studios/companies ──
@@ -330,8 +330,7 @@ if (isset($_GET['tmdb_search'])) {
         // 1. TMDB Collections (often have nice artwork for studio collections)
         $query = urlencode($searchName);
         $collUrl = "https://api.themoviedb.org/3/search/collection?api_key={$apiKey}&query={$query}&language=fr&page=1";
-        $collResp = @file_get_contents($collUrl, false, $ctx);
-        $collData = $collResp ? json_decode($collResp, true) : null;
+        $collData = tmdb_fetch($collUrl);
         if ($collData && !empty($collData['results'])) {
             foreach (array_slice($collData['results'], 0, 3) as $r) {
                 if (empty($r['poster_path'])) continue;
@@ -350,8 +349,7 @@ if (isset($_GET['tmdb_search'])) {
 
         // 2. TMDB Movies/TV (documentaries, branded content)
         $multiUrl = "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$query}&language=fr&page=1";
-        $multiResp = @file_get_contents($multiUrl, false, $ctx);
-        $multiData = $multiResp ? json_decode($multiResp, true) : null;
+        $multiData = tmdb_fetch($multiUrl);
         if ($multiData && !empty($multiData['results'])) {
             foreach (array_slice($multiData['results'], 0, 3) as $r) {
                 if (empty($r['poster_path'])) continue;
@@ -374,8 +372,7 @@ if (isset($_GET['tmdb_search'])) {
 
         // 4. TMDB Company (logos, as fallback)
         $compUrl = "https://api.themoviedb.org/3/search/company?api_key={$apiKey}&query={$query}&page=1";
-        $compResp = @file_get_contents($compUrl, false, $ctx);
-        $compData = $compResp ? json_decode($compResp, true) : null;
+        $compData = tmdb_fetch($compUrl);
         if ($compData && !empty($compData['results'])) {
             foreach (array_slice($compData['results'], 0, 2) as $r) {
                 if (empty($r['logo_path'])) continue;
@@ -398,8 +395,7 @@ if (isset($_GET['tmdb_search'])) {
         // ── Standard TMDB search (multi/tv/movie) ──
         $query = urlencode($searchName);
         $url = "https://api.themoviedb.org/3/search/{$searchType}?api_key={$apiKey}&query={$query}&language=fr&page=1";
-        $resp = @file_get_contents($url, false, $ctx);
-        $data = $resp ? json_decode($resp, true) : null;
+        $data = tmdb_fetch($url);
 
         if ($data && !empty($data['results'])) {
             foreach (array_slice($data['results'], 0, 8) as $r) {

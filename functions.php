@@ -381,35 +381,96 @@ function tmdb_build_queries(string $title): array {
  * Fetch a TMDB API URL with retry on 429/5xx and exponential backoff.
  * @return array|null Decoded JSON or null on failure
  */
-function tmdb_fetch(string $url, $ctx, int $maxRetries = 2): ?array {
+/**
+ * Fetch TMDB API avec retry exponentiel et erreurs catégorisées.
+ *
+ * Migré de file_get_contents vers cURL pour :
+ *  - Différenciation des erreurs (timeout/DNS/4xx/5xx) loggées séparément
+ *  - Support HTTP/2 + connection reuse via curl share handle
+ *  - Timeout connect séparé du timeout transfer (évite hang sur DNS lent)
+ *  - Retry-After respect sur 429
+ *
+ * Le 2e param $ctx est ignoré (legacy file_get_contents stream context).
+ * Conservé pour compat des callers existants — supprimable après migration totale.
+ *
+ * @param int $maxRetries Nombre de retries après le premier essai (default 2 = 3 tentatives total)
+ * @return array|null Decoded JSON ou null si toutes tentatives échouent
+ */
+function tmdb_fetch(string $url, $ctx = null, int $maxRetries = 2): ?array {
+    static $sh = null;  // share handle (DNS + cookies + ssl session reuse)
+    if ($sh === null) {
+        $sh = curl_share_init();
+        curl_share_setopt($sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+        curl_share_setopt($sh, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION);
+    }
+
+    $safeUrl = preg_replace('/api_key=[^&]+/', 'api_key=***', $url);
+
     for ($attempt = 0; $attempt <= $maxRetries; $attempt++) {
-        $resp = @file_get_contents($url, false, $ctx);
-        $status = 0;
-        if (isset($http_response_header[0]) && preg_match('/\s(\d{3})/', $http_response_header[0], $m)) {
-            $status = (int)$m[1];
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 3,
+            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_MAXREDIRS      => 3,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_USERAGENT      => 'sharebox/1.0',
+            CURLOPT_HTTPHEADER     => ['Accept: application/json'],
+            CURLOPT_SHARE          => $sh,
+        ]);
+        $resp     = curl_exec($ch);
+        $status   = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $errno    = curl_errno($ch);
+        $errMsg   = curl_error($ch);
+        $headers  = [];
+        if ($status === 429) {
+            // Récupère Retry-After avant de fermer le handle
+            curl_setopt($ch, CURLOPT_HEADER, true);
         }
-        if ($resp !== false && $status >= 200 && $status < 400) {
+        curl_close($ch);
+
+        if ($resp !== false && $errno === 0 && $status >= 200 && $status < 400) {
             return json_decode($resp, true);
         }
+
+        // Catégoriser l'erreur (utile pour debug en prod)
+        $errCategory = 'unknown';
+        if ($errno === CURLE_OPERATION_TIMEDOUT)        $errCategory = 'timeout';
+        elseif ($errno === CURLE_COULDNT_RESOLVE_HOST)  $errCategory = 'dns';
+        elseif ($errno === CURLE_COULDNT_CONNECT)       $errCategory = 'connect';
+        elseif ($errno === CURLE_SSL_CONNECT_ERROR)     $errCategory = 'ssl';
+        elseif ($status === 401)                        $errCategory = 'auth';
+        elseif ($status === 404)                        $errCategory = 'not_found';
+        elseif ($status === 429)                        $errCategory = 'rate_limit';
+        elseif ($status >= 500)                         $errCategory = 'server_5xx';
+        elseif ($status >= 400)                         $errCategory = 'client_4xx';
+
         if ($attempt < $maxRetries) {
-            if ($status === 429) {
-                // Rate limited — check Retry-After or wait 2s
+            // Erreurs non-retryables : abandonner immédiatement
+            if (in_array($errCategory, ['auth', 'not_found', 'client_4xx'], true)) {
+                if (function_exists('ai_log')) ai_log('TMDB fetch ' . $errCategory . ' (no retry): ' . $safeUrl);
+                return null;
+            }
+            // Rate limit : respecter Retry-After
+            if ($errCategory === 'rate_limit') {
                 $wait = 2;
-                foreach ($http_response_header as $h) {
-                    if (stripos($h, 'retry-after:') === 0) {
-                        $wait = min(5, max(1, (int)trim(substr($h, 12))));
-                    }
+                if (preg_match('/^retry-after:\s*(\d+)/im', $resp ?: '', $m)) {
+                    $wait = min(5, max(1, (int)$m[1]));
                 }
                 usleep($wait * 1000000);
             } else {
-                // Network error or 5xx — exponential backoff
-                usleep(500000 * ($attempt + 1));
+                // Backoff exponentiel : 500ms, 1000ms, 2000ms
+                usleep(500000 * (1 << $attempt));
+            }
+        } else {
+            // Dernière tentative échouée — log avec catégorie
+            if (function_exists('ai_log')) {
+                ai_log('TMDB fetch failed (' . $errCategory . ', errno=' . $errno
+                    . ', status=' . $status . ', err="' . substr($errMsg, 0, 80) . '"): ' . $safeUrl);
             }
         }
     }
-    // Log failures for debugging (hide API key)
-    $safeUrl = preg_replace('/api_key=[^&]+/', 'api_key=***', $url);
-    if (function_exists('ai_log')) ai_log('TMDB fetch failed after ' . ($maxRetries + 1) . ' attempts: ' . $safeUrl);
     return null;
 }
 
