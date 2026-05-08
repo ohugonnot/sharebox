@@ -319,6 +319,42 @@ try {
             ));
             break;
 
+        /**
+         * STREAM_EVENT — Telemetry client → serveur (fire-and-forget)
+         * POST {event, mode?, file_token?, error_code?, elapsed_ms?, extra?, csrf_token}
+         * event ∈ {start, playing, stall, fail, mode_cascade, success, seek}
+         * Écrit une ligne JSONL dans data/telemetry.log
+         */
+        case 'stream_event':
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+                http_response_code(405);
+                echo json_encode(['error' => 'POST required']);
+                exit;
+            }
+            $event = isset($input['event']) ? (string)$input['event'] : '';
+            $allowed = ['start','playing','stall','fail','mode_cascade','success','seek'];
+            if (!in_array($event, $allowed, true)) {
+                http_response_code(400);
+                echo json_encode(['error' => 'invalid event']);
+                break;
+            }
+            $payload = [
+                'ts'         => date('c'),
+                'user'       => $_SESSION['sharebox_user'] ?? '-',
+                'event'      => $event,
+                'mode'       => isset($input['mode']) ? substr((string)$input['mode'], 0, 16) : null,
+                'file_token' => isset($input['file_token']) ? substr((string)$input['file_token'], 0, 64) : null,
+                'error_code' => isset($input['error_code']) ? (int)$input['error_code'] : null,
+                'elapsed_ms' => isset($input['elapsed_ms']) ? (int)$input['elapsed_ms'] : null,
+                'extra'      => isset($input['extra']) && is_array($input['extra'])
+                                ? array_slice($input['extra'], 0, 10) : null,
+            ];
+            // Filtrer les nulls pour log compact
+            $payload = array_filter($payload, fn($v) => $v !== null);
+            telemetry_log(json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+            echo json_encode(['ok' => true]);
+            break;
+
         case 'mark_watched':
             if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
                 http_response_code(405);

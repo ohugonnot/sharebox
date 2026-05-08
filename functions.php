@@ -347,6 +347,7 @@ function sharebox_log(string $msg, string $channel = 'stream'): void {
 function stream_log(string $msg): void { sharebox_log($msg, 'stream'); }
 function poster_log(string $msg): void { sharebox_log($msg, 'poster'); }
 function app_log(string $msg): void { sharebox_log($msg, 'app'); }
+function telemetry_log(string $msg): void { sharebox_log($msg, 'telemetry'); }
 
 // ── TMDB helpers ───────────────────────────────────────────────────────────
 
