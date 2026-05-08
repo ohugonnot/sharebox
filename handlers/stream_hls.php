@@ -76,7 +76,11 @@ if ($mime && str_starts_with($mime, 'video/')) {
         }
     } elseif (is_dir($hlsDir) && !is_file($pidFile)) {
         // Dossier zombie (pas de PID file) — nettoyer
-        $zombieFiles = glob($hlsDir . '/{*,.*}', GLOB_BRACE) ?: [];
+        // Note : GLOB_BRACE n'existe pas sur Alpine/musl libc, donc on combine deux
+        // appels glob (visibles + cachés) au lieu d'utiliser '{*,.*}' avec GLOB_BRACE.
+        $visibleFiles = glob($hlsDir . '/*') ?: [];
+        $hiddenFiles  = glob($hlsDir . '/.*') ?: [];
+        $zombieFiles  = array_merge($visibleFiles, $hiddenFiles);
         $zombieFiles = array_filter($zombieFiles, fn($f) => !in_array(basename($f), ['.', '..', '.startup.lock']));
         array_map('unlink', $zombieFiles);
     }
