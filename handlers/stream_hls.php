@@ -142,17 +142,40 @@ if ($mime && str_starts_with($mime, 'video/')) {
     // Libérer le lock de démarrage
     if ($startupLock) { flock($startupLock, LOCK_UN); fclose($startupLock); }
 
-    // Attendre que le .m3u8 existe et ait au moins un segment (max 15s)
-    for ($w = 0; $w < 150; $w++) {
-        clearstatcache(true, $m3u8);
-        if (file_exists($m3u8) && filesize($m3u8) > 20) break;
+    // Attendre que le 1er segment soit produit + m3u8 mis à jour (max 30s)
+    // Poller seg0.ts plutôt que m3u8 : ffmpeg écrit le header m3u8 (>20 bytes) au
+    // démarrage avant la 1ère frame encodée, donc filesize($m3u8)>20 peut être
+    // vrai sans aucun segment réel. seg0.ts n'apparaît que quand le 1er chunk
+    // de 4s a été encodé, c'est le vrai signal de "stream prêt".
+    // 30s vs 15s : HEVC 4K + burnSub peut prendre 15-20s en cold-start sur CPU lent.
+    $seg0 = $hlsDir . '/seg0.ts';
+    for ($w = 0; $w < 300; $w++) {
+        clearstatcache(true, $seg0);
+        if (file_exists($seg0)) break;
+        // Short-circuit si ffmpeg est mort prématurément (pas la peine d'attendre 30s)
+        if ($w > 0 && $w % 20 === 0 && is_file($pidFile)) {
+            $pid = (int)file_get_contents($pidFile);
+            if ($pid > 0 && !file_exists('/proc/' . $pid)) {
+                stream_log('HLS ffmpeg died early | pid=' . $pid . ' | ' . basename($resolvedPath));
+                break;
+            }
+        }
         usleep(100000);
     }
-    if (!file_exists($m3u8) || filesize($m3u8) <= 20) {
-        stream_log('HLS timeout waiting for m3u8 | ' . basename($resolvedPath));
+    // Petit délai pour laisser ffmpeg mettre à jour le m3u8 après écriture seg0
+    if (file_exists($seg0)) {
+        for ($w = 0; $w < 20; $w++) {
+            clearstatcache(true, $m3u8);
+            if (file_exists($m3u8) && strpos(@file_get_contents($m3u8) ?: '', '#EXTINF') !== false) break;
+            usleep(50000);
+        }
+    }
+    if (!file_exists($seg0) || !file_exists($m3u8)) {
+        stream_log('HLS timeout waiting for first segment | ' . basename($resolvedPath));
         http_response_code(504);
         header('Content-Type: application/vnd.apple.mpegurl');
-        echo "#EXTM3U\n#EXT-X-ERROR:Timeout\n";
+        // Réponse m3u8 minimale valide (pas de tag custom non-standard)
+        echo "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-ENDLIST\n";
         exit;
     }
 

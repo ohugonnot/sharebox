@@ -760,6 +760,82 @@ class StreamingHandlersTest extends TestCase
         );
     }
 
+    // ── HLS handler : startup poll seg0.ts (pas juste filesize m3u8) ────
+
+    /**
+     * filesize($m3u8) > 20 trigger avant le 1er segment réel parce que ffmpeg
+     * écrit le header m3u8 (~80 bytes) au démarrage. Solution : poll seg0.ts
+     * directement, qui n'apparaît que quand un chunk a été encodé.
+     */
+    public function testHlsStartupPollsSeg0NotJustM3u8(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../handlers/stream_hls.php');
+        $this->assertStringContainsString(
+            '/seg0.ts',
+            $source,
+            'HLS startup doit poller seg0.ts pour détecter le premier vrai segment'
+        );
+        // Le check filesize > 20 sur m3u8 ne doit plus exister (signal peu fiable)
+        $this->assertStringNotContainsString(
+            'filesize($m3u8) > 20',
+            $source,
+            'HLS ne doit plus se baser sur filesize($m3u8) > 20 (header ffmpeg = faux positif)'
+        );
+    }
+
+    /**
+     * Cold-start HEVC 4K + burnSub peut prendre 15-20s. 15s d'origine était trop court.
+     * 30s = 300 × 100ms.
+     */
+    public function testHlsStartupTimeoutIs30Seconds(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../handlers/stream_hls.php');
+        $this->assertStringContainsString(
+            '$w < 300',
+            $source,
+            'Le startup wait loop doit être de 300 itérations (30s) pour HEVC 4K cold-start'
+        );
+    }
+
+    /**
+     * Si ffmpeg meurt prématurément (probe mauvais codec, fichier corrompu),
+     * inutile d'attendre 30s. Check /proc/PID périodique pour court-circuiter.
+     */
+    public function testHlsStartupShortCircuitsOnFfmpegDeath(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../handlers/stream_hls.php');
+        // Le startup wait doit checker /proc/PID périodiquement
+        preg_match('/\$w < 300.*?usleep\(100000\)/s', $source, $m);
+        $this->assertNotEmpty($m, 'Le startup wait loop doit exister');
+        $this->assertStringContainsString(
+            "file_exists('/proc/'",
+            $m[0],
+            'Le startup wait doit court-circuiter si ffmpeg meurt (check /proc/PID)'
+        );
+    }
+
+    /**
+     * Le 504 doit retourner un m3u8 syntaxiquement valide pour que les
+     * clients (Safari iOS notamment) gèrent l'erreur proprement, pas un
+     * tag custom non-standard #EXT-X-ERROR.
+     */
+    public function testHlsTimeoutResponseIsValidM3u8(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../handlers/stream_hls.php');
+        // L'ancien tag custom non-standard ne doit plus exister
+        $this->assertStringNotContainsString(
+            'EXT-X-ERROR',
+            $source,
+            'Le 504 ne doit pas utiliser le tag non-standard EXT-X-ERROR'
+        );
+        // Le timeout response doit avoir un m3u8 valide (EXT-X-ENDLIST)
+        $this->assertStringContainsString(
+            'EXT-X-ENDLIST',
+            $source,
+            'Le 504 timeout doit retourner un m3u8 valide avec EXT-X-ENDLIST'
+        );
+    }
+
     // ── TMDB handler : seasonPattern inclut saga/arc/part ───────────────
 
     public function testTmdbSeasonPatternIncludesSagaArcPart(): void
