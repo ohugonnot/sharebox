@@ -529,6 +529,13 @@ do {
     if ($propagated > 0) ai_log('PROPAGATE | ' . $propagated . ' entries inherited from parent folder');
 
     ai_log('SCAN done | matched=' . $totalFound . '/' . $totalProcessed . ' auto_verified=' . $autoVerified . ' propagated=' . $propagated);
+    tmdb_telemetry('scan_iteration', [
+        'pending'       => $pendingCount,
+        'processed'     => $totalProcessed,
+        'matched'       => $totalFound,
+        'auto_verified' => $autoVerified,
+        'propagated'    => $propagated,
+    ]);
 
 } while (true); // loop until no more pending entries
 
@@ -685,6 +692,11 @@ foreach ($gcRows as $gr) {
 }
 $db->commit();
 if ($gcRemoved > 0) ai_log('GC | removed ' . $gcRemoved . ' orphan entries');
+tmdb_telemetry('worker_done', [
+    'gc_removed'      => $gcRemoved,
+    'final_propagated' => $finalPropagated ?? 0,
+    'season_updated'  => $seasonUpdated ?? 0,
+]);
 
 // ── TTL refresh : rafraîchir les entries verified < 100 anciennes ──
 // Permet à TMDB de mettre à jour overview/rating sur les entries existantes.
@@ -742,6 +754,11 @@ if ($refreshDays > 0 && $refreshBatch > 0) {
             }
         }
         ai_log('REFRESH done | updated=' . $refreshUpdated . '/' . count($stale));
+        tmdb_telemetry('refresh_done', [
+            'candidates' => count($stale),
+            'updated'    => $refreshUpdated,
+            'days_ttl'   => $refreshDays,
+        ]);
     }
 }
 
@@ -857,4 +874,28 @@ function find_wikimedia_logo(string $studioName, $ctx): ?array {
 function ai_log(string $msg): void {
     echo '[' . date('Y-m-d H:i:s') . '] ' . $msg . "\n";
     if (function_exists('poster_log')) poster_log($msg);
+}
+
+/**
+ * Telemetry worker structurée (JSONL) — pour analyse post-mortem.
+ * Écrit dans data/tmdb-telemetry.log (rotation auto 5MB × 3 backups).
+ *
+ * Events typiques :
+ *   {event:"match", path, query, candidates:N, score:N, verified:N, ms}
+ *   {event:"miss",  path, query, attempts:N}
+ *   {event:"refresh", path, tmdb_id, success:bool, ms}
+ *   {event:"phase_done", phase, processed, matched, ms}
+ */
+function tmdb_telemetry(string $event, array $data = []): void {
+    if (!defined('STREAM_LOG') || !STREAM_LOG) return;
+    $payload = array_merge(['ts' => date('c'), 'event' => $event], $data);
+    $logFile = dirname(STREAM_LOG) . '/tmdb-telemetry.log';
+    // Rotation simple : > 5 MB → renommer en .1, .2, .3 puis truncate
+    if (@filesize($logFile) > 5 * 1024 * 1024) {
+        @rename($logFile . '.2', $logFile . '.3');
+        @rename($logFile . '.1', $logFile . '.2');
+        @rename($logFile, $logFile . '.1');
+    }
+    $line = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+    @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
 }
