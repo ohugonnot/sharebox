@@ -76,6 +76,18 @@ function get_db(): PDO {
         )
     ");
 
+    // Cache HTTP des recherches TMDB (et autres APIs externes idempotentes)
+    // key = md5 de l'URL complète (avec query params), value = JSON brut
+    // expires_at = timestamp Unix → cleanup auto à la lecture
+    $db->query("
+        CREATE TABLE IF NOT EXISTS tmdb_cache (
+            cache_key   TEXT NOT NULL PRIMARY KEY,
+            value       TEXT NOT NULL,
+            expires_at  INTEGER NOT NULL
+        )
+    ");
+    $db->query("CREATE INDEX IF NOT EXISTS idx_tmdb_cache_expires ON tmdb_cache(expires_at)");
+
     $db->query("
         CREATE TABLE IF NOT EXISTS links (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -11,6 +11,9 @@ class TmdbFetchTest extends TestCase
     public static function setUpBeforeClass(): void
     {
         require_once __DIR__ . '/../functions.php';
+        // db.php is loaded once here (cf. DatabaseTest pattern) — warnings about
+        // already-defined constants from config.php are silenced by PHPUnit.
+        require_once __DIR__ . '/../db.php';
     }
 
     // ── Source : tmdb_fetch utilise cURL et pas file_get_contents ──────
@@ -137,11 +140,12 @@ class TmdbFetchTest extends TestCase
             $matches[0],
             'Aucun @file_get_contents ne doit subsister pour les calls TMDB API'
         );
-        // tmdb_fetch doit être appelé pour les endpoints search/multi/company/collection
+        // tmdb_fetch ou tmdb_fetch_cached doit être appelé pour les endpoints search/multi/company/collection
+        $count = substr_count($source, 'tmdb_fetch_cached(') + substr_count($source, 'tmdb_fetch(');
         $this->assertGreaterThanOrEqual(
             4,
-            substr_count($source, 'tmdb_fetch('),
-            'handlers/tmdb.php doit utiliser tmdb_fetch() pour ses calls TMDB (≥4 occurrences attendues)'
+            $count,
+            'handlers/tmdb.php doit utiliser tmdb_fetch[_cached]() pour ses calls TMDB (≥4 occurrences attendues)'
         );
     }
 
@@ -170,5 +174,127 @@ class TmdbFetchTest extends TestCase
             $elapsed,
             'tmdb_fetch doit timeout en < 5s (CURLOPT_CONNECTTIMEOUT 3s + marge)'
         );
+    }
+
+    // ── Iter 2 : cache HTTP TMDB ────────────────────────────────────────
+
+    public function testTmdbCacheTableExists(): void
+    {
+        $db = get_db();
+        $row = $db->query("SELECT name FROM sqlite_master WHERE type='table' AND name='tmdb_cache'")->fetch();
+        $this->assertNotFalse($row, 'La table tmdb_cache doit exister (créée par db.php)');
+    }
+
+    public function testTmdbCacheTableHasRequiredColumns(): void
+    {
+        $db = get_db();
+        $cols = $db->query("PRAGMA table_info(tmdb_cache)")->fetchAll(PDO::FETCH_ASSOC);
+        $colNames = array_column($cols, 'name');
+        $this->assertContains('cache_key', $colNames, 'tmdb_cache.cache_key (PK) requis');
+        $this->assertContains('value', $colNames, 'tmdb_cache.value requis');
+        $this->assertContains('expires_at', $colNames, 'tmdb_cache.expires_at requis');
+    }
+
+    public function testTmdbCacheTableHasExpiresIndex(): void
+    {
+        $db = get_db();
+        $idx = $db->query("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='tmdb_cache'")->fetchAll(PDO::FETCH_COLUMN);
+        $hasExpiresIdx = false;
+        foreach ($idx as $i) if (str_contains($i, 'expires')) $hasExpiresIdx = true;
+        $this->assertTrue($hasExpiresIdx, 'Un index sur tmdb_cache.expires_at est requis pour les purges efficaces');
+    }
+
+    public function testTmdbFetchCachedExists(): void
+    {
+        $this->assertTrue(
+            function_exists('tmdb_fetch_cached'),
+            'tmdb_fetch_cached() doit être défini dans functions.php'
+        );
+    }
+
+    public function testTmdbFetchCachedBypassesCacheWhenTtlZero(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../functions.php');
+        preg_match('/function tmdb_fetch_cached\(.*?\n\}/s', $source, $m);
+        $this->assertNotEmpty($m, 'tmdb_fetch_cached doit exister');
+        // ttlSec <= 0 = bypass cache (force refresh)
+        $this->assertStringContainsString(
+            '$ttlSec <= 0',
+            $m[0],
+            'tmdb_fetch_cached doit accepter ttlSec=0 pour bypass le cache'
+        );
+    }
+
+    public function testTmdbFetchCachedHasProbabilisticGc(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../functions.php');
+        preg_match('/function tmdb_fetch_cached\(.*?\n\}/s', $source, $m);
+        $this->assertNotEmpty($m);
+        // Probabilistic GC pour éviter un cron dédié
+        $this->assertStringContainsString(
+            'mt_rand',
+            $m[0],
+            'tmdb_fetch_cached doit avoir un GC probabiliste sur cache write'
+        );
+        $this->assertStringContainsString(
+            'expires_at <',
+            $m[0],
+            'Le GC doit DELETE WHERE expires_at < now'
+        );
+    }
+
+    public function testTmdbFetchCachedFallsBackOnDbFailure(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../functions.php');
+        preg_match('/function tmdb_fetch_cached\(.*?\n\}/s', $source, $m);
+        $this->assertNotEmpty($m);
+        // Si DB indisponible → call direct sans cache (graceful degradation)
+        $this->assertStringContainsString(
+            'return tmdb_fetch($url)',
+            $m[0],
+            'tmdb_fetch_cached doit fallback sur tmdb_fetch sans cache si DB échoue'
+        );
+    }
+
+    public function testTmdbFetchCachedActuallyCaches(): void
+    {
+        $db = get_db();
+        // Insérer manuellement une entrée de cache
+        $url = 'https://example-test.invalid/cached-test';
+        $key = md5($url);
+        $payload = ['cached' => true, 'value' => 42];
+        $db->prepare("INSERT OR REPLACE INTO tmdb_cache (cache_key, value, expires_at) VALUES (?, ?, ?)")
+           ->execute([$key, json_encode($payload), time() + 3600]);
+
+        // tmdb_fetch_cached doit retourner le cache sans hitter le réseau
+        $start = microtime(true);
+        $result = tmdb_fetch_cached($url);
+        $elapsed = microtime(true) - $start;
+
+        $this->assertSame($payload, $result, 'tmdb_fetch_cached doit retourner la valeur cachée');
+        $this->assertLessThan(
+            0.1,
+            $elapsed,
+            'Cache hit doit être < 100ms (pas de call réseau)'
+        );
+
+        // Cleanup
+        $db->prepare("DELETE FROM tmdb_cache WHERE cache_key = ?")->execute([$key]);
+    }
+
+    public function testTmdbFetchCachedExpiredEntryNotReturned(): void
+    {
+        $db = get_db();
+        $url = 'https://example-test.invalid/expired-test';
+        $key = md5($url);
+        // Entrée expirée (expires_at dans le passé)
+        $db->prepare("INSERT OR REPLACE INTO tmdb_cache (cache_key, value, expires_at) VALUES (?, ?, ?)")
+           ->execute([$key, json_encode(['stale' => true]), time() - 100]);
+
+        // tmdb_fetch_cached doit ignorer l'entrée expirée → tentera un fetch (qui échouera sur invalid host)
+        $result = tmdb_fetch_cached($url, 1);  // ttl 1s
+        $this->assertNull($result, 'Entrée expirée ne doit pas être retournée');
+
+        $db->prepare("DELETE FROM tmdb_cache WHERE cache_key = ?")->execute([$key]);
     }
 }
