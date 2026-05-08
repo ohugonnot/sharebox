@@ -330,7 +330,7 @@ if (isset($_GET['tmdb_search'])) {
         // 1. TMDB Collections (often have nice artwork for studio collections)
         $query = urlencode($searchName);
         $collUrl = "https://api.themoviedb.org/3/search/collection?api_key={$apiKey}&query={$query}&language=fr&page=1";
-        $collData = tmdb_fetch($collUrl);
+        $collData = tmdb_fetch_cached($collUrl);
         if ($collData && !empty($collData['results'])) {
             foreach (array_slice($collData['results'], 0, 3) as $r) {
                 if (empty($r['poster_path'])) continue;
@@ -349,7 +349,7 @@ if (isset($_GET['tmdb_search'])) {
 
         // 2. TMDB Movies/TV (documentaries, branded content)
         $multiUrl = "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$query}&language=fr&page=1";
-        $multiData = tmdb_fetch($multiUrl);
+        $multiData = tmdb_fetch_cached($multiUrl);
         if ($multiData && !empty($multiData['results'])) {
             foreach (array_slice($multiData['results'], 0, 3) as $r) {
                 if (empty($r['poster_path'])) continue;
@@ -372,7 +372,7 @@ if (isset($_GET['tmdb_search'])) {
 
         // 4. TMDB Company (logos, as fallback)
         $compUrl = "https://api.themoviedb.org/3/search/company?api_key={$apiKey}&query={$query}&page=1";
-        $compData = tmdb_fetch($compUrl);
+        $compData = tmdb_fetch_cached($compUrl);
         if ($compData && !empty($compData['results'])) {
             foreach (array_slice($compData['results'], 0, 2) as $r) {
                 if (empty($r['logo_path'])) continue;
@@ -395,7 +395,7 @@ if (isset($_GET['tmdb_search'])) {
         // ── Standard TMDB search (multi/tv/movie) ──
         $query = urlencode($searchName);
         $url = "https://api.themoviedb.org/3/search/{$searchType}?api_key={$apiKey}&query={$query}&language=fr&page=1";
-        $data = tmdb_fetch($url);
+        $data = tmdb_fetch_cached($url);
 
         if ($data && !empty($data['results'])) {
             foreach (array_slice($data['results'], 0, 8) as $r) {

@@ -475,6 +475,66 @@ function tmdb_fetch(string $url, $ctx = null, int $maxRetries = 2): ?array {
 }
 
 /**
+ * Wrapper de tmdb_fetch avec cache SQLite (table tmdb_cache).
+ * Idempotent : 2 calls identiques en TTL → 1 seul appel HTTP réseau.
+ *
+ * Utiliser pour les endpoints search/details qui ne changent pas vite côté TMDB.
+ * NE PAS utiliser pour les endpoints write ou time-sensitive.
+ *
+ * @param int $ttlSec Durée de vie du cache en secondes (default 7 jours).
+ *                    Mettre à 0 pour bypass le cache (force refresh).
+ * @return array|null Decoded JSON ou null si echec et pas en cache.
+ */
+function tmdb_fetch_cached(string $url, int $ttlSec = 604800): ?array {
+    if ($ttlSec <= 0) return tmdb_fetch($url);
+
+    static $cacheStmt = null, $writeStmt = null;
+    try {
+        $db = get_db();
+        if ($cacheStmt === null) {
+            $cacheStmt = $db->prepare("SELECT value FROM tmdb_cache WHERE cache_key = :k AND expires_at > :now");
+            $writeStmt = $db->prepare("INSERT INTO tmdb_cache (cache_key, value, expires_at) VALUES (:k, :v, :e)
+                                       ON CONFLICT(cache_key) DO UPDATE SET value = :v, expires_at = :e");
+        }
+    } catch (Exception $e) {
+        // DB indisponible → fallback sans cache
+        return tmdb_fetch($url);
+    }
+
+    $key = md5($url);
+    $now = time();
+
+    // Lookup
+    $cacheStmt->execute([':k' => $key, ':now' => $now]);
+    $hit = $cacheStmt->fetchColumn();
+    if ($hit !== false) {
+        $decoded = json_decode($hit, true);
+        if (is_array($decoded)) return $decoded;
+    }
+
+    // Miss → fetch
+    $result = tmdb_fetch($url);
+    if ($result !== null) {
+        try {
+            $writeStmt->execute([
+                ':k' => $key,
+                ':v' => json_encode($result, JSON_UNESCAPED_UNICODE),
+                ':e' => $now + $ttlSec,
+            ]);
+            // Probabilistic GC : 1/100 cache writes purgent les entrées expirées.
+            // Évite un cron dédié et garde la table petite (< 10000 lignes typ).
+            if (mt_rand(0, 99) === 0) {
+                @$db->prepare("DELETE FROM tmdb_cache WHERE expires_at < :now")
+                    ->execute([':now' => $now]);
+            }
+        } catch (PDOException $e) {
+            // Cache write failure non-fatale
+        }
+    }
+    return $result;
+}
+
+/**
  * Cherche un titre sur TMDB et retourne TOUS les candidats (pour le pick IA).
  * @return array[] Array of {id, title, year, type, overview, poster}
  */
