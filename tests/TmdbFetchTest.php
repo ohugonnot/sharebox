@@ -282,6 +282,22 @@ class TmdbFetchTest extends TestCase
         $db->prepare("DELETE FROM tmdb_cache WHERE cache_key = ?")->execute([$key]);
     }
 
+    // ── Iter 5 : folder_type_set préserve verified >= 70 ─────────────────
+
+    public function testFolderTypeSetPreservesAutoVerified(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../handlers/tmdb.php');
+        // Extraire le bloc folder_type_set (de l'isset jusqu'au isset suivant)
+        preg_match("/isset\(\\\$_GET\['folder_type_set'\]\)(.*?)isset\(\\\$_GET\['ai_recheck'\]\)/s", $source, $m);
+        $this->assertNotEmpty($m, 'le bloc folder_type_set doit exister entre folder_type_set et ai_recheck');
+        // Le UPDATE de cascade doit préserver verified >= 70 (auto-verified bulk)
+        $this->assertStringContainsString(
+            'verified < 70',
+            $m[1],
+            'folder_type_set cascade doit préserver les entries verified >= 70 (corrections manuelles)'
+        );
+    }
+
     // ── Iter 4 : telemetry worker JSONL ──────────────────────────────────
 
     public function testWorkerHasTelemetryFunction(): void

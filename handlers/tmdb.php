@@ -493,8 +493,11 @@ if (isset($_GET['folder_type_set']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $db->prepare("INSERT INTO folder_posters (path, folder_type) VALUES (:p, :t)
                       ON CONFLICT(path) DO UPDATE SET folder_type = :t, updated_at = datetime('now')")
            ->execute([':p' => $fullPath, ':t' => $type]);
-        // Reset children posters pour re-matching (sauf choix humains verified=100)
-        $resetStmt = $db->prepare("UPDATE folder_posters SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, match_attempts = 0, updated_at = datetime('now') WHERE path LIKE :prefix AND NOT (poster_url = '__none__' AND verified = 100)");
+        // Reset children posters pour re-matching, mais préserver :
+        //  - poster_url='__none__' verified=100 (user-hidden définitif)
+        //  - verified >= 70 (auto-verified bulk OU human verified=100) — corrections manuelles préservées
+        // Avant : seul verified=100 + __none__ était préservé → on perdait les fixes verified=70-99
+        $resetStmt = $db->prepare("UPDATE folder_posters SET poster_url = NULL, tmdb_id = NULL, title = NULL, overview = NULL, verified = 0, match_attempts = 0, updated_at = datetime('now') WHERE path LIKE :prefix AND NOT (poster_url = '__none__' AND verified = 100) AND (verified IS NULL OR verified < 70)");
         $resetStmt->execute([':prefix' => $fullPath . '/%']);
         $resetCount = $resetStmt->rowCount();
         if ($resetCount > 0) poster_log('TYPE cascade | reset ' . $resetCount . ' children');
