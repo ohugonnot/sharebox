@@ -41,6 +41,30 @@ function plog(tag, msg, data) {
     var watchPath   = PLAYER_CONFIG.watchPath  || null;
     var watchCsrf   = PLAYER_CONFIG.watchCsrf  || null;
     var watchMarked = false;
+    var sessionStartedAt = Date.now();
+    var firstPlayingEmitted = false;
+
+    // ── Telemetry (fire-and-forget) ──────────────────────────────────────────
+    // Émet les événements client clés vers /share/ctrl.php?cmd=stream_event
+    // pour aggregation côté serveur (data/telemetry.log au format JSONL).
+    // Désactivé si watchCsrf absent (anonyme / non logué).
+    function sendTelemetry(event, data) {
+        if (!watchCsrf) return;
+        try {
+            var body = Object.assign({
+                event: event,
+                file_token: base + (pp || ''),
+                csrf_token: watchCsrf
+            }, data || {});
+            fetch('/share/ctrl.php?cmd=stream_event', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(body),
+                keepalive: true
+            }).catch(function(){});
+        } catch (e) {}
+    }
 
     // ── Icônes SVG ───────────────────────────────────────────────────────────
     var svgPlay   = '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
@@ -246,6 +270,8 @@ function plog(tag, msg, data) {
     function startStream(resumeAt) {
         var mode = S.confirmed || S.step;
         plog('STREAM', 'startStream mode=' + mode + ' resumeAt=' + (resumeAt || 0).toFixed(1) + ' audio=' + S.audioIdx + ' quality=' + S.quality + ' burnSub=' + S.burnSub);
+        sendTelemetry('start', {mode: mode, extra: {quality: S.quality, audio: S.audioIdx, burnSub: S.burnSub, resume: Math.round(resumeAt||0)}});
+        firstPlayingEmitted = false;
         clearStallWatchdog();
         watchMarked = false;
         // En mode natif, le navigateur gère le seek via player.currentTime (pas de &start= dans l'URL)
@@ -343,6 +369,7 @@ function plog(tag, msg, data) {
         var pos = realTime();
         var errCode = player.error ? player.error.code : 0;
         plog('ERROR', 'onFail step=' + S.step + ' confirmed=' + S.confirmed + ' errCode=' + errCode + ' pos=' + pos.toFixed(1));
+        sendTelemetry('fail', {mode: S.confirmed || S.step, error_code: errCode, extra: {pos: Math.round(pos), step: S.step, retries: S.failRetries}});
         // Erreur réseau (code 2) : retry simple sans cascader le mode
         if (errCode === 2 && S.failRetries < 3) {
             S.failRetries++;
@@ -364,8 +391,10 @@ function plog(tag, msg, data) {
         }
         // Cascade : native/remux → transcode → erreur définitive
         if (S.confirmed !== 'transcode' && (S.step === 'native' || S.step === 'remux')) {
+            var fromMode = S.step;
             S.step = S.confirmed = 'transcode';
             plog('ERROR', 'cascade → transcode');
+            sendTelemetry('mode_cascade', {mode: 'transcode', extra: {from: fromMode, error_code: errCode}});
             hint.textContent = 'Transcodage en cours...'; hint.className = 'player-hint transcoding';
             updateModeUI();
             startStream(pos);
@@ -401,6 +430,7 @@ function plog(tag, msg, data) {
             if (player.readyState < 3 && !player.paused) {
                 S.stallCount++;
                 plog('STALL', 'watchdog retry #' + S.stallCount + ' timeout=' + stallTimeout() + 'ms readyState=' + player.readyState);
+                sendTelemetry('stall', {mode: S.confirmed || S.step, elapsed_ms: stallTimeout(), extra: {retry: S.stallCount, readyState: player.readyState}});
                 hint.textContent = 'Retry #' + S.stallCount + '...'; hint.className = 'player-hint';
                 startStream(realTime());
             }
@@ -424,6 +454,10 @@ function plog(tag, msg, data) {
     player.addEventListener('waiting', function() { plog('EVENT', 'waiting | stallCount=' + S.stallCount + ' ct=' + (player.currentTime||0).toFixed(1)); clearTimeout(stableTimer); stableTimer = null; startStallWatchdog(); });
     player.addEventListener('playing', function() {
         plog('EVENT', 'playing | mode=' + (S.confirmed || S.step) + ' offset=' + S.offset.toFixed(1) + ' ct=' + (player.currentTime || 0).toFixed(1) + ' realTime=' + realTime().toFixed(1));
+        if (!firstPlayingEmitted) {
+            firstPlayingEmitted = true;
+            sendTelemetry('playing', {mode: S.confirmed || S.step, elapsed_ms: Date.now() - sessionStartedAt, extra: {pos: Math.round(realTime())}});
+        }
         unlockSize();
         Subs.resetIdx();
         clearStallWatchdog();
