@@ -282,7 +282,9 @@ if (isset($_GET['posters'])) {
             flock($lockFp, LOCK_UN);
             fclose($lockFp);
             $scriptPath = realpath(__DIR__ . '/../tools/tmdb-worker.php');
-            exec('/usr/bin/php ' . escapeshellarg($scriptPath) . ' >> ' . escapeshellarg(dirname(DB_PATH) . '/tmdb-worker.log') . ' 2>&1 &');
+            // find_php_cli() = portable Alpine/Debian (PHP_BINARY pointe sur php-fpm en contexte FPM)
+            // /usr/bin/php hardcodé silencieusement KO sur Alpine (php à /usr/local/bin/php)
+            exec(escapeshellarg(find_php_cli()) . ' ' . escapeshellarg($scriptPath) . ' >> ' . escapeshellarg(dirname(DB_PATH) . '/tmdb-worker.log') . ' 2>&1 &');
             poster_log('WORKER started by web request');
         } else {
             if ($lockFp) fclose($lockFp);
@@ -551,7 +553,8 @@ if (isset($_GET['tmdb_reload']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         // Launch worker in background to rematch
         $script = realpath(__DIR__ . '/../tools/tmdb-worker.php');
         $logFile = dirname(DB_PATH) . '/tmdb-worker.log';
-        shell_exec(sprintf('nohup /usr/bin/php %s --cron >> %s 2>&1 </dev/null &', escapeshellarg($script), escapeshellarg($logFile)));
+        // find_php_cli() pour portabilité Alpine/Debian (cf. ligne 285)
+        shell_exec(sprintf('nohup %s %s --cron >> %s 2>&1 </dev/null &', escapeshellarg(find_php_cli()), escapeshellarg($script), escapeshellarg($logFile)));
         echo json_encode(['success' => true, 'reset' => $reset]);
     } catch (PDOException $e) {
         poster_log('RELOAD error | ' . basename($resolvedPath) . ' → ' . $e->getMessage());
