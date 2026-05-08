@@ -696,6 +696,54 @@ class StreamingHandlersTest extends TestCase
         );
     }
 
+    // ── Player JS : error messages catégorisés par MediaError code ─────
+
+    public function testPlayerJsHasErrorMessageHelper(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        $this->assertStringContainsString(
+            'function errorMessage(',
+            $source,
+            'player.js doit avoir un helper errorMessage(errCode, mode)'
+        );
+    }
+
+    /**
+     * Les 4 codes MediaError doivent avoir des messages distincts pour
+     * aider l'user à comprendre la cause (pas tout "Lecture impossible").
+     * 1=ABORTED, 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED.
+     */
+    public function testPlayerJsErrorMessagesDifferByCode(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        preg_match('/function errorMessage.*?\n    \}/s', $source, $m);
+        $this->assertNotEmpty($m, 'errorMessage doit exister');
+        // Doit gérer les 4 codes
+        $this->assertStringContainsString('errCode === 1', $m[0], 'errorMessage doit traiter MEDIA_ERR_ABORTED (1)');
+        $this->assertStringContainsString('errCode === 2', $m[0], 'errorMessage doit traiter MEDIA_ERR_NETWORK (2)');
+        $this->assertStringContainsString('errCode === 3', $m[0], 'errorMessage doit traiter MEDIA_ERR_DECODE (3)');
+        $this->assertStringContainsString('errCode === 4', $m[0], 'errorMessage doit traiter MEDIA_ERR_SRC_NOT_SUPPORTED (4)');
+        // Décode en transcode = serveur, décode en native = fichier
+        $this->assertStringContainsString(
+            "mode === 'transcode'",
+            $m[0],
+            'errorMessage doit différencier erreur décode serveur vs client'
+        );
+    }
+
+    public function testPlayerJsOnFailUsesErrorMessage(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // onFail doit utiliser errorMessage() (pas un message hardcodé)
+        preg_match('/function onFail.*?^    \}/sm', $source, $m);
+        $this->assertNotEmpty($m, 'onFail doit exister');
+        $this->assertStringContainsString(
+            'errorMessage(errCode',
+            $m[0],
+            'onFail doit appeler errorMessage(errCode, mode) au lieu de hardcoder les messages'
+        );
+    }
+
     // ── Player JS : network error exhaustion → erreur définitive ───────
 
     public function testPlayerJsNetworkErrorExhaustedShowsError(): void
