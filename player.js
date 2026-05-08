@@ -363,6 +363,17 @@ function plog(tag, msg, data) {
         return 'transcode';
     }
 
+    // MediaError codes : 1=ABORTED, 2=NETWORK, 3=DECODE, 4=SRC_NOT_SUPPORTED.
+    // Messages catégorisés pour aider l'user à comprendre pourquoi ça plante.
+    function errorMessage(errCode, mode) {
+        if (errCode === 1) return 'Lecture interrompue.';
+        if (errCode === 2) return 'Erreur réseau persistante. Vérifiez votre connexion.';
+        if (errCode === 3 && mode === 'transcode') return 'Erreur de transcodage serveur — recharger la page peut aider.';
+        if (errCode === 3) return 'Format vidéo corrompu ou non décodable.';
+        if (errCode === 4 && mode === 'native') return 'Codec non supporté par votre navigateur, essai du transcodage...';
+        if (errCode === 4) return 'Source vidéo invalide ou serveur inaccessible.';
+        return 'Lecture impossible. Utilisez le bouton Télécharger.';
+    }
     function onFail() {
         if (S.hasFailed) return;
         S.hasFailed = true;
@@ -385,7 +396,7 @@ function plog(tag, msg, data) {
         }
         // Erreur réseau épuisée : erreur définitive (pas de cascade)
         if (errCode === 2) {
-            hint.textContent = 'Erreur r\u00E9seau persistante. V\u00E9rifiez votre connexion.';
+            hint.textContent = errorMessage(errCode, S.confirmed || S.step);
             hint.className = 'player-hint error';
             return;
         }
@@ -399,7 +410,7 @@ function plog(tag, msg, data) {
             updateModeUI();
             startStream(pos);
         } else {
-            hint.textContent = 'Lecture impossible. Utilisez le bouton T\u00E9l\u00E9charger.';
+            hint.textContent = errorMessage(errCode, S.confirmed || S.step);
             hint.className = 'player-hint error';
         }
     }
