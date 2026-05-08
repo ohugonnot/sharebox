@@ -8,20 +8,56 @@ use PHPUnit\Framework\TestCase;
  */
 class StreamingHandlersTest extends TestCase
 {
-    // ── Remux handler : async=2000 (modéré, pas 3000 du transcode) ────
+    // ── Remux handler : audio filter configurable + default doux ────────
 
-    public function testRemuxUsesAsyncTwoThousand(): void
+    /**
+     * Le filtre audio remux est désormais configurable via FFMPEG_REMUX_AUDIO_FILTER.
+     * Default 'aresample=async=1:min_hard_comp=0.100:first_pts=0' = resampling
+     * doux (hard correct uniquement si drift > 100ms) qui évite les glitches
+     * sur fichiers proprement timbrés. L'ancien async=2000 était trop agressif.
+     */
+    public function testRemuxAudioFilterIsConfigurable(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../functions.php');
+        $this->assertStringContainsString(
+            "defined('FFMPEG_REMUX_AUDIO_FILTER')",
+            $source,
+            'FFMPEG_REMUX_AUDIO_FILTER doit être une constante overridable'
+        );
+        $this->assertStringContainsString(
+            'aresample=async=1:min_hard_comp=0.100:first_pts=0',
+            $source,
+            'Default doit être aresample=async=1:min_hard_comp=0.100 (resync doux)'
+        );
+    }
+
+    public function testRemuxHandlerUsesConfigurableFilter(): void
     {
         $source = file_get_contents(__DIR__ . '/../handlers/stream_remux.php');
         $this->assertStringContainsString(
+            'FFMPEG_REMUX_AUDIO_FILTER',
+            $source,
+            'stream_remux.php doit utiliser la constante FFMPEG_REMUX_AUDIO_FILTER'
+        );
+        // Plus de hardcoding async=2000
+        $this->assertStringNotContainsString(
             'aresample=async=2000',
             $source,
-            'Remux doit utiliser async=2000 (corrige le drift >42ms sans sur-corriger les micro-gaps)'
+            'Remux ne doit plus avoir async=2000 hardcodé (passé en config)'
         );
-        $this->assertStringNotContainsString(
-            'async=3000',
+    }
+
+    /**
+     * -fps_mode passthrough : préserve les PTS vidéo originaux en -c:v copy.
+     * Sans ça, ffmpeg peut régénérer les PTS depuis fps → offset audio constant.
+     */
+    public function testRemuxUsesFpsModePassthrough(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../handlers/stream_remux.php');
+        $this->assertStringContainsString(
+            '-fps_mode passthrough',
             $source,
-            'async=3000 ne doit pas être utilisé en remux (réservé au transcode)'
+            'Remux doit utiliser -fps_mode passthrough pour préserver les PTS exacts'
         );
     }
 
@@ -154,20 +190,21 @@ class StreamingHandlersTest extends TestCase
     // ── Cohérence async entre remux et transcode ────────────────────────
 
     /**
-     * Invariant : remux utilise async=2000, transcode utilise async=3000.
+     * Invariant : remux utilise un async plus doux que transcode.
      * Raison : en remux (-c:v copy), les timestamps vidéo sont préservés,
-     * donc l'audio doit corriger les gaps modérés (async=2000 = ~42ms à 48kHz).
-     * En transcode, tout est reprocessé, donc resync agressive (async=3000).
+     * donc l'audio doit faire des micro-ajustements (async=1 + min_hard_comp).
+     * En transcode, tout est reprocessé, donc resync plus agressive (async=3000).
      */
     public function testAsyncValueDiffersBetweenRemuxAndTranscode(): void
     {
-        $remux = file_get_contents(__DIR__ . '/../handlers/stream_remux.php');
+        $functions = file_get_contents(__DIR__ . '/../functions.php');
         $transcode = buildFilterGraph(720, 0);
 
-        preg_match('/async=(\d+)/', $remux, $remuxMatch);
+        // Le remux async vit dans la constante FFMPEG_REMUX_AUDIO_FILTER (functions.php)
+        preg_match("/FFMPEG_REMUX_AUDIO_FILTER.*?async=(\d+)/", $functions, $remuxMatch);
         preg_match('/async=(\d+)/', $transcode, $transcodeMatch);
 
-        $this->assertNotEmpty($remuxMatch, 'Remux doit avoir un aresample async');
+        $this->assertNotEmpty($remuxMatch, 'FFMPEG_REMUX_AUDIO_FILTER doit avoir un async=');
         $this->assertNotEmpty($transcodeMatch, 'Transcode doit avoir un aresample async');
         $this->assertLessThan(
             (int)$transcodeMatch[1],
