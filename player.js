@@ -480,7 +480,7 @@ function plog(tag, msg, data) {
     // ── Module sous-titres ────────────────────────────────────────────────────
     var Subs = {
         cues: [], types: [], urls: [],
-        _div: null, _idx: 0, _gen: 0, _track: null, _trackUrl: null,
+        _div: null, _divTop: null, _idx: 0, _gen: 0, _track: null, _trackUrl: null,
         resetIdx: function() { this._idx = this.cues.length ? this._find(realTime()) : 0; },
         _find: function(t) {
             var lo = 0, hi = this.cues.length;
@@ -499,7 +499,9 @@ function plog(tag, msg, data) {
                 var st = c.start - S.offset, en = c.end - S.offset;
                 if (en <= 0) continue;
                 if (st < 0) st = 0;
-                lines.push(this._fmtVtt(st) + ' --> ' + this._fmtVtt(en));
+                // Préserve la position pour iOS native track : line:10% = top, default bottom
+                var lineSetting = c.pos === 'top' ? ' line:10%' : '';
+                lines.push(this._fmtVtt(st) + ' --> ' + this._fmtVtt(en) + lineSetting);
                 lines.push(c.text);
                 lines.push('');
             }
@@ -517,22 +519,37 @@ function plog(tag, msg, data) {
             var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
             return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (sec < 10 ? '0' : '') + sec.toFixed(3);
         },
-        _lastTxt: '',
-        render: function() {
-            if (!this._div) return;
-            var t = realTime(), txt = '';
-            if (this.cues.length) {
-                while (this._idx < this.cues.length && this.cues[this._idx].end <= t) this._idx++;
-                if (this._idx < this.cues.length && this.cues[this._idx].start <= t) txt = this.cues[this._idx].text;
-            }
-            if (txt === this._lastTxt) return;
-            this._lastTxt = txt;
-            // Strip unknown tags, keep only b/i/u/em/strong/s
+        _lastTxt: '', _lastTopTxt: '',
+        // Convertit un texte de cue en span HTML safe (sanitize tags + escape entities)
+        _renderCueHtml: function(txt) {
+            if (!txt) return '';
             var safe = txt.replace(/<(\/?(b|i|u|em|strong|s))\s*>/gi, '\x00$1\x01')
                           .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
                           .replace(/\x00/g,'<').replace(/\x01/g,'>');
-            var html = txt ? '<span style="background:rgba(0,0,0,.78);color:#fff;padding:.2em .6em;border-radius:4px;line-height:1.4;display:inline-block;max-width:100%;word-break:break-word;white-space:pre-line">' + safe + '</span>' : '';
-            this._div.innerHTML = html;
+            return '<span style="background:rgba(0,0,0,.78);color:#fff;padding:.2em .6em;border-radius:4px;line-height:1.4;display:inline-block;max-width:100%;word-break:break-word;white-space:pre-line">' + safe + '</span>';
+        },
+        render: function() {
+            if (!this._div) return;
+            var t = realTime(), bottomTxt = '', topTxt = '';
+            if (this.cues.length) {
+                while (this._idx < this.cues.length && this.cues[this._idx].end <= t) this._idx++;
+                // Cherche tous les cues actifs à t (peut y en avoir plusieurs : sign au top + dialogue au bottom)
+                for (var i = this._idx; i < this.cues.length; i++) {
+                    var c = this.cues[i];
+                    if (c.start > t) break;
+                    if (c.end <= t) continue;
+                    if (c.pos === 'top') topTxt = topTxt ? topTxt + '\n' + c.text : c.text;
+                    else                 bottomTxt = bottomTxt ? bottomTxt + '\n' + c.text : c.text;
+                }
+            }
+            if (bottomTxt !== this._lastTxt) {
+                this._lastTxt = bottomTxt;
+                this._div.innerHTML = this._renderCueHtml(bottomTxt);
+            }
+            if (this._divTop && topTxt !== this._lastTopTxt) {
+                this._lastTopTxt = topTxt;
+                this._divTop.innerHTML = this._renderCueHtml(topTxt);
+            }
         },
         load: function(idx) {
             plog('SUBS', 'load idx=' + idx + ' type=' + (this.types[idx]||'off') + ' wasBurning=' + (S.burnSub >= 0));
@@ -585,6 +602,10 @@ function plog(tag, msg, data) {
             this._div = document.createElement('div');
             this._div.className = 'sub-overlay';
             player.parentNode.appendChild(this._div);
+            // Overlay top : pour les cues VTT avec line:N% < 50% (anime signs, on-screen text)
+            this._divTop = document.createElement('div');
+            this._divTop.className = 'sub-overlay sub-overlay-top';
+            player.parentNode.appendChild(this._divTop);
             var self = this;
             function pos() {
                 var wr = player.parentNode.getBoundingClientRect(), vr = player.getBoundingClientRect();
@@ -596,6 +617,10 @@ function plog(tag, msg, data) {
                 }
                 self._div.style.bottom    = (below + barH + ch * 0.08) + 'px';
                 self._div.style.fontSize  = Math.max(13, Math.round(vr.width * 0.025)) + 'px';
+                // Overlay top : positionné au-dessus de la zone vidéo (pas du parent)
+                var above = vr.top - wr.top;
+                self._divTop.style.top      = (above + barH + ch * 0.08) + 'px';
+                self._divTop.style.fontSize = self._div.style.fontSize;
             }
             pos();
             player.addEventListener('loadedmetadata', pos);
@@ -621,6 +646,16 @@ function plog(tag, msg, data) {
         var p = s.trim().split(':');
         return p.length === 3 ? +p[0]*3600 + +p[1]*60 + parseFloat(p[2]) : +p[0]*60 + parseFloat(p[1]);
     }
+    // Extrait line:N% du timing string. WebVTT spec : line=0..100%
+    // (0=top, 100=bottom). Default ≈100% (bottom). On retourne null si absent
+    // pour distinguer "explicite=bottom" et "non spécifié".
+    function parseVttLine(timingExtras) {
+        var m = timingExtras.match(/\bline:(-?\d+(?:\.\d+)?)%/);
+        if (m) return parseFloat(m[1]);
+        // line:N (sans %) = ligne en valeur entière depuis le bas (-1 = dernière)
+        // On le mappe pas pour rester simple : null = default bottom
+        return null;
+    }
     function parseVTT(text) {
         var cues = [], blocks = text.replace(/\r\n|\r/g,'\n').split(/\n\n+/);
         for (var b = 0; b < blocks.length; b++) {
@@ -628,8 +663,21 @@ function plog(tag, msg, data) {
             for (var l = 0; l < lines.length; l++) { if (lines[l].indexOf(' --> ') !== -1) { ti = l; break; } }
             if (ti < 0) continue;
             var parts = lines[ti].split(' --> ');
+            var endAndExtras = parts[1] || '';
+            var spaceIdx = endAndExtras.indexOf(' ');
+            var endStr = spaceIdx >= 0 ? endAndExtras.slice(0, spaceIdx) : endAndExtras;
+            var extras = spaceIdx >= 0 ? endAndExtras.slice(spaceIdx) : '';
             var txt = lines.slice(ti+1).join('\n').trim();
-            if (txt) cues.push({ start: vttTime(parts[0]), end: vttTime(parts[1].split(' ')[0]), text: txt });
+            if (txt) {
+                var line = parseVttLine(extras);
+                cues.push({
+                    start: vttTime(parts[0]),
+                    end: vttTime(endStr),
+                    text: txt,
+                    // top/bottom suffit pour 95% des cas (anime signs au top, dialogue au bottom)
+                    pos: (line !== null && line < 50) ? 'top' : 'bottom'
+                });
+            }
         }
         return cues;
     }
