@@ -755,6 +755,84 @@ class StreamingHandlersTest extends TestCase
         );
     }
 
+    // ── Player JS : VTT positioning (line: → top/bottom) ────────────────
+
+    public function testPlayerJsParsesVttLineSetting(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        $this->assertStringContainsString(
+            'function parseVttLine',
+            $source,
+            'parseVTT doit avoir un helper parseVttLine pour extraire line:N%'
+        );
+        // Le parser doit matcher line:N% (avec %)
+        $this->assertMatchesRegularExpression(
+            '/\\\\bline:.*%/',
+            $source,
+            'parseVttLine doit matcher line:N% via regex'
+        );
+    }
+
+    public function testPlayerJsCueHasPosField(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // Chaque cue parsé doit avoir un pos: 'top' | 'bottom'
+        $this->assertMatchesRegularExpression(
+            "/pos:.*'top'.*'bottom'/s",
+            $source,
+            'parseVTT doit assigner pos: top|bottom selon line:N%'
+        );
+    }
+
+    public function testPlayerJsHasTopOverlay(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // Subs doit avoir _divTop pour les cues top
+        $this->assertStringContainsString(
+            '_divTop',
+            $source,
+            'Subs doit avoir _divTop pour les cues VTT positionnés en haut'
+        );
+        // CSS class dédiée
+        $css = file_get_contents(__DIR__ . '/../player.css');
+        $this->assertStringContainsString(
+            'sub-overlay-top',
+            $css,
+            'player.css doit avoir une classe sub-overlay-top'
+        );
+    }
+
+    public function testPlayerJsRendersMultipleConcurrentCues(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // Le render doit looper sur les cues actifs (pas juste this._idx)
+        // pour permettre top + bottom simultanés
+        preg_match('/render:\s*function\(\)\s*\{(.*?)\n        \},/s', $source, $m);
+        $this->assertNotEmpty($m, 'Subs.render doit exister');
+        $this->assertStringContainsString(
+            'topTxt',
+            $m[1],
+            'Subs.render doit séparer topTxt et bottomTxt'
+        );
+        $this->assertStringContainsString(
+            'bottomTxt',
+            $m[1],
+            'Subs.render doit séparer topTxt et bottomTxt'
+        );
+    }
+
+    public function testPlayerJsIosTrackPreservesLinePosition(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../player.js');
+        // Le _syncTrack iOS doit ajouter line:10% pour les cues top
+        // (sinon iOS native fullscreen affiche tout en bas)
+        $this->assertStringContainsString(
+            "line:10%",
+            $source,
+            '_syncTrack iOS doit préserver line:10% pour les cues top'
+        );
+    }
+
     // ── Player JS : mode badge reset filter en natif ────────────────────
 
     public function testPlayerJsModeBadgeResetsFilterOnNative(): void
