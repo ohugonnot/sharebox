@@ -686,6 +686,65 @@ foreach ($gcRows as $gr) {
 $db->commit();
 if ($gcRemoved > 0) ai_log('GC | removed ' . $gcRemoved . ' orphan entries');
 
+// ── TTL refresh : rafraîchir les entries verified < 100 anciennes ──
+// Permet à TMDB de mettre à jour overview/rating sur les entries existantes.
+// On limite à un petit batch par run pour ne pas spammer l'API.
+// Les choix humains (verified=100) sont sacrés : jamais touchés.
+$refreshDays   = defined('TMDB_REFRESH_DAYS')   ? (int)TMDB_REFRESH_DAYS   : 7;
+$refreshBatch  = defined('TMDB_REFRESH_BATCH')  ? (int)TMDB_REFRESH_BATCH  : 5;
+$refreshUpdated = 0;
+if ($refreshDays > 0 && $refreshBatch > 0) {
+    $cutoff = date('Y-m-d H:i:s', time() - $refreshDays * 86400);
+    $staleRows = $dbRead->prepare("
+        SELECT path, tmdb_id, tmdb_type
+        FROM folder_posters
+        WHERE poster_url IS NOT NULL
+          AND poster_url != '__none__'
+          AND verified < 100
+          AND tmdb_id IS NOT NULL
+          AND tmdb_type IN ('tv', 'movie')
+          AND updated_at < :cutoff
+        ORDER BY updated_at ASC
+        LIMIT :limit
+    ");
+    $staleRows->bindValue(':cutoff', $cutoff);
+    $staleRows->bindValue(':limit', $refreshBatch, PDO::PARAM_INT);
+    $staleRows->execute();
+    $stale = $staleRows->fetchAll();
+    if (!empty($stale)) {
+        ai_log('REFRESH start | candidates=' . count($stale) . ' cutoff=' . $cutoff);
+        foreach ($stale as $sr) {
+            $endpoint = $sr['tmdb_type'] === 'tv' ? 'tv' : 'movie';
+            $url = "https://api.themoviedb.org/3/{$endpoint}/{$sr['tmdb_id']}?api_key={$TMDB_API_KEY}&language=fr";
+            // Pas de cache : on veut la donnée fraîche depuis TMDB
+            $data = tmdb_fetch($url);
+            if (!$data) {
+                // Touch updated_at quand même pour ne pas re-trier la même entry à chaque run
+                @$db->prepare("UPDATE folder_posters SET updated_at = datetime('now') WHERE path = :p")->execute([':p' => $sr['path']]);
+                continue;
+            }
+            $newOverview = $data['overview'] ?? null;
+            $newRating   = isset($data['vote_average']) ? round((float)$data['vote_average'], 1) : null;
+            $newPoster   = !empty($data['poster_path']) ? 'https://image.tmdb.org/t/p/w300' . $data['poster_path'] : null;
+            try {
+                // N'écrase poster que si TMDB en fournit un, et seulement pour entries non-verified
+                $sql = "UPDATE folder_posters SET overview = :o, tmdb_rating = :r, updated_at = datetime('now')";
+                $params = [':o' => $newOverview, ':r' => $newRating, ':p' => $sr['path']];
+                if ($newPoster !== null) {
+                    $sql .= ", poster_url = :u";
+                    $params[':u'] = $newPoster;
+                }
+                $sql .= " WHERE path = :p AND verified < 100";
+                $db->prepare($sql)->execute($params);
+                $refreshUpdated++;
+            } catch (PDOException $e) {
+                ai_log('REFRESH error | ' . $sr['path'] . ' → ' . $e->getMessage());
+            }
+        }
+        ai_log('REFRESH done | updated=' . $refreshUpdated . '/' . count($stale));
+    }
+}
+
 // ── Checkpoint WAL + backup DB after scan ──
 // Ensures the backup captures the post-scan state, not the pre-scan NULL state.
 try { $db->exec('PRAGMA wal_checkpoint(PASSIVE)'); } catch (PDOException $e) { ai_log('CHECKPOINT skip: ' . $e->getMessage()); }
