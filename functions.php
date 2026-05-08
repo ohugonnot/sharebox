@@ -31,6 +31,15 @@ defined('FFMPEG_TUNE')             || define('FFMPEG_TUNE', '');              //
 defined('FFMPEG_BFRAMES')          || define('FFMPEG_BFRAMES', 0);           // 0 = defaults x264, sinon 2-3 (qualité++ mais encode plus lent)
 defined('FFMPEG_REFS')             || define('FFMPEG_REFS', 0);              // 0 = defaults x264, sinon 3-4 (idem)
 
+// Remux audio sync : -af appliqué à la piste audio en mode -c:v copy.
+// Defaults : async=1 + min_hard_comp=0.100 = resampling très doux, hard
+// correct uniquement quand la dérive dépasse 100ms. L'ancien async=2000
+// était trop agressif et créait des micro-glitches audibles sur fichiers
+// proprement timbrés (drift naturel < 5ms compensé en stretch/squeeze).
+// Override possible : 'aresample=async=2000:first_pts=0' pour anciens fichiers
+// avec drift important, ou '' pour désactiver tout resampling.
+defined('FFMPEG_REMUX_AUDIO_FILTER') || define('FFMPEG_REMUX_AUDIO_FILTER', 'aresample=async=1:min_hard_comp=0.100:first_pts=0');
+
 // FFmpeg HDR tonemapping — CPU-intensif, nécessite plus de threads (overridable via config.php)
 defined('FFMPEG_HDR_THREADS')      || define('FFMPEG_HDR_THREADS', 6);       // tonemapping float32 gourmand (75% des 8 cores)
 defined('FFMPEG_HDR_CRF')          || define('FFMPEG_HDR_CRF', 22);         // aligné avec SDR (le tonemapping domine le CPU, pas l'encodage)

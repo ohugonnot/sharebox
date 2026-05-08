@@ -16,11 +16,20 @@ header('Accept-Ranges: none');
 $logFile = ffmpeg_log_path();
 $hasAudio = hasAudioTrack($db, $resolvedPath);
 stream_log('REMUX start | audio=' . $audioTrack . ' hasAudio=' . ($hasAudio ? 'yes' : 'no') . ' start=' . $startSec . ' | ' . basename($resolvedPath));
+// Audio sync : filter overridable via FFMPEG_REMUX_AUDIO_FILTER.
+// Default 'aresample=async=1:min_hard_comp=0.100:first_pts=0' (resync doux,
+// hard correct seulement >100ms drift) — ancien default 'async=2000' créait
+// des glitches audibles sur fichiers proprement timbrés.
+$afFilter = FFMPEG_REMUX_AUDIO_FILTER;
+$audioFilterArg = $afFilter !== '' ? ' -af "' . $afFilter . '"' : '';
 $audioArgs = $hasAudio
-    ? ($audioMap . ' -c:a aac -ac 2 -b:a 192k -af "aresample=async=2000:first_pts=0"')
+    ? ($audioMap . ' -c:a aac -ac ' . FFMPEG_AUDIO_CHANNELS . ' -b:a ' . FFMPEG_AUDIO_BITRATE . $audioFilterArg)
     : ' -an';
+// -fps_mode passthrough : préserve les PTS vidéo originaux exacts (-c:v copy).
+// Sans ça, ffmpeg peut générer des PTS via fps qui dérivent des originaux et
+// créent un offset audio constant.
 $cmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
-    . $audioArgs . ' -dn -c:v copy'
+    . $audioArgs . ' -dn -c:v copy -fps_mode passthrough'
     . buildFmp4MuxerArgs()
     . ' -f mp4 -y pipe:1 -loglevel error 2>>' . escapeshellarg($logFile);
 [$slotFp, $queued] = acquireStreamSlot();
