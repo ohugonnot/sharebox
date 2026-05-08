@@ -282,6 +282,83 @@ class TmdbFetchTest extends TestCase
         $db->prepare("DELETE FROM tmdb_cache WHERE cache_key = ?")->execute([$key]);
     }
 
+    // ── Iter 4 : telemetry worker JSONL ──────────────────────────────────
+
+    public function testWorkerHasTelemetryFunction(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        $this->assertStringContainsString(
+            'function tmdb_telemetry(',
+            $source,
+            'Worker doit définir tmdb_telemetry() pour logger en JSONL'
+        );
+    }
+
+    public function testWorkerTelemetryWritesJsonl(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        preg_match('/function tmdb_telemetry\(.*?\n\}/s', $source, $m);
+        $this->assertNotEmpty($m, 'tmdb_telemetry doit exister');
+        $this->assertStringContainsString(
+            'json_encode',
+            $m[0],
+            'tmdb_telemetry doit utiliser json_encode (format JSONL)'
+        );
+        $this->assertStringContainsString(
+            'tmdb-telemetry.log',
+            $m[0],
+            'tmdb_telemetry doit écrire dans data/tmdb-telemetry.log'
+        );
+        $this->assertStringContainsString(
+            'FILE_APPEND',
+            $m[0],
+            'tmdb_telemetry doit ouvrir en append (JSONL)'
+        );
+    }
+
+    public function testWorkerTelemetryHasRotation(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        preg_match('/function tmdb_telemetry\(.*?\n\}/s', $source, $m);
+        $this->assertNotEmpty($m);
+        // Rotation sur 5MB
+        $this->assertStringContainsString(
+            '5 * 1024 * 1024',
+            $m[0],
+            'tmdb_telemetry doit rotater à 5 MB'
+        );
+    }
+
+    public function testWorkerEmitsScanIterationEvent(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        $this->assertStringContainsString(
+            "tmdb_telemetry('scan_iteration'",
+            $source,
+            'Worker doit émettre scan_iteration en fin de chaque pass'
+        );
+    }
+
+    public function testWorkerEmitsRefreshDoneEvent(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        $this->assertStringContainsString(
+            "tmdb_telemetry('refresh_done'",
+            $source,
+            'Worker doit émettre refresh_done après la phase TTL refresh'
+        );
+    }
+
+    public function testWorkerEmitsWorkerDoneEvent(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
+        $this->assertStringContainsString(
+            "tmdb_telemetry('worker_done'",
+            $source,
+            'Worker doit émettre worker_done à la fin du run'
+        );
+    }
+
     // ── Iter 3 : TTL refresh folder_posters ──────────────────────────────
 
     public function testWorkerHasTtlRefreshPhase(): void
