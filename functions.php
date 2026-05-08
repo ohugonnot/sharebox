@@ -352,6 +352,23 @@ function sharebox_log(string $msg, string $channel = 'stream'): void {
     @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
 }
 
+/**
+ * Trouve le binaire PHP CLI portable.
+ * PHP_BINARY pointe vers php-fpm en contexte FPM → inutilisable pour exec().
+ * Cherche dans l'ordre : 1) constante PHP_CLI_BINARY override, 2) php à côté
+ * de PHP_BINARY (cas typique : /usr/local/sbin/php-fpm + /usr/local/bin/php),
+ * 3) fallback sur PATH ('php' tout court).
+ */
+function find_php_cli(): string {
+    if (defined('PHP_CLI_BINARY') && PHP_CLI_BINARY) return PHP_CLI_BINARY;
+    // PHP_BINARY peut être /usr/local/sbin/php-fpm ; on regarde /usr/local/bin/php aussi
+    $binDir = dirname(PHP_BINARY);
+    foreach ([$binDir . '/php', dirname($binDir) . '/bin/php', '/usr/local/bin/php', '/usr/bin/php'] as $candidate) {
+        if (is_executable($candidate)) return $candidate;
+    }
+    return 'php';  // fallback sur PATH
+}
+
 // Aliases pour compatibilité et lisibilité
 function stream_log(string $msg): void { sharebox_log($msg, 'stream'); }
 function poster_log(string $msg): void { sharebox_log($msg, 'poster'); }
