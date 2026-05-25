@@ -115,7 +115,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 19; // bump when adding migrations
+    $targetVersion = 20; // bump when adding migrations
     if ($version >= $targetVersion) return $db;
 
     if ($version < 1) {
@@ -344,6 +344,25 @@ function get_db(): PDO {
         // v19 : index composite pour accélérer la requête pending du worker
         $db->exec("CREATE INDEX IF NOT EXISTS idx_fp_pending ON folder_posters(poster_url, match_attempts)");
         $db->query('PRAGMA user_version = 19');
+    }
+
+    /** @phpstan-ignore smaller.alwaysTrue */
+    if ($version < 20) {
+        // v20 : fix DEFAULT 'admin' → DEFAULT 'user' on users.role (SQLite can't ALTER COLUMN)
+        $db->exec("ALTER TABLE users RENAME TO users_v19");
+        $db->exec("
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                private INTEGER NOT NULL DEFAULT 0
+            )
+        ");
+        $db->exec("INSERT INTO users SELECT id, username, password_hash, role, created_at, private FROM users_v19");
+        $db->exec("DROP TABLE users_v19");
+        $db->query('PRAGMA user_version = 20');
     }
 
     /** @phpstan-ignore smaller.alwaysTrue */

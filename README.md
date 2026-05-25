@@ -84,6 +84,8 @@ No CONTRIBUTING.md, no issue templates. Just open a PR or an issue, keep it simp
 
 ## Installation
 
+> **Detailed guides** for Raspberry Pi, Synology NAS, Unraid, and more: see **[docs/INSTALL.md](docs/INSTALL.md)**
+
 ### Docker (recommended)
 
 Edit `docker-compose.yml`:

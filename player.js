@@ -481,7 +481,7 @@ function plog(tag, msg, data) {
             S.videoWidthTimer = setTimeout(function() {
                 if (player.videoWidth === 0) onFail();
                 else { S.confirmed = mode; hint.textContent = ''; updateModeUI(); }
-            }, mode === 'native' ? 2000 : 1500);
+            }, mode === 'native' ? 4000 : 3000);
             return;
         }
         hint.textContent = '';
@@ -563,10 +563,11 @@ function plog(tag, msg, data) {
             }
         },
         load: function(idx) {
+            this._emptyRetries = 0;
             plog('SUBS', 'load idx=' + idx + ' type=' + (this.types[idx]||'off') + ' wasBurning=' + (S.burnSub >= 0));
             var gen = ++this._gen;
             var wasBurning = S.burnSub >= 0, pos = realTime();
-            this.cues = []; this._idx = 0; this._emptyRetries = 0; S.burnSub = -1;
+            this.cues = []; this._idx = 0; S.burnSub = -1;
             if (this._div) this._div.innerHTML = '';
             this._syncTrack();
             if (idx >= 0 && this.types[idx] === 'image') {
@@ -722,6 +723,7 @@ function plog(tag, msg, data) {
         } else {
             var debounceMs = (S.confirmed === 'transcode') ? 600 : 300;
             S.seekDebounce = setTimeout(function() {
+                if (player.paused) { S.seekPending = false; return; }
                 S.failRetries = 0; startStream(t); S.seekPending = false;
                 hint.textContent = 'Chargement \u00E0 ' + fmtTime(t) + '...'; hint.className = 'player-hint';
                 // Correction rétroactive : le coarse seek atterrit sur keyframe K ≤ t.
@@ -1511,6 +1513,7 @@ function plog(tag, msg, data) {
         clearTimeout(S.fsHideTimer);
         clearTimeout(S.seekDebounce);
         if (Subs._ro) Subs._ro.disconnect();
+        if (Subs._trackUrl) { URL.revokeObjectURL(Subs._trackUrl); Subs._trackUrl = null; }
         player.pause();
         player.removeAttribute('src');
         player.load();

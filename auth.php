@@ -91,7 +91,14 @@ function check_rate_limit(string $ip): bool {
     $file = sys_get_temp_dir() . '/sharebox_login_' . md5($ip);
     if (!file_exists($file)) return true;
 
-    $data = json_decode(file_get_contents($file), true);
+    $fh = fopen($file, 'r');
+    if (!$fh) return true;
+    flock($fh, LOCK_SH);
+    $raw = stream_get_contents($fh);
+    flock($fh, LOCK_UN);
+    fclose($fh);
+
+    $data = json_decode($raw, true);
     if (!$data) return true;
 
     // Reset after 15 minutes
@@ -107,12 +114,20 @@ function record_failed_attempt(string $ip): void {
     $file = sys_get_temp_dir() . '/sharebox_login_' . md5($ip);
     $data = ['count' => 1, 'first' => time()];
 
-    if (file_exists($file)) {
-        $data = json_decode(file_get_contents($file), true) ?: $data;
+    $fh = fopen($file, 'c+');
+    if (!$fh) return;
+    flock($fh, LOCK_EX);
+    $raw = stream_get_contents($fh);
+    $existing = json_decode($raw, true);
+    if ($existing) {
+        $data = $existing;
         $data['count']++;
     }
-
-    file_put_contents($file, json_encode($data));
+    ftruncate($fh, 0);
+    rewind($fh);
+    fwrite($fh, json_encode($data));
+    flock($fh, LOCK_UN);
+    fclose($fh);
 }
 
 function clear_rate_limit(string $ip): void {

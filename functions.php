@@ -435,17 +435,16 @@ function tmdb_fetch(string $url, $ctx = null, int $maxRetries = 2): ?array {
             CURLOPT_USERAGENT      => 'sharebox/1.0',
             CURLOPT_HTTPHEADER     => ['Accept: application/json'],
             CURLOPT_SHARE          => $sh,
+            CURLOPT_HEADER         => true,
         ]);
-        $resp     = curl_exec($ch);
+        $raw      = curl_exec($ch);
         $status   = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $errno    = curl_errno($ch);
         $errMsg   = curl_error($ch);
-        $headers  = [];
-        if ($status === 429) {
-            // Récupère Retry-After avant de fermer le handle
-            curl_setopt($ch, CURLOPT_HEADER, true);
-        }
+        $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         curl_close($ch);
+        $headers = $raw !== false ? substr($raw, 0, $headerSize) : '';
+        $resp    = $raw !== false ? substr($raw, $headerSize)    : false;
 
         if ($resp !== false && $errno === 0 && $status >= 200 && $status < 400) {
             return json_decode($resp, true);
@@ -472,7 +471,7 @@ function tmdb_fetch(string $url, $ctx = null, int $maxRetries = 2): ?array {
             // Rate limit : respecter Retry-After
             if ($errCategory === 'rate_limit') {
                 $wait = 2;
-                if (preg_match('/^retry-after:\s*(\d+)/im', $resp ?: '', $m)) {
+                if (preg_match('/^retry-after:\s*(\d+)/im', $headers, $m)) {
                     $wait = min(5, max(1, (int)$m[1]));
                 }
                 usleep($wait * 1000000);

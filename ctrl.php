@@ -213,7 +213,7 @@ try {
             $linkRow = $fetchLink->fetch();
 
             if (($_SESSION['sharebox_role'] ?? '') !== 'admin') {
-                if ($linkRow && $linkRow['created_by'] !== null && $linkRow['created_by'] !== ($_SESSION['sharebox_user'] ?? '')) {
+                if (!$linkRow || $linkRow['created_by'] === null || $linkRow['created_by'] !== ($_SESSION['sharebox_user'] ?? '')) {
                     http_response_code(403);
                     echo json_encode(['error' => 'Vous ne pouvez supprimer que vos propres liens']);
                     exit;
@@ -371,7 +371,13 @@ try {
                 echo json_encode(['error' => 'missing params']);
                 break;
             }
-            if (!file_exists($path)) {
+            $realPath = realpath($path);
+            if (!$realPath || !is_path_within($realPath, BASE_PATH)) {
+                http_response_code(404);
+                echo json_encode(['error' => 'file not found']);
+                break;
+            }
+            if (!file_exists($realPath)) {
                 http_response_code(404);
                 echo json_encode(['error' => 'file not found']);
                 break;
@@ -381,7 +387,7 @@ try {
                 INSERT INTO watch_history (user, path, watched_at, duration_sec)
                 VALUES (:u, :p, datetime('now'), :d)
                 ON CONFLICT(user, path) DO UPDATE SET watched_at = datetime('now'), duration_sec = :d
-            ")->execute([':u' => $currentUser, ':p' => $path, ':d' => $duration]);
+            ")->execute([':u' => $currentUser, ':p' => $realPath, ':d' => $duration]);
             echo json_encode(['ok' => true]);
             break;
 

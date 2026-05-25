@@ -32,7 +32,8 @@ if ($action !== '') {
     $adminOnlyActions = ['list_users','create_user','update_user','delete_user',
                          'restart_rtorrent','stop_rtorrent','tmdb_status','tmdb_scan',
                          'purge_expired','recent_activity','activity_events',
-                         'ai_scan_launch','ai_scan_status','ai_scan_log'];
+                         'ai_scan_launch','ai_scan_status','ai_scan_log',
+                         'tmdb_scan_log'];
     if (in_array($action, $adminOnlyActions, true) && !$isAdmin) {
         http_response_code(403);
         echo json_encode(['error' => 'Accès réservé aux administrateurs.']);

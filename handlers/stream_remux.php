@@ -21,7 +21,7 @@ stream_log('REMUX start | audio=' . $audioTrack . ' hasAudio=' . ($hasAudio ? 'y
 // hard correct seulement >100ms drift) — ancien default 'async=2000' créait
 // des glitches audibles sur fichiers proprement timbrés.
 $afFilter = FFMPEG_REMUX_AUDIO_FILTER;
-$audioFilterArg = $afFilter !== '' ? ' -af "' . $afFilter . '"' : '';
+$audioFilterArg = $afFilter !== '' ? ' -af ' . escapeshellarg($afFilter) : '';
 $audioArgs = $hasAudio
     ? ($audioMap . ' -c:a aac -ac ' . FFMPEG_AUDIO_CHANNELS . ' -b:a ' . FFMPEG_AUDIO_BITRATE . $audioFilterArg)
     : ' -an';

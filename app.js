@@ -18,6 +18,15 @@ const DUREES_EXPIRATION = [
 // Token CSRF pour les requêtes POST
 const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
 
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // Au chargement de la page
 document.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
@@ -334,6 +343,7 @@ async function creerLienSheet(path, password, expiresStr, sheet, maxDownloads = 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path, password: password || '', expires, max_downloads: maxDownloads, csrf_token: CSRF_TOKEN }),
         });
+        if (!resp.ok) { alert('Erreur HTTP ' + resp.status); if (createBtn) createBtn.disabled = false; return; }
         const data = await resp.json();
         if (data.error) { alert('Erreur : ' + data.error); if (createBtn) createBtn.disabled = false; return; }
 
@@ -410,6 +420,7 @@ async function creerLien(path, password, expiresStr, container) {
             body: JSON.stringify({ path: path, password: password || '', expires: expires, csrf_token: CSRF_TOKEN }),
         });
 
+        if (!resp.ok) { alert('Erreur HTTP ' + resp.status); return; }
         const data = await resp.json();
 
         if (data.error) {
@@ -492,6 +503,7 @@ async function supprimerLien(id) {
             body: JSON.stringify({ id: id, csrf_token: CSRF_TOKEN }),
         });
 
+        if (!resp.ok) { alert('Erreur HTTP ' + resp.status); return; }
         const data = await resp.json();
         if (data.error) {
             alert('Erreur : ' + data.error);
@@ -554,6 +566,7 @@ async function envoyerEmail(linkId) {
             body: JSON.stringify({ id: linkId, email: email.trim(), csrf_token: CSRF_TOKEN }),
         });
 
+        if (!resp.ok) { alert('Erreur HTTP ' + resp.status); return; }
         const data = await resp.json();
 
         if (data.error) {
@@ -867,16 +880,20 @@ async function afficherResultatsRecherche(q) {
         label.id = 'search-mode-label';
         document.getElementById('file-filter').closest('.file-filter-wrap').after(label);
     }
-    label.innerHTML = `Résultats pour "<strong>${q.replace(/</g,'&lt;')}</strong>" &nbsp;<a id="quit-search">✕ Retour</a>`;
+    label.innerHTML = `Résultats pour "<strong>${escapeHtml(q)}</strong>" &nbsp;<a id="quit-search">✕ Retour</a>`;
     document.getElementById('quit-search').addEventListener('click', quitterRecherche);
 
     try {
         const resp = await fetch('/share/ctrl.php?cmd=search&q=' + encodeURIComponent(q));
+        if (!resp.ok) {
+            list.innerHTML = `<li class="file-item"><div class="empty-msg">Erreur HTTP ${resp.status}</div></li>`;
+            return;
+        }
         const data = await resp.json();
 
         list.innerHTML = '';
         if (data.error) {
-            list.innerHTML = `<li class="file-item"><div class="empty-msg">${data.error}</div></li>`;
+            list.innerHTML = `<li class="file-item"><div class="empty-msg">${escapeHtml(data.error)}</div></li>`;
             return;
         }
 
