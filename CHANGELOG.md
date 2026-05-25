@@ -3,6 +3,54 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [5.0.0] - 2026-05-25
+
+### Added
+- **GPU hardware transcoding** — auto-detected, zero configuration
+  - Intel VAAPI (NAS, mini-PC, Synology)
+  - NVIDIA NVENC (desktop/laptop GPU via Docker)
+  - Raspberry Pi V4L2M2M
+  - Graceful fallback: if GPU fails, retries in software automatically
+- **Continue Watching** — horizontal "Reprendre" row on browse page, shows last 8 videos with progress bars (localStorage-based)
+- **Toast notifications** — inline toasts replace all browser `alert()` dialogs
+- **Loading spinner** on file browser during navigation
+- **E2E test suite** — 52 Playwright tests covering browse, posters, admin, player, ZIP, search, security
+- **GitHub Actions E2E workflow** — Playwright tests run on every push/PR against Docker demo
+- **Installation guides** — `docs/INSTALL.md` for Docker, Raspberry Pi, Synology, Unraid, bare metal
+- **GPU documentation** — `docs/GPU.md` with setup guides for NVIDIA/Intel/Pi
+- **NVIDIA Docker** — `Dockerfile.nvidia` + `docker-compose.nvidia.yml` for plug-and-play GPU testing
+- Docker demo ships with `SHAREBOX_DEMO_DATA=true` by default (zero-config first launch)
+
+### Fixed
+- **Security (9 fixes):**
+  - `ctrl.php`: path oracle via `mark_watched` — validate within BASE_PATH
+  - `ctrl.php`: IDOR — non-admin can no longer delete system links
+  - `admin.php`: `tmdb_scan_log` added to admin-only actions
+  - `download.php`: atomic `max_downloads` check (race condition eliminated)
+  - `stream_remux.php`: `escapeshellarg` on audio filter constant
+  - `app.js`: XSS via `data.error` and search query — proper HTML escaping
+  - `db.php`: default user role changed from 'admin' to 'user' (migration v20)
+  - `header.php`: `htmlspecialchars` on `HTTP_HOST` (host header injection)
+  - `docker/entrypoint.sh`: sanitize env vars before PHP config injection
+- **Auth:** rate-limit file locking (flock) eliminates TOCTOU race condition
+- **Streaming:** `CURLOPT_HEADER` set before `curl_exec` — TMDB Retry-After now works
+- **Streaming:** HLS key hash includes `filemtime` (synced with handler)
+- **Player:** seek while paused no longer restarts the stream
+- **Player:** subtitle `_emptyRetries` reset on track switch
+- **Player:** subtitle Blob URL revoked on destroy (memory leak fix)
+- **Player:** native video confirm timeout 2s→4s (fewer false transcode cascades on slow networks)
+- **Dashboard:** torrent poll interval uses correct open/closed accordion state
+- **Dashboard:** null-safe pill updates (no crash if DOM element missing)
+- **App:** `resp.ok` check before `.json()` on all fetch calls
+- **CSS:** `--text-muted` contrast improved to WCAG AA (4.6:1)
+- **CSS:** stray `CSS;` token removed from player.css
+
+### Changed
+- README: expanded comparison table (vs Plex, Jellyfin, Emby)
+- README: SEO keywords for Google discoverability
+- GitHub topics: +raspberry-pi, +nas, +emby-alternative, +homelab
+- Demo link points to Films grid (12 posters visible immediately)
+
 ## [2.0.0] - 2026-03-18
 
 ### Added
