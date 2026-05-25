@@ -722,7 +722,8 @@ function detect_hw_encoder(): string {
     static $cached = null;
     if ($cached !== null) return $cached;
 
-    $configured = defined('FFMPEG_HW_ACCEL') ? FFMPEG_HW_ACCEL : 'auto';
+    /** @var string $configured — runtime value, may differ from default via config.php */
+    $configured = (string)(defined('FFMPEG_HW_ACCEL') ? FFMPEG_HW_ACCEL : 'auto');
 
     // Valeur explicite : retourner directement sans détection
     if ($configured !== 'auto') {
