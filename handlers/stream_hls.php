@@ -90,26 +90,47 @@ if ($mime && str_starts_with($mime, 'video/')) {
         array_map('unlink', glob($hlsDir . '/seg*.ts') ?: []);
         if (file_exists($m3u8)) unlink($m3u8);
 
-        $fc = buildFilterGraph($quality, $audioTrack, $burnSub, $filterMode);
+        $hwEncoder = detect_hw_encoder();
+        $fc = buildFilterGraph($quality, $audioTrack, $burnSub, $filterMode, $hwEncoder);
 
         [$slotFp, $queued] = acquireStreamSlot();
         if ($queued) stream_log('HLS queued | ' . basename($resolvedPath));
-        stream_log('HLS start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' | ' . basename($resolvedPath));
+        stream_log('HLS start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' hw=' . $hwEncoder . ' | ' . basename($resolvedPath));
 
         warmFileCache($resolvedPath);
 
-        $ffmpegCmd = buildFfmpegInputArgs($resolvedPath, $seekArgBefore)
-            . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
-            . buildFfmpegCodecArgs(96, $filterMode === 'hdr', true)
-            . ' -f hls -hls_time 4 -hls_list_size 0 -hls_playlist_type event'
-            . ' -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
-            . ' -hls_flags append_list'
-            . ' ' . escapeshellarg($m3u8)
-            . ' -loglevel error 2>>' . escapeshellarg($logFile);
+        $buildHlsCmd = function(string $enc) use ($resolvedPath, $seekArgBefore, $burnSub, $filterMode, $quality, $audioTrack, $hlsDir, $m3u8, $logFile): string {
+            $fc = buildFilterGraph($quality, $audioTrack, $burnSub, $filterMode, $enc);
+            return buildFfmpegInputArgs($resolvedPath, $seekArgBefore, $enc)
+                . ' -filter_complex ' . $fc . ' -map "[v]" -map "[a]" -dn'
+                . buildFfmpegCodecArgs(96, $filterMode === 'hdr', true, $enc)
+                . ' -f hls -hls_time 4 -hls_list_size 0 -hls_playlist_type event'
+                . ' -hls_segment_filename ' . escapeshellarg($hlsDir . '/seg%d.ts')
+                . ' -hls_flags append_list'
+                . ' ' . escapeshellarg($m3u8)
+                . ' -loglevel error 2>>' . escapeshellarg($logFile);
+        };
+
+        $ffmpegCmd = $buildHlsCmd($hwEncoder);
 
         // Lancer ffmpeg en arrière-plan via setsid (survit au kill du process PHP)
         // exec() avec & retourne le PID réel du processus (pas du shell wrapper comme shell_exec)
         $pid = trim(shell_exec('setsid sh -c ' . escapeshellarg('exec ' . $ffmpegCmd) . ' > /dev/null & echo $!'));
+
+        // Fallback software si le GPU échoue immédiatement (device absent, format non supporté…)
+        if ($hwEncoder !== 'none') {
+            sleep(1);
+            clearstatcache(true, '/proc/' . (int)$pid);
+            if ((int)$pid <= 0 || !file_exists('/proc/' . (int)$pid)) {
+                stream_log('HLS GPU encode failed (hw=' . $hwEncoder . '), retrying software | ' . basename($resolvedPath));
+                array_map('unlink', glob($hlsDir . '/seg*.ts') ?: []);
+                if (file_exists($m3u8)) unlink($m3u8);
+                $hwEncoder = 'none';
+                $ffmpegCmd = $buildHlsCmd('none');
+                $pid = trim(shell_exec('setsid sh -c ' . escapeshellarg('exec ' . $ffmpegCmd) . ' > /dev/null & echo $!'));
+            }
+        }
+
         file_put_contents($pidFile, $pid);
         touch($hlsDir . '/.active');
 
