@@ -1,0 +1,31 @@
+FROM nvidia/cuda:12.6.0-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install PHP 8.3, nginx, ffmpeg
+# nvidia/cuda:12.6.0-runtime-ubuntu24.04 ships libnvidia-encode which ffmpeg picks up for NVENC
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        php8.3-fpm \
+        php8.3-sqlite3 \
+        php8.3-cli \
+        nginx \
+        ffmpeg \
+        curl \
+        ca-certificates \
+        cron \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /data /media /run/php /run/nginx
+
+COPY docker/nginx.conf /etc/nginx/nginx.conf
+COPY docker/entrypoint-nvidia.sh /entrypoint.sh
+COPY docker/demo-data.sh /docker/demo-data.sh
+COPY docker/seed-tmdb.php /docker/seed-tmdb.php
+RUN chmod +x /entrypoint.sh /docker/demo-data.sh
+
+COPY . /app
+WORKDIR /app
+
+VOLUME ["/data", "/media"]
+EXPOSE 80
+
+ENTRYPOINT ["/entrypoint.sh"]

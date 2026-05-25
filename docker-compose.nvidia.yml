@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  sharebox:
+    build:
+      context: .
+      dockerfile: Dockerfile.nvidia
+    ports:
+      - "8080:80"
+    volumes:
+      - sharebox-data:/data
+      # - /path/to/your/media:/media:ro  # uncomment and set your media path
+    environment:
+      - SHAREBOX_ADMIN_USER=admin
+      - SHAREBOX_ADMIN_PASS=changeme
+      - SHAREBOX_DEMO_DATA=true
+      # - SHAREBOX_TMDB_API_KEY=your_tmdb_api_key
+      # - SHAREBOX_STREAM_MAX_CONCURRENT=4
+      # - SHAREBOX_STREAM_REMUX_ENABLED=false
+      # - SHAREBOX_BANDWIDTH_QUOTA_TB=100
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  sharebox-data:
