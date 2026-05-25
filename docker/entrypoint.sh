@@ -10,9 +10,12 @@ REMUX_ENABLED="${SHAREBOX_STREAM_REMUX_ENABLED:-false}"
 QUOTA_TB="${SHAREBOX_BANDWIDTH_QUOTA_TB:-100}"
 
 # ── Generate config.php ──────────────────────────────────────────────────────
+# Sanitize strings to prevent PHP injection via single-quotes in env vars
+sanitize() { printf '%s' "$1" | sed "s/'/\\\\'/g"; }
+
 cat > /app/config.php <<PHPEOF
 <?php
-define('BASE_PATH', '${MEDIA_DIR}');
+define('BASE_PATH', '$(sanitize "$MEDIA_DIR")');
 define('DB_PATH', '/data/share.db');
 define('XACCEL_PREFIX', '/internal-download');
 define('DL_BASE_URL', '/dl/');
@@ -24,7 +27,7 @@ PHPEOF
 
 # ── Optional: TMDB API key for poster grid ──────────────────────────────────
 if [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
-    echo "define('TMDB_API_KEY', '${SHAREBOX_TMDB_API_KEY}');" >> /app/config.php
+    echo "define('TMDB_API_KEY', '$(sanitize "$SHAREBOX_TMDB_API_KEY")');" >> /app/config.php
 fi
 
 # ── Permissions ──────────────────────────────────────────────────────────────

@@ -21,7 +21,7 @@ $header_back     ??= false;
     </div>
     <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;justify-content:flex-end">
         <?php if (is_executable('/usr/local/bin/seedbox-adduser')): ?>
-            <a href="https://<?= $_SERVER['HTTP_HOST'] ?>:8443" target="_blank" style="color:var(--text-secondary);font-size:.75rem;text-decoration:none;padding:.25rem .5rem;border:1px solid var(--border);border-radius:var(--radius-sm)">qBit</a>
+            <a href="https://<?= htmlspecialchars($_SERVER['HTTP_HOST'] ?? '', ENT_QUOTES) ?>:8443" target="_blank" style="color:var(--text-secondary);font-size:.75rem;text-decoration:none;padding:.25rem .5rem;border:1px solid var(--border);border-radius:var(--radius-sm)">qBit</a>
         <?php endif; ?>
         <?php if ($header_back): ?>
             <a href="/share/" style="color:var(--text-secondary);font-size:.75rem;text-decoration:none;padding:.25rem .5rem;border:1px solid var(--border);border-radius:var(--radius-sm)">← Fichiers</a>

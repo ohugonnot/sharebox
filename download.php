@@ -240,7 +240,7 @@ if (is_file($resolvedPath)) {
         $hlsBurnSub  = validateBurnSub(isset($_GET['burnSub']) ? (int)$_GET['burnSub'] : -1, getSubtitleCount($db, $resolvedPath));
         $hlsFilterMode = validateFilterMode(isset($_GET['filter']) ? $_GET['filter'] : 'none');
         if ($hlsFilterMode === 'none' && isHDRFile($db, $resolvedPath)) $hlsFilterMode = 'hdr';
-        $hlsKey      = md5($resolvedPath . '|' . $hlsQuality . '|' . $audioTrack . '|' . $hlsBurnSub . '|' . $startSec . '|' . $hlsFilterMode);
+        $hlsKey      = md5($resolvedPath . '|' . filemtime($resolvedPath) . '|' . $hlsQuality . '|' . $audioTrack . '|' . $hlsBurnSub . '|' . $startSec . '|' . $hlsFilterMode);
         $hlsBaseDir  = (defined('STREAM_LOG') && STREAM_LOG ? dirname(STREAM_LOG) : sys_get_temp_dir()) . '/hls_cache';
         $hlsPidFile  = $hlsBaseDir . '/hls_' . $hlsKey . '/ffmpeg.pid';
         write_stream_info([
@@ -257,8 +257,14 @@ if (is_file($resolvedPath)) {
     // Téléchargement direct
     stream_log('DOWNLOAD | ' . basename($resolvedPath) . ' | size=' . format_taille(filesize($resolvedPath)));
     if (!$subPath) {
-        $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id")
-           ->execute([':id' => $link['id']]);
+        $updated = $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id AND (max_downloads IS NULL OR max_downloads = 0 OR download_count < max_downloads)");
+        $updated->execute([':id' => $link['id']]);
+        if ($updated->rowCount() === 0 && (int)($link['max_downloads'] ?? 0) > 0) {
+            stream_log('ACCESS 410 | token=' . $token . ' | max_downloads reached (atomic)');
+            http_response_code(410);
+            afficher_erreur('Lien épuisé', 'Ce lien a atteint sa limite de téléchargements.');
+            exit;
+        }
         $db->prepare("INSERT INTO download_logs (link_id, ip) VALUES (?, ?)")
            ->execute([(int)$link['id'], $_SERVER['REMOTE_ADDR'] ?? '']);
         $purgeFlag = sys_get_temp_dir() . '/sharebox_purge_dllogs';

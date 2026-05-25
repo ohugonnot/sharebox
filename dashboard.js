@@ -556,21 +556,21 @@ function updatePillsFromSysinfo(d) {
     const busyPct = d.disk_io_pct || 0;
 
     // CPU : % + température
-    id('dash-pill-cpu').textContent = 'CPU\u00a0' + fmtPct(cpuPct)
-        + (cpuTemp != null ? '\u00a0' + fmtTemp(cpuTemp) : '');
+    setText('dash-pill-cpu', 'CPU\u00a0' + fmtPct(cpuPct)
+        + (cpuTemp != null ? '\u00a0' + fmtTemp(cpuTemp) : ''));
     setPillSeverity('dash-pill-cpu', worstSeverity(
         pillSeverity(cpuPct,  70, 90),
         cpuTemp != null ? pillSeverity(cpuTemp, 70, 85) : 'ok'
     ));
 
     // RAM
-    id('dash-pill-ram').textContent = 'RAM\u00a0' + fmtPct(ramPct);
+    setText('dash-pill-ram', 'RAM\u00a0' + fmtPct(ramPct));
     setPillSeverity('dash-pill-ram', pillSeverity(ramPct, 80, 90));
 
     // HDD : usage % + IO réel (normalisé par nombre de disques RAID)
     // disk_io_pct = temps I/O normalisé, disk_busy_pct = brut md0 (trompeur sur RAID)
-    id('dash-pill-disk').textContent = 'HDD\u00a0' + fmtPct(diskPct)
-        + '\u00a0io:' + fmtPct(busyPct);
+    setText('dash-pill-disk', 'HDD\u00a0' + fmtPct(diskPct)
+        + '\u00a0io:' + fmtPct(busyPct));
     setPillSeverity('dash-pill-disk', worstSeverity(
         pillSeverity(diskPct, 80, 93),
         pillSeverity(busyPct, 80, 95)
@@ -609,7 +609,7 @@ function startDashTimers() {
     D.sysTimer   = setInterval(fetchSysinfo, 10000);
     D.speedTimer = setInterval(fetchSpeed,   10000);
     if (hasTorrents()) {
-        D.torrentTimer = setInterval(fetchTorrents, D.torrentIntervalClosed);
+        updateTorrentInterval();
     }
     if (hasQuota()) {
         D.quotaTimer = setInterval(fetchQuota, D.quotaInterval);
