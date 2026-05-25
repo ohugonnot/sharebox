@@ -40,16 +40,19 @@ document.addEventListener('DOMContentLoaded', () => {
 async function navigateTo(path) {
     currentPath = path;
 
+    const list = document.getElementById('file-list');
+    if (list) list.classList.add('loading');
+
     try {
         const resp = await fetch('/share/ctrl.php?cmd=browse&path=' + encodeURIComponent(path));
         if (!resp.ok) {
-            alert('Erreur HTTP ' + resp.status);
+            showToast('Erreur HTTP ' + resp.status, 'error');
             return;
         }
         const data = await resp.json();
 
         if (data.error) {
-            alert('Erreur : ' + data.error);
+            showToast('Erreur : ' + data.error, 'error');
             return;
         }
 
@@ -57,7 +60,9 @@ async function navigateTo(path) {
         afficherFichiers(data.entries);
     } catch (e) {
         console.error('navigateTo error:', e);
-        alert('Erreur de connexion au serveur');
+        showToast('Erreur de connexion au serveur', 'error');
+    } finally {
+        if (list) list.classList.remove('loading');
     }
 }
 
@@ -343,9 +348,9 @@ async function creerLienSheet(path, password, expiresStr, sheet, maxDownloads = 
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ path, password: password || '', expires, max_downloads: maxDownloads, csrf_token: CSRF_TOKEN }),
         });
-        if (!resp.ok) { alert('Erreur HTTP ' + resp.status); if (createBtn) createBtn.disabled = false; return; }
+        if (!resp.ok) { showToast('Erreur HTTP ' + resp.status, 'error'); if (createBtn) createBtn.disabled = false; return; }
         const data = await resp.json();
-        if (data.error) { alert('Erreur : ' + data.error); if (createBtn) createBtn.disabled = false; return; }
+        if (data.error) { showToast(data.error, 'error'); if (createBtn) createBtn.disabled = false; return; }
 
         const fullUrl = window.location.origin + data.url;
 
@@ -387,7 +392,7 @@ async function creerLienSheet(path, password, expiresStr, sheet, maxDownloads = 
         sheet.append(handle, successIcon, successLabel, urlBox, copyBtn, closeBtn);
         rafraichirLiens();
 
-    } catch { alert('Erreur de connexion'); }
+    } catch { showToast('Erreur de connexion', 'error'); }
 }
 
 function sheetEyeIcon() {
@@ -420,11 +425,11 @@ async function creerLien(path, password, expiresStr, container) {
             body: JSON.stringify({ path: path, password: password || '', expires: expires, csrf_token: CSRF_TOKEN }),
         });
 
-        if (!resp.ok) { alert('Erreur HTTP ' + resp.status); return; }
+        if (!resp.ok) { showToast('Erreur HTTP ' + resp.status, 'error'); return; }
         const data = await resp.json();
 
         if (data.error) {
-            alert('Erreur : ' + data.error);
+            showToast(data.error, 'error');
             return;
         }
 
@@ -446,7 +451,7 @@ async function creerLien(path, password, expiresStr, container) {
         rafraichirLiens();
 
     } catch (e) {
-        alert('Erreur de connexion');
+        showToast('Erreur de connexion', 'error');
     }
 }
 
@@ -503,17 +508,17 @@ async function supprimerLien(id) {
             body: JSON.stringify({ id: id, csrf_token: CSRF_TOKEN }),
         });
 
-        if (!resp.ok) { alert('Erreur HTTP ' + resp.status); return; }
+        if (!resp.ok) { showToast('Erreur HTTP ' + resp.status, 'error'); return; }
         const data = await resp.json();
         if (data.error) {
-            alert('Erreur : ' + data.error);
+            showToast(data.error, 'error');
             return;
         }
 
         location.reload();
 
     } catch {
-        alert('Erreur de connexion');
+        showToast('Erreur de connexion', 'error');
     }
 }
 
@@ -566,17 +571,17 @@ async function envoyerEmail(linkId) {
             body: JSON.stringify({ id: linkId, email: email.trim(), csrf_token: CSRF_TOKEN }),
         });
 
-        if (!resp.ok) { alert('Erreur HTTP ' + resp.status); return; }
+        if (!resp.ok) { showToast('Erreur HTTP ' + resp.status, 'error'); return; }
         const data = await resp.json();
 
         if (data.error) {
-            alert('Erreur : ' + data.error);
+            showToast(data.error, 'error');
             return;
         }
 
-        alert('Email envoyé à ' + email.trim() + ' !');
+        showToast('Email envoyé à ' + email.trim() + ' !', 'success');
     } catch {
-        alert('Erreur de connexion');
+        showToast('Erreur de connexion', 'error');
     }
 }
 
@@ -848,6 +853,46 @@ function creerElement(tag, className) {
     const el = document.createElement(tag);
     if (className) el.className = className;
     return el;
+}
+
+/**
+ * Affiche une notification toast en bas à droite
+ * @param {string} message
+ * @param {'info'|'success'|'error'} type
+ */
+function showToast(message, type = 'info') {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        document.body.appendChild(container);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = 'toast' + (type === 'success' ? ' is-success' : type === 'error' ? ' is-error' : '');
+
+    const text = document.createElement('span');
+    text.textContent = message;
+
+    const dismiss = document.createElement('button');
+    dismiss.className = 'toast-dismiss';
+    dismiss.setAttribute('aria-label', 'Fermer');
+    dismiss.textContent = '✕';
+
+    toast.append(text, dismiss);
+    container.appendChild(toast);
+
+    const remove = () => {
+        if (!toast.isConnected) return;
+        toast.classList.add('is-out');
+        toast.addEventListener('animationend', () => toast.remove(), { once: true });
+    };
+
+    dismiss.addEventListener('click', remove);
+    toast.addEventListener('click', remove);
+
+    const delay = type === 'error' ? 6000 : 4000;
+    setTimeout(remove, delay);
 }
 
 // ── Filtre local + recherche disque ─────────────────────────────────────────

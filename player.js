@@ -1116,20 +1116,62 @@ function plog(tag, msg, data) {
         }); }
         // iOS Safari ignore playbackRate sur HLS — masquer le bouton vitesse
         if (isIOS && speedBtn) speedBtn.style.display = 'none';
+        // ── Continue Watching (localStorage) ─────────────────────────────────
+        var CW_KEY = 'sharebox_continue_watching';
+        var cwLastSave = 0;
+        function saveContinueWatching() {
+            if (!isVideo || S.duration < 60) return;
+            var t = realTime();
+            if (t < 10) return; // don't save if barely started
+            var pct = t / S.duration;
+            if (pct > 0.95) {
+                // Finished — remove entry
+                try {
+                    var items = JSON.parse(localStorage.getItem(CW_KEY) || '[]');
+                    var playUrl = base + '?' + (PLAYER_CONFIG.pp || '') + 'play=1';
+                    items = items.filter(function(i) { return i.path !== playUrl; });
+                    localStorage.setItem(CW_KEY, JSON.stringify(items));
+                } catch(e) {}
+                return;
+            }
+            var now = Date.now();
+            if (now - cwLastSave < 4000) return; // throttle: at most once per 4s
+            cwLastSave = now;
+            try {
+                var items = JSON.parse(localStorage.getItem(CW_KEY) || '[]');
+                var playUrl = base + '?' + (PLAYER_CONFIG.pp || '') + 'play=1';
+                var current = {
+                    path: playUrl,
+                    filename: originalTitle || document.title,
+                    position: Math.round(t),
+                    duration: Math.round(S.duration),
+                    timestamp: now
+                };
+                items = items.filter(function(i) { return i.path !== playUrl; });
+                items.unshift(current);
+                if (items.length > 8) items = items.slice(0, 8);
+                localStorage.setItem(CW_KEY, JSON.stringify(items));
+            } catch(e) {}
+        }
+
         // Sauvegarde de position toutes les 15s (30s min, 30s avant fin)
         S.positionSaveInterval = setInterval(function() {
             if (player.paused || S.duration <= 0) return;
             var t = realTime();
             if (t > 30 && t < S.duration - 30) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
             else if (t >= S.duration - 30)      { lsSet(posKey, '0'); clearCfg(); }
+            saveContinueWatching();
         }, 15000);
         // Sauvegarder aussi quand l'onglet passe en arrière-plan (contourne le timer throttling)
         document.addEventListener('visibilitychange', function() {
             if (document.hidden && !player.paused && S.duration > 0) {
                 var t = realTime();
                 if (t > 30 && t < S.duration - 30) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
+                saveContinueWatching();
             }
         });
+        // Sauvegarder à la pause
+        player.addEventListener('pause', function() { saveContinueWatching(); });
         // Auto-next épisode
         var autoNextEl = null;
         player.addEventListener('ended', function() {
@@ -1167,6 +1209,7 @@ function plog(tag, msg, data) {
         window.addEventListener('pagehide', function() {
             var t = realTime();
             if (S.duration > 0 && t > 30 && t < S.duration - 60) { lsSet(posKey, t.toFixed(0)); saveCfg(); }
+            saveContinueWatching();
             clearStallWatchdog(); clearTimeout(stableTimer);
         }, _sig);
         // Retry deferred quand l'onglet redevient visible
