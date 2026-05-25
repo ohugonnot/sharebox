@@ -8,6 +8,8 @@ services:
     volumes:
       - sharebox-data:/data
       # - /path/to/your/media:/media:ro  # uncomment and set your media path
+    # devices:
+    #   - /dev/dri:/dev/dri  # Intel VAAPI GPU transcoding (requires libva in image)
     environment:
       - SHAREBOX_ADMIN_USER=admin
       - SHAREBOX_ADMIN_PASS=changeme

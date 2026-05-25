@@ -19,6 +19,10 @@ const AUTH_MAX_ATTEMPTS       = 10;             // password attempts before lock
 const AUTH_LOCKOUT_SLEEP      = 3;              // sleep seconds on lockout
 const AUTH_FAIL_SLEEP         = 1;              // sleep seconds per failed attempt
 
+// FFmpeg hardware acceleration (overridable via config.php)
+defined('FFMPEG_HW_ACCEL')         || define('FFMPEG_HW_ACCEL', 'auto');     // 'auto'|'vaapi'|'nvenc'|'v4l2m2m'|'none'
+defined('FFMPEG_VAAPI_DEVICE')     || define('FFMPEG_VAAPI_DEVICE', '/dev/dri/renderD128');
+
 // FFmpeg encoding defaults (overridable via config.php)
 defined('FFMPEG_CRF')              || define('FFMPEG_CRF', 22);              // x264 quality (lower = better, 18-28 typical)
 defined('FFMPEG_PRESET')           || define('FFMPEG_PRESET', 'veryfast');    // x264 preset live streaming sur 8 cores
@@ -705,6 +709,56 @@ function tmdb_score_to_verified(int $score): int {
     return 0; // below threshold — no match
 }
 
+// ── FFmpeg hardware acceleration ────────────────────────────────────────────
+
+/**
+ * Détecte le meilleur encodeur matériel disponible.
+ * Priorité : VAAPI → NVENC → V4L2M2M → software.
+ * Le résultat est mis en cache dans une variable statique (détection une seule fois par requête).
+ *
+ * @return string 'vaapi'|'nvenc'|'v4l2m2m'|'none'
+ */
+function detect_hw_encoder(): string {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+
+    $configured = defined('FFMPEG_HW_ACCEL') ? FFMPEG_HW_ACCEL : 'auto';
+
+    // Valeur explicite : retourner directement sans détection
+    if ($configured !== 'auto') {
+        $cached = in_array($configured, ['vaapi', 'nvenc', 'v4l2m2m', 'none'], true)
+            ? $configured
+            : 'none';
+        return $cached;
+    }
+
+    // VAAPI (Intel iGPU — le plus courant sur NAS/mini-PC)
+    $vaapiDevice = defined('FFMPEG_VAAPI_DEVICE') ? FFMPEG_VAAPI_DEVICE : '/dev/dri/renderD128';
+    if (file_exists($vaapiDevice)) {
+        $hwaccels = shell_exec('ffmpeg -hwaccels 2>/dev/null') ?? '';
+        if (str_contains($hwaccels, 'vaapi')) {
+            $cached = 'vaapi';
+            return $cached;
+        }
+    }
+
+    // NVENC (Nvidia GPU)
+    $encoders = shell_exec('ffmpeg -encoders 2>/dev/null') ?? '';
+    if (str_contains($encoders, 'h264_nvenc')) {
+        $cached = 'nvenc';
+        return $cached;
+    }
+
+    // V4L2 M2M (Raspberry Pi 4)
+    if (file_exists('/dev/video10') || str_contains($encoders, 'h264_v4l2m2m')) {
+        $cached = 'v4l2m2m';
+        return $cached;
+    }
+
+    $cached = 'none';
+    return $cached;
+}
+
 // ── FFmpeg helpers ──────────────────────────────────────────────────────────
 
 const ALLOWED_QUALITIES = [480, 576, 720, 1080];
@@ -760,22 +814,35 @@ function isHDRFile(PDO $db, string $path): bool {
 
 /**
  * Construit le filter_complex ffmpeg pour transcode (avec ou sans burn-in sous-titre).
+ *
+ * @param string $hwEncoder Encodeur matériel actif ('vaapi'|'nvenc'|'v4l2m2m'|'none').
+ *                          Quand 'vaapi', le filtre scale_vaapi remplace scale+lanczos
+ *                          et hwupload est injecté pour transférer les frames vers le GPU.
+ *                          Les autres modes (hdr, anime, etc.) restent en software même avec GPU.
  */
-function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1, string $filterMode = 'none'): string {
-    // Construit la chaîne de filtres vidéo selon le mode
-    $scaleFilter = 'scale=-2:\'min(' . $quality . ',ih)\':flags=lanczos';
-    // HDR : downscale dans le premier zscale AVANT conversion float32 (2.6x plus rapide)
-    // Convertit quality (hauteur) en largeur 16:9 pour réduire les pixels avant le pipeline float32
-    $hdrWidth = (int)(ceil($quality * 16 / 9 / 2) * 2); // arrondi pair
-    $videoFilters = match($filterMode) {
-        'hdr'    => 'zscale=w=\'min(' . $hdrWidth . '\\,iw)\':h=-2:t=linear:npl=100:p=bt709,format=gbrpf32le,tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv',
-        'anime'       => $scaleFilter . ',deband=1thr=0.04:2thr=0.04:3thr=0.04:4thr=0.04,unsharp=5:5:0.7:5:5:0.0',
-        'detail'      => $scaleFilter . ',cas=0.5',
-        'night'       => $scaleFilter . ',eq=gamma=1.4:brightness=0.05:contrast=1.1',
-        'deinterlace' => 'bwdif=mode=send_frame:parity=auto:deint=all,' . $scaleFilter,
-        default  => $scaleFilter,
-    };
-    $videoFilters .= ',format=yuv420p';
+function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1, string $filterMode = 'none', string $hwEncoder = 'none'): string {
+    // VAAPI avec filtre mode 'none' : utiliser scale_vaapi + hwupload (tout sur GPU)
+    // Les modes avec filtres CPU (hdr, anime, etc.) passent par software — pas de hwupload
+    $useVaapiScale = ($hwEncoder === 'vaapi' && $filterMode === 'none');
+
+    if ($useVaapiScale) {
+        // scale_vaapi garde le format nv12 natif du GPU ; hwupload transfère vers surface vaapi
+        $videoFilters = 'scale_vaapi=w=-2:h=\'min(' . $quality . '\\,ih)\':format=nv12,hwupload';
+    } else {
+        $scaleFilter = 'scale=-2:\'min(' . $quality . ',ih)\':flags=lanczos';
+        // HDR : downscale dans le premier zscale AVANT conversion float32 (2.6x plus rapide)
+        // Convertit quality (hauteur) en largeur 16:9 pour réduire les pixels avant le pipeline float32
+        $hdrWidth = (int)(ceil($quality * 16 / 9 / 2) * 2); // arrondi pair
+        $videoFilters = match($filterMode) {
+            'hdr'    => 'zscale=w=\'min(' . $hdrWidth . '\\,iw)\':h=-2:t=linear:npl=100:p=bt709,format=gbrpf32le,tonemap=mobius:desat=0,zscale=t=bt709:m=bt709:r=tv',
+            'anime'       => $scaleFilter . ',deband=1thr=0.04:2thr=0.04:3thr=0.04:4thr=0.04,unsharp=5:5:0.7:5:5:0.0',
+            'detail'      => $scaleFilter . ',cas=0.5',
+            'night'       => $scaleFilter . ',eq=gamma=1.4:brightness=0.05:contrast=1.1',
+            'deinterlace' => 'bwdif=mode=send_frame:parity=auto:deint=all,' . $scaleFilter,
+            default  => $scaleFilter,
+        };
+        $videoFilters .= ',format=yuv420p';
+    }
 
     if ($burnSub >= 0) {
         // Scale vidéo d'abord, puis overlay sous-titres (meilleure lisibilité du texte)
@@ -803,15 +870,55 @@ function hasAudioTrack(PDO $db, string $path): bool {
 
 /**
  * Construit les arguments d'entrée ffmpeg communs.
+ *
+ * @param string $hwEncoder Encodeur matériel actif. 'vaapi' ajoute les flags
+ *                          -hwaccel vaapi -hwaccel_output_format vaapi avant -i,
+ *                          requis pour que scale_vaapi reçoive des frames déjà sur GPU.
+ *                          Ignoré pour les autres backends (décodage CPU standard).
  */
-function buildFfmpegInputArgs(string $filePath, string $seekBefore = ''): string {
-    return 'timeout 3600 ionice -c 2 -n 0 nice -n 5 ffmpeg -nostdin' . $seekBefore . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
+function buildFfmpegInputArgs(string $filePath, string $seekBefore = '', string $hwEncoder = 'none'): string {
+    $hwFlags = '';
+    if ($hwEncoder === 'vaapi') {
+        $vaapiDevice = defined('FFMPEG_VAAPI_DEVICE') ? FFMPEG_VAAPI_DEVICE : '/dev/dri/renderD128';
+        $hwFlags = ' -hwaccel vaapi -hwaccel_device ' . escapeshellarg($vaapiDevice) . ' -hwaccel_output_format vaapi';
+    }
+    return 'timeout 3600 ionice -c 2 -n 0 nice -n 5 ffmpeg -nostdin' . $seekBefore . $hwFlags . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
 }
 
 /**
- * Construit les arguments encodeur x264+AAC communs.
+ * Construit les arguments encodeur vidéo+AAC communs.
+ *
+ * @param string $hwEncoder Encodeur matériel à utiliser ('vaapi'|'nvenc'|'v4l2m2m'|'none').
+ *                          'none' (défaut) → libx264 avec les presets configurés.
+ *                          Les autres valeurs activent l'encodeur GPU correspondant.
+ *                          Note : $isHDR et le filtre 'hdr' forcent software (VAAPI ne
+ *                          supporte pas le tonemapping HDR→SDR).
  */
-function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHDR = false, bool $isHLS = false): string {
+function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHDR = false, bool $isHLS = false, string $hwEncoder = 'none'): string {
+    // HDR tonemapping nécessite le pipeline CPU (zscale+tonemap) — ignorer le GPU
+    $effectiveEncoder = $isHDR ? 'none' : $hwEncoder;
+
+    $audioArgs = ' -c:a aac -ac ' . FFMPEG_AUDIO_CHANNELS . ' -b:a ' . FFMPEG_AUDIO_BITRATE . ' -shortest';
+    if ($isHLS) {
+        $audioArgs .= ' -force_key_frames "expr:gte(t,n_forced*4)"';
+    }
+
+    if ($effectiveEncoder === 'vaapi') {
+        // h264_vaapi : QP fixe (pas de CRF), bf=0 (VAAPI ne supporte pas les B-frames en H.264)
+        return ' -c:v h264_vaapi -qp 24 -bf 0 -g ' . $gopSize . $audioArgs;
+    }
+
+    if ($effectiveEncoder === 'nvenc') {
+        // h264_nvenc : preset p4 (bon équilibre vitesse/qualité), cq = équivalent CRF NVENC
+        return ' -c:v h264_nvenc -preset p4 -cq 24 -bf 0 -g ' . $gopSize . $audioArgs;
+    }
+
+    if ($effectiveEncoder === 'v4l2m2m') {
+        // h264_v4l2m2m (Raspberry Pi) : ne supporte pas CRF/CQ, bitrate explicite requis
+        return ' -c:v h264_v4l2m2m -b:v 3M -g ' . $gopSize . $audioArgs;
+    }
+
+    // Software fallback (libx264)
     $threads = $isHDR ? FFMPEG_HDR_THREADS : FFMPEG_THREADS;
     $crf = $isHDR ? FFMPEG_HDR_CRF : FFMPEG_CRF;
     $preset = $isHLS ? FFMPEG_PRESET_HLS : FFMPEG_PRESET;
@@ -832,10 +939,7 @@ function buildFfmpegCodecArgs(int $gopSize = FFMPEG_GOP_SIZE_DEFAULT, bool $isHD
     }
     $args .= ' -g ' . $gopSize . ' -threads ' . $threads
         . ' -colorspace bt709 -color_primaries bt709 -color_trc bt709'
-        . ' -c:a aac -ac ' . FFMPEG_AUDIO_CHANNELS . ' -b:a ' . FFMPEG_AUDIO_BITRATE . ' -shortest';
-    if ($isHLS) {
-        $args .= ' -force_key_frames "expr:gte(t,n_forced*4)"';
-    }
+        . $audioArgs;
     return $args;
 }
 

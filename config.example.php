@@ -48,3 +48,11 @@ define('MAX_ZIP_SIZE', 10 * 1024 * 1024 * 1024);
 // define('FFMPEG_TUNE', '');             // '' or 'film'
 // define('FFMPEG_BFRAMES', 0);           // 0 = x264 defaults, 2-3 for quality
 // define('FFMPEG_REFS', 0);              // 0 = x264 defaults, 3-4 for quality
+
+// ── Hardware transcoding ─────────────────────────────────────────────────────
+// ShareBox auto-detects GPU hardware encoders at startup.
+// Set manually to force a specific encoder or disable GPU transcoding.
+// Options: 'auto' (detect), 'vaapi' (Intel), 'nvenc' (Nvidia), 'v4l2m2m' (Raspberry Pi), 'none' (software only)
+// define('FFMPEG_HW_ACCEL', 'auto');
+// Intel VAAPI: path to the DRI render node (default /dev/dri/renderD128).
+// define('FFMPEG_VAAPI_DEVICE', '/dev/dri/renderD128');

@@ -9,6 +9,10 @@ RUN apk add --no-cache \
     && docker-php-ext-install pdo_sqlite \
     && mkdir -p /data /media /run/nginx
 
+# Optional: Intel VAAPI GPU transcoding support
+# Uncomment to enable hardware-accelerated encoding on Intel iGPU hosts.
+# RUN apk add --no-cache libva-intel-driver intel-media-driver mesa-va-gallium
+
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/php-fpm.conf /usr/local/etc/php-fpm.d/www.conf
 COPY docker/entrypoint.sh /entrypoint.sh
