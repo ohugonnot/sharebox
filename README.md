@@ -20,7 +20,7 @@ So I built ShareBox -- a single PHP app with zero dependencies. No library, no a
 
 ## Live Demo
 
-**[Try the demo](https://dn40904.seedhost.eu:8282/dl/browse?view=grid)** -- no install needed. Netflix-style grid with TMDB posters, series, movies, and anime.
+**[Try the demo](https://dn40904.seedhost.eu:8282/dl/browse?p=Films&view=grid)** -- no install needed. Netflix-style grid with TMDB posters, series, movies, and anime.
 
 [Admin panel](https://dn40904.seedhost.eu:8282/share/) -- `admin` / `demo2026`
 
@@ -39,7 +39,7 @@ So I built ShareBox -- a single PHP app with zero dependencies. No library, no a
 
 ```bash
 git clone https://github.com/ohugonnot/sharebox.git && cd sharebox
-# Edit docker-compose.yml → set your media path
+# Demo content included — edit docker-compose.yml to add your own media
 docker compose up -d
 ```
 
@@ -179,6 +179,10 @@ vendor/bin/phpstan analyse  # Level 5
 ```
 
 CI runs on GitHub Actions across PHP 8.1, 8.2, and 8.3.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## License
 

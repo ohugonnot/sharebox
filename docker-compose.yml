@@ -7,15 +7,15 @@ services:
       - "8080:80"
     volumes:
       - sharebox-data:/data
-      - /path/to/your/media:/media:ro
+      # - /path/to/your/media:/media:ro  # uncomment and set your media path
     environment:
       - SHAREBOX_ADMIN_USER=admin
       - SHAREBOX_ADMIN_PASS=changeme
+      - SHAREBOX_DEMO_DATA=true
+      # - SHAREBOX_TMDB_API_KEY=your_tmdb_api_key    # enables poster grid
       # - SHAREBOX_STREAM_MAX_CONCURRENT=4
       # - SHAREBOX_STREAM_REMUX_ENABLED=false
       # - SHAREBOX_BANDWIDTH_QUOTA_TB=100
-      # - SHAREBOX_TMDB_API_KEY=your_tmdb_api_key    # enables poster grid
-      # - SHAREBOX_DEMO_DATA=true                     # sample media + TMDB seed
     restart: unless-stopped
 
 volumes:
