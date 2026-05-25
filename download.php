@@ -593,6 +593,17 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .gear-select option { background:#1a1d28; color:#e8eaf0; }
 @media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row{min-height:44px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem}}
 @media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-box{flex:1;width:auto;min-width:80px}.toolbar-info{display:none}.gear-panel{right:-1rem;min-width:240px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}}
+/* ── Continue Watching ── */
+.cw-section{margin-bottom:1.5rem}
+.cw-title{font-size:.75rem;font-weight:700;color:var(--text-muted);margin-bottom:.5rem;text-transform:uppercase;letter-spacing:.06em}
+.cw-scroll{display:flex;gap:.75rem;overflow-x:auto;padding-bottom:.5rem;scrollbar-width:thin}
+.cw-scroll::-webkit-scrollbar{height:4px}.cw-scroll::-webkit-scrollbar-track{background:transparent}.cw-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px}
+.cw-card{flex:0 0 180px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.75rem;text-decoration:none;color:inherit;transition:background .15s,border-color .15s;display:block}
+.cw-card:hover{background:rgba(255,255,255,.08);border-color:rgba(240,160,48,.3)}
+.cw-filename{font-size:.8rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:.25rem}
+.cw-meta{font-size:.7rem;color:var(--text-secondary);margin-bottom:.5rem}
+.cw-bar{height:3px;background:rgba(255,255,255,.1);border-radius:2px;overflow:hidden}
+.cw-progress{height:100%;background:var(--accent);border-radius:2px}
     </style>
 </head>
 <body>
@@ -700,6 +711,9 @@ HTML;
         echo '</a>';
         echo '</div>';
     }
+
+    // ── Continue Watching ──
+    echo '<div id="continue-watching" class="cw-section" style="display:none"></div>';
 
     // ── Grid view (dossiers) ──
     if ($hasGridItems) {
@@ -844,6 +858,34 @@ HTML;
 // ── localStorage helpers ──
 function lsGet(k,d){try{var v=localStorage.getItem(k);return v!==null?v:d}catch(e){return d}}
 function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+
+// ── Continue Watching ──
+(function(){
+    function escHtml(s){var d=document.createElement('div');d.appendChild(document.createTextNode(s));return d.innerHTML;}
+    var CW_KEY='sharebox_continue_watching';
+    var items;
+    try{items=JSON.parse(localStorage.getItem(CW_KEY)||'[]');}catch(e){items=[];}
+    if(!items.length)return;
+    var cutoff=Date.now()-30*86400000;
+    items=items.filter(function(i){return i.timestamp>cutoff&&i.duration>0&&i.position>0;});
+    if(!items.length)return;
+    var container=document.getElementById('continue-watching');
+    if(!container)return;
+    container.style.display='';
+    var html='<div class="cw-title">Reprendre</div><div class="cw-scroll">';
+    items.forEach(function(item){
+        var pct=Math.min(99,Math.round((item.position/item.duration)*100));
+        var remaining=Math.round((item.duration-item.position)/60);
+        var timeLabel=remaining>0?remaining+' min restante'+(remaining>1?'s':''):'Presque terminé';
+        html+='<a class="cw-card" href="'+escHtml(item.path)+'">'
+            +'<div class="cw-filename">'+escHtml(item.filename)+'</div>'
+            +'<div class="cw-meta">'+escHtml(timeLabel)+'</div>'
+            +'<div class="cw-bar"><div class="cw-progress" style="width:'+pct+'%"></div></div>'
+            +'</a>';
+    });
+    html+='</div>';
+    container.innerHTML=html;
+})();
 
 // ── Preferences init ──
 (function(){

@@ -1,20 +1,24 @@
 # ShareBox
 
-**A lightweight, self-hosted alternative to Plex and Jellyfin.**
+**A lightweight, self-hosted alternative to Plex, Jellyfin, and Emby.**
+
+Stream your media library instantly -- no library scan, no database server, no plugins. Just point at your files and share.
 
 [![CI](https://github.com/ohugonnot/sharebox/actions/workflows/tests.yml/badge.svg)](https://github.com/ohugonnot/sharebox/actions/workflows/tests.yml)
+[![E2E](https://github.com/ohugonnot/sharebox/actions/workflows/e2e.yml/badge.svg)](https://github.com/ohugonnot/sharebox/actions/workflows/e2e.yml)
 ![PHP 8.1+](https://img.shields.io/badge/PHP-8.1%2B-777BB4?logo=php&logoColor=white)
 ![SQLite](https://img.shields.io/badge/SQLite-003B57?logo=sqlite&logoColor=white)
-![Tests](https://github.com/ohugonnot/sharebox/actions/workflows/tests.yml/badge.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+
+**Looking for a Plex alternative that runs on a Raspberry Pi? A Jellyfin alternative with zero setup? A self-hosted media server you can deploy in 30 seconds?** That's ShareBox.
 
 ## Why I built this
 
 I wanted to send a movie link to someone. That's it.
 
-Plex wanted me to set up a media library, scan my files, create user accounts, install plugins. Jellyfin was lighter but still required a database server and metadata agents. All I needed was: point at a file, get a link, let them watch.
+Plex wanted me to set up a media library, scan my files, create user accounts, install plugins. Jellyfin was lighter but still required a database server and metadata agents. Emby wanted a subscription. All I needed was: point at a file, get a link, let them watch.
 
-So I built ShareBox -- a single PHP app with zero dependencies. No library, no accounts, no pre-processing. You share a link, they click play, ffmpeg transcodes on the fly. It runs on a $5 VPS with 256 MB of RAM.
+So I built ShareBox -- a single PHP app with zero external dependencies. No framework, no accounts to create, no media library to pre-scan. You share a link, they click play, ffmpeg transcodes on the fly. It runs on a $5 VPS with 256 MB of RAM, a Raspberry Pi 4, or a Synology NAS.
 
 ![Netflix-style grid view](docs/screenshots/sharebox-grid-demo.gif)
 
@@ -26,14 +30,20 @@ So I built ShareBox -- a single PHP app with zero dependencies. No library, no a
 
 ## How it compares
 
-| | ShareBox | Plex / Jellyfin |
-|---|---|---|
-| **Setup** | `docker compose up` | Database, metadata agents, user system |
-| **Dependencies** | PHP + ffmpeg + SQLite | Java/.NET, database server, plugins |
-| **Media library** | None -- just your filesystem | Required |
-| **Browse UI** | Netflix-style poster grid (TMDB) | Library-based grid |
-| **Sharing** | Built-in: link + password + expiry | External plugins |
-| **RAM** | ~25 MB per stream | 500 MB - 2 GB+ |
+| | ShareBox | Plex | Jellyfin | Emby |
+|---|---|---|---|---|
+| **Setup time** | 30 seconds | 15-30 min | 10-20 min | 10-20 min |
+| **Setup** | `docker compose up` | Database + agents + accounts | Database + metadata | Database + metadata |
+| **Dependencies** | PHP + ffmpeg + SQLite | Java, database, plugins | .NET, database | .NET, database |
+| **Media library scan** | None -- your filesystem | Required (hours for large libraries) | Required | Required |
+| **Browse UI** | Netflix-style poster grid | Library grid | Library grid | Library grid |
+| **File sharing** | Built-in: link + password + expiry | Not built-in | Not built-in | Not built-in |
+| **RAM usage** | ~25 MB idle, ~50 MB streaming | 500 MB - 2 GB+ | 300 MB - 1 GB+ | 300 MB - 1 GB+ |
+| **Runs on Raspberry Pi** | Yes (Pi 4, 2 GB) | Barely | Yes (Pi 4, 4 GB) | Yes (Pi 4, 4 GB) |
+| **Cost** | Free (MIT) | Freemium ($5/mo) | Free (GPL) | Freemium ($5/mo) |
+| **User accounts required** | No | Yes | Yes | Yes |
+
+**TL;DR:** If you just want to share files and stream videos without maintaining a media library, ShareBox is the simplest option. If you need multi-device sync, live TV, or music management, Jellyfin or Plex are better fits.
 
 ## Quick Start
 
