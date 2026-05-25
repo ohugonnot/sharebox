@@ -339,7 +339,6 @@ function get_db(): PDO {
         $db->query('PRAGMA user_version = 18');
     }
 
-    /** @phpstan-ignore smaller.alwaysTrue */
     if ($version < 19) {
         // v19 : index composite pour accélérer la requête pending du worker
         $db->exec("CREATE INDEX IF NOT EXISTS idx_fp_pending ON folder_posters(poster_url, match_attempts)");
