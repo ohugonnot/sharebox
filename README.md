@@ -66,6 +66,8 @@ Open `http://localhost:8080/share` -- done. See [Installation](#installation) fo
 - **Remux** for H.264/MKV (video copy, audio transcode to AAC)
 - **Transcode** for HEVC/AV1 (libx264 ultrafast on the fly)
 
+**GPU Transcoding** -- auto-detected. Intel VAAPI, NVIDIA NVENC, Raspberry Pi V4L2M2M. Falls back to software if no GPU. See [docs/GPU.md](docs/GPU.md).
+
 **Player** -- custom JS video player with keyboard shortcuts, subtitle overlay (SRT/ASS -> WebVTT), PGS/VOBSUB burn-in, multi-audio track selection, quality picker (480p-1080p), episode navigation with auto-next, resume playback, Picture-in-Picture, iOS Safari HLS support.
 
 ![Player in action](https://github.com/ohugonnot/sharebox/releases/download/v1.0.0/sharebox-demo.gif)
