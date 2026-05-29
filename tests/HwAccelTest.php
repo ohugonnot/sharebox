@@ -28,6 +28,27 @@ class HwAccelTest extends TestCase
         $this->assertNotEmpty($result);
     }
 
+    /**
+     * En mode auto, un backend GPU ne doit être choisi QUE si son device existe —
+     * sinon ffmpeg liste l'encodeur (compilé) mais l'encodage plante au runtime
+     * (ex. nvenc sans GPU : "Cannot load libcuda.so.1"). Régression réelle observée
+     * en prod sur un serveur sans carte dont le ffmpeg embarquait nvenc.
+     */
+    public function testGpuBackendChosenOnlyWhenDevicePresent(): void
+    {
+        $result = detect_hw_encoder();
+        if ($result === 'nvenc') {
+            $this->assertTrue(
+                file_exists('/dev/nvidia0') || file_exists('/dev/nvidiactl'),
+                'nvenc ne doit être choisi que si un device NVIDIA est présent'
+            );
+        } elseif ($result === 'v4l2m2m') {
+            $this->assertTrue(file_exists('/dev/video10'), 'v4l2m2m exige /dev/video10');
+        } else {
+            $this->assertContains($result, ['none', 'vaapi']);
+        }
+    }
+
     // ── buildFfmpegCodecArgs with hardware encoders ──────────────────────
 
     public function testBuildFfmpegCodecArgsSoftware(): void

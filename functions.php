@@ -743,15 +743,20 @@ function detect_hw_encoder(): string {
         }
     }
 
-    // NVENC (Nvidia GPU)
+    // NVENC (Nvidia GPU) — h264_nvenc peut être compilé dans ffmpeg SANS qu'aucun
+    // GPU ne soit présent. Exiger un device NVIDIA réel, sinon on choisirait nvenc
+    // sur une machine sans carte → échec runtime "Cannot load libcuda.so.1" et
+    // lecture cassée. (VAAPI fait déjà cette vérif de device plus haut.)
     $encoders = shell_exec('ffmpeg -encoders 2>/dev/null') ?? '';
-    if (str_contains($encoders, 'h264_nvenc')) {
+    $hasNvidiaDevice = file_exists('/dev/nvidia0') || file_exists('/dev/nvidiactl');
+    if ($hasNvidiaDevice && str_contains($encoders, 'h264_nvenc')) {
         $cached = 'nvenc';
         return $cached;
     }
 
-    // V4L2 M2M (Raspberry Pi 4)
-    if (file_exists('/dev/video10') || str_contains($encoders, 'h264_v4l2m2m')) {
+    // V4L2 M2M (Raspberry Pi 4) — pareil : exiger le device ET l'encodeur, pas l'un
+    // ou l'autre (un ffmpeg complet liste h264_v4l2m2m même hors Pi).
+    if (file_exists('/dev/video10') && str_contains($encoders, 'h264_v4l2m2m')) {
         $cached = 'v4l2m2m';
         return $cached;
     }
