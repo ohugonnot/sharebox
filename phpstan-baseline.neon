@@ -1,0 +1,247 @@
+parameters:
+	ignoreErrors:
+		-
+			message: '#^Variable \$input might not be defined\.$#'
+			identifier: variable.undefined
+			count: 3
+			path: admin.php
+
+		-
+			message: '#^Constant STREAM_REMUX_ENABLED not found\.$#'
+			identifier: constant.notFound
+			count: 1
+			path: download.php
+
+		-
+			message: '#^Offset ''has_video'' on array\{name\: string, has_video\: bool\} on left side of \?\? always exists and is not nullable\.$#'
+			identifier: nullCoalesce.offset
+			count: 1
+			path: download.php
+
+		-
+			message: '#^Parameter \#1 \$array \(non\-empty\-list\<non\-falsy\-string\>\) of array_values is already a list, call has no effect\.$#'
+			identifier: arrayValues.list
+			count: 1
+			path: download.php
+
+		-
+			message: '#^Variable \$fileLines in empty\(\) always exists and is not falsy\.$#'
+			identifier: empty.variable
+			count: 1
+			path: download.php
+
+		-
+			message: '#^Result of && is always false\.$#'
+			identifier: booleanAnd.alwaysFalse
+			count: 1
+			path: functions.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between '''' and '''' will always evaluate to false\.$#'
+			identifier: notIdentical.alwaysFalse
+			count: 1
+			path: functions.php
+
+		-
+			message: '#^Variable \$resolvedPath might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: handlers/keyframe.php
+
+		-
+			message: '#^Variable \$db might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: handlers/probe.php
+
+		-
+			message: '#^Variable \$resolvedPath might not be defined\.$#'
+			identifier: variable.undefined
+			count: 14
+			path: handlers/probe.php
+
+		-
+			message: '#^If condition is always true\.$#'
+			identifier: if.alwaysTrue
+			count: 1
+			path: handlers/stream_hls.php
+
+		-
+			message: '#^Ternary operator condition is always true\.$#'
+			identifier: ternary.alwaysTrue
+			count: 1
+			path: handlers/stream_hls.php
+
+		-
+			message: '#^Variable \$audioTrack might not be defined\.$#'
+			identifier: variable.undefined
+			count: 5
+			path: handlers/stream_hls.php
+
+		-
+			message: '#^Variable \$db might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: handlers/stream_hls.php
+
+		-
+			message: '#^Variable \$resolvedPath might not be defined\.$#'
+			identifier: variable.undefined
+			count: 12
+			path: handlers/stream_hls.php
+
+		-
+			message: '#^Variable \$seekArgBefore might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_hls.php
+
+		-
+			message: '#^Variable \$startSec might not be defined\.$#'
+			identifier: variable.undefined
+			count: 3
+			path: handlers/stream_hls.php
+
+		-
+			message: '#^Variable \$subPath might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_hls.php
+
+		-
+			message: '#^Variable \$token might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_hls.php
+
+		-
+			message: '#^Variable \$resolvedPath might not be defined\.$#'
+			identifier: variable.undefined
+			count: 4
+			path: handlers/stream_native.php
+
+		-
+			message: '#^If condition is always false\.$#'
+			identifier: if.alwaysFalse
+			count: 1
+			path: handlers/stream_remux.php
+
+		-
+			message: '#^Strict comparison using \!\=\= between ''aresample\=async\=1…'' and '''' will always evaluate to true\.$#'
+			identifier: notIdentical.alwaysTrue
+			count: 1
+			path: handlers/stream_remux.php
+
+		-
+			message: '#^Variable \$audioMap might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_remux.php
+
+		-
+			message: '#^Variable \$audioTrack might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_remux.php
+
+		-
+			message: '#^Variable \$db might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_remux.php
+
+		-
+			message: '#^Variable \$resolvedPath might not be defined\.$#'
+			identifier: variable.undefined
+			count: 7
+			path: handlers/stream_remux.php
+
+		-
+			message: '#^Variable \$seekArgBefore might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_remux.php
+
+		-
+			message: '#^Variable \$startSec might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_remux.php
+
+		-
+			message: '#^If condition is always false\.$#'
+			identifier: if.alwaysFalse
+			count: 1
+			path: handlers/stream_transcode.php
+
+		-
+			message: '#^Variable \$audioTrack might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: handlers/stream_transcode.php
+
+		-
+			message: '#^Variable \$db might not be defined\.$#'
+			identifier: variable.undefined
+			count: 3
+			path: handlers/stream_transcode.php
+
+		-
+			message: '#^Variable \$resolvedPath might not be defined\.$#'
+			identifier: variable.undefined
+			count: 10
+			path: handlers/stream_transcode.php
+
+		-
+			message: '#^Variable \$seekArgBefore might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_transcode.php
+
+		-
+			message: '#^Variable \$startSec might not be defined\.$#'
+			identifier: variable.undefined
+			count: 1
+			path: handlers/stream_transcode.php
+
+		-
+			message: '#^Variable \$db might not be defined\.$#'
+			identifier: variable.undefined
+			count: 2
+			path: handlers/subtitle.php
+
+		-
+			message: '#^Variable \$resolvedPath might not be defined\.$#'
+			identifier: variable.undefined
+			count: 6
+			path: handlers/subtitle.php
+
+		-
+			message: '#^Comparison operation "\>" between int\<150, max\> and 0 is always true\.$#'
+			identifier: greater.alwaysTrue
+			count: 3
+			path: handlers/tmdb.php
+
+		-
+			message: '#^Parameter \#1 \$array \(list\<array\{id\: 0, title\: string, year\: '''', type\: ''web'', poster\: mixed, poster_w300\: mixed, overview\: non\-falsy\-string, rating\: 0, \.\.\.\}\>\) of array_values is already a list, call has no effect\.$#'
+			identifier: arrayValues.list
+			count: 1
+			path: handlers/tmdb.php
+
+		-
+			message: '#^Ternary operator condition is always true\.$#'
+			identifier: ternary.alwaysTrue
+			count: 1
+			path: handlers/tmdb.php
+
+		-
+			message: '#^Variable \$db might not be defined\.$#'
+			identifier: variable.undefined
+			count: 23
+			path: handlers/tmdb.php
+
+		-
+			message: '#^Variable \$resolvedPath might not be defined\.$#'
+			identifier: variable.undefined
+			count: 29
+			path: handlers/tmdb.php
