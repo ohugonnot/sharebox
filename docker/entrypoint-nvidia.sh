@@ -119,6 +119,11 @@ cron
 # Initial DB backup at startup (cron only fires on the hour)
 php /app/cron/backup_db.php 2>/dev/null || true
 
+# Root-side PHP above (admin bootstrap + backup) may have created share.db-wal /
+# -shm owned by root; php-fpm runs as www-data and must write them (WAL needs -shm
+# writable even for reads). Re-own before starting services.
+chown www-data:www-data /data/share.db /data/share.db-wal /data/share.db-shm /data/share.db.bak 2>/dev/null || true
+
 # ── GPU detection report ─────────────────────────────────────────────────────
 echo "ShareBox ready (NVIDIA build) — http://localhost/share"
 if ffmpeg -encoders 2>/dev/null | grep -q h264_nvenc; then
