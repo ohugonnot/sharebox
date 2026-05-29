@@ -990,3 +990,106 @@ test.describe('File Serving', () => {
     await expect(breadcrumb).toContainText('Breaking Bad');
   });
 });
+
+// ---------------------------------------------------------------------------
+// 11. TMDB write gate (P3 — admin-only write endpoints on /dl/{token})
+// ---------------------------------------------------------------------------
+
+test.describe('TMDB write gate', () => {
+  // Endpoints that mutate shared poster/type state or hit an external API (SSRF).
+  const WRITE_ENDPOINTS = [
+    'tmdb_set', 'folder_type_set', 'web_poster_save',
+    'ai_recheck', 'tmdb_reload', 'tmdb_search', 'web_search',
+  ];
+
+  test('public ?posters stays readable (not 403)', async ({ page }) => {
+    requireLocal();
+    const resp = await page.request.get(BROWSE_ROOT + '?posters=1');
+    expect(resp.status()).not.toBe(403);
+  });
+
+  for (const ep of WRITE_ENDPOINTS) {
+    test(`unauthenticated ?${ep} is forbidden (403)`, async ({ page }) => {
+      requireLocal();
+      // Fresh context guarantees no admin session.
+      const anon = await page.context().browser()!.newContext({ ignoreHTTPSErrors: true });
+      const anonPage = await anon.newPage();
+      const resp = await anonPage.request.get(BROWSE_ROOT + '?' + ep + '=1');
+      expect(resp.status()).toBe(403);
+      await anon.close();
+    });
+  }
+
+  test('admin passes the gate (not 403)', async ({ page }) => {
+    requireLocal();
+    await loginLocal(page);
+    // With an admin session the gate opens; the handler then runs (200, possibly
+    // "TMDB_API_KEY not configured" in the demo) — but never the 403 from the gate.
+    const resp = await page.request.get(BROWSE_ROOT + '?tmdb_reload=1');
+    expect(resp.status()).not.toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. Share-link lifecycle (token validation / password / max_downloads)
+// ---------------------------------------------------------------------------
+
+test.describe('Share-link lifecycle', () => {
+  /** Create a link via the admin API; returns the token (or '' on failure). */
+  async function createLink(page: Page, opts: Record<string, unknown>): Promise<string> {
+    await page.goto('/share/');
+    await page.waitForFunction(() => document.querySelector('meta[name="csrf-token"]') !== null, { timeout: 10000 });
+    const res = await page.evaluate(async (o) => {
+      const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
+      const resp = await fetch('/share/ctrl.php?cmd=create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...o, csrf_token: csrf }),
+      });
+      const text = await resp.text();
+      try { return { status: resp.status, body: JSON.parse(text) as { token?: string } }; }
+      catch { return { status: resp.status, body: {} as { token?: string } }; }
+    }, opts);
+    return res.body.token ?? '';
+  }
+
+  test('nonexistent token returns 404', async ({ page }) => {
+    requireLocal();
+    const resp = await page.request.get('/dl/this-token-does-not-exist-xyz', { maxRedirects: 0 });
+    expect(resp.status()).toBe(404);
+  });
+
+  test('password-protected link does not serve content without the password', async ({ page, context }) => {
+    requireLocal();
+    await loginLocal(page);
+    const token = await createLink(page, { path: 'Films', password: 's3cret-' + Date.now() });
+    test.skip(!token, 'Could not create a password-protected link');
+
+    // Access from a fresh anonymous context — must get the password form, not the listing.
+    const anon = await context.browser()!.newContext({ ignoreHTTPSErrors: true });
+    const anonPage = await anon.newPage();
+    const resp = await anonPage.request.get('/dl/' + token);
+    const body = await resp.text();
+    expect(body).toMatch(/type=["']password["']|name=["']password["']/);
+    // The actual folder content must NOT leak before the password is entered.
+    expect(body).not.toContain('grid-card-title');
+    await anon.close();
+  });
+
+  test('max_downloads is enforced (410 after the limit)', async ({ page, context }) => {
+    requireLocal();
+    await loginLocal(page);
+    const token = await createLink(page, { path: DEMO_VIDEO_PATH, max_downloads: 1 });
+    test.skip(!token, 'Could not create a file link with max_downloads');
+
+    const anon = await context.browser()!.newContext({ ignoreHTTPSErrors: true });
+    const anonPage = await anon.newPage();
+    // First download consumes the single allowed download (Range keeps it tiny).
+    const first = await anonPage.request.get('/dl/' + token, { headers: { Range: 'bytes=0-0' } });
+    expect([200, 206]).toContain(first.status());
+    // Second must be refused with 410 Gone.
+    const second = await anonPage.request.get('/dl/' + token, { headers: { Range: 'bytes=0-0' } });
+    expect(second.status()).toBe(410);
+    await anon.close();
+  });
+});
