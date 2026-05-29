@@ -1,3 +1,9 @@
+includes:
+    # Dette pré-existante des gros fichiers (download.php, admin.php, handlers/)
+    # désormais sous PHPStan : capturée ici pour ne bloquer que les NOUVELLES erreurs.
+    # À résorber progressivement (réduire ce fichier au fil des extractions).
+    - phpstan-baseline.neon
+
 parameters:
     level: 5
     bootstrapFiles:
@@ -5,8 +11,12 @@ parameters:
     paths:
         - api/
         - cron/
+        - handlers/
         - functions.php
         - ctrl.php
         - db.php
+        - auth.php
+        - download.php
+        - admin.php
     excludePaths:
         - vendor/

@@ -3,6 +3,26 @@
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Security
+- **Fixed PHP injection in the Docker entrypoint** — `SHAREBOX_STREAM_MAX_CONCURRENT`, `SHAREBOX_BANDWIDTH_QUOTA_TB` and `SHAREBOX_STREAM_REMUX_ENABLED` were interpolated raw into `config.php`; now strictly validated (integer / `true|false`) before use.
+- **TMDB write endpoints now require admin** — `tmdb_set`, `folder_type_set`, `web_poster_save`, `ai_recheck`, `tmdb_reload`, `tmdb_search`, `web_search` are gated behind `is_admin()` on the public `/dl/{token}` path; `?posters` (grid display) stays public.
+
+### Changed
+- **SQLite backup moved out of the request hot path** — `get_db()` no longer triggers a full DB copy on web requests; backup now runs from a dedicated hourly cron (`cron/backup_db.php`).
+- ZIP folder download is now bounded by a concurrency slot + `timeout` (DoS hardening).
+- Lockfiles (`composer.lock`, `package-lock.json`) are committed; `composer.json` declares the runtime contract (`php >=8.1`, `ext-pdo_sqlite/curl/gd/mbstring/posix`) + MIT license; CI installs those extensions and uses `npm ci`.
+- PHPStan now also analyses `download.php`, `admin.php`, `auth.php` and `handlers/` (pre-existing findings baselined; new regressions fail CI).
+
+### Fixed
+- `ctrl.php` emitted a `session_start()` Notice that corrupted JSON API responses.
+- Docker restart could leave `share.db-wal`/`-shm` owned by root (php-fpm runs as www-data).
+- Keyboard focus is visible again (`:focus-visible`) — `outline:none` was set everywhere with no focus-visible style.
+
+### Tests
+- **441 tests / 886 assertions** (was 416/824). Converted key paths from source-grep to real execution: `serve_file()` Range handling (206/Content-Range/416), the ffmpeg arg builders, the `probe_cache` readers; e2e for the TMDB admin gate and share-link lifecycle (404 / password / `max_downloads` 410).
+
 ## [5.0.0] - 2026-05-25
 
 ### Added
