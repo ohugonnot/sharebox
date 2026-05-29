@@ -84,6 +84,10 @@ function get_current_user_name(): ?string {
     return $_SESSION['sharebox_user'] ?? null;
 }
 
+function is_admin(): bool {
+    return is_logged_in() && (($_SESSION['sharebox_role'] ?? '') === 'admin');
+}
+
 /**
  * Brute-force rate limiting (file-based, simple)
  */

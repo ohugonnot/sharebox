@@ -9,6 +9,14 @@ MAX_CONCURRENT="${SHAREBOX_STREAM_MAX_CONCURRENT:-4}"
 REMUX_ENABLED="${SHAREBOX_STREAM_REMUX_ENABLED:-false}"
 QUOTA_TB="${SHAREBOX_BANDWIDTH_QUOTA_TB:-100}"
 
+# ── Validate numeric/boolean env ─────────────────────────────────────────────
+# These three are interpolated RAW (unquoted) into define() below, so a value
+# like "1);system($_GET[x]);//" would become executable PHP. Enforce strict
+# types and fall back to safe defaults otherwise.
+case "$MAX_CONCURRENT" in ''|*[!0-9]*) echo "ShareBox: invalid SHAREBOX_STREAM_MAX_CONCURRENT='$MAX_CONCURRENT', using 4"; MAX_CONCURRENT=4 ;; esac
+case "$QUOTA_TB" in ''|*[!0-9]*) echo "ShareBox: invalid SHAREBOX_BANDWIDTH_QUOTA_TB='$QUOTA_TB', using 100"; QUOTA_TB=100 ;; esac
+case "$REMUX_ENABLED" in true|false) ;; *) echo "ShareBox: invalid SHAREBOX_STREAM_REMUX_ENABLED='$REMUX_ENABLED', using false"; REMUX_ENABLED=false ;; esac
+
 # ── Generate config.php ──────────────────────────────────────────────────────
 # Sanitize strings to prevent PHP injection via single-quotes in env vars
 sanitize() { printf '%s' "$1" | sed "s/'/\\\\'/g"; }
@@ -100,10 +108,16 @@ if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
     fi
 fi
 
-# ── Cron (bandwidth history) ─────────────────────────────────────────────────
-echo "* * * * * www-data php /app/cron/record_netspeed.php" > /etc/cron.d/sharebox
+# ── Cron (bandwidth history + hourly DB backup) ──────────────────────────────
+{
+    echo "* * * * * www-data php /app/cron/record_netspeed.php"
+    echo "0 * * * * www-data php /app/cron/backup_db.php"
+} > /etc/cron.d/sharebox
 chmod 644 /etc/cron.d/sharebox
 cron
+
+# Initial DB backup at startup (cron only fires on the hour)
+php /app/cron/backup_db.php 2>/dev/null || true
 
 # ── GPU detection report ─────────────────────────────────────────────────────
 echo "ShareBox ready (NVIDIA build) — http://localhost/share"

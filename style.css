@@ -1651,3 +1651,15 @@ body::before {
 }
 
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Accessibilité : visibilité du focus clavier ──────────────────────────────
+ * Restaure un anneau de focus visible à la navigation clavier (Tab) sans le
+ * montrer au clic souris. Surcharge les `outline:none` épars (y compris inline)
+ * via !important — un focus clavier invisible est un blocage a11y réel. */
+:focus-visible {
+    outline: 2px solid var(--accent, #f0a030) !important;
+    outline-offset: 2px !important;
+}
+:focus:not(:focus-visible) {
+    outline: none !important;
+}
