@@ -181,14 +181,14 @@ The `.htaccess` handles rewriting. Enable `mod_rewrite`, set `AllowOverride All`
 - Session regeneration after authentication
 - Content-Disposition header injection prevention
 - Shell commands escaped with `escapeshellarg()` everywhere
-- 416 tests including security-specific test cases
+- 441 tests including security-specific test cases
 - PHPStan level 5 static analysis in CI
 
 ## Testing
 
 ```bash
 composer install
-vendor/bin/phpunit          # 416 tests, 824 assertions
+vendor/bin/phpunit          # 441 tests, 886 assertions
 vendor/bin/phpstan analyse  # Level 5
 ```
 
