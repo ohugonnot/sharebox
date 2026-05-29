@@ -780,18 +780,27 @@ function validateBurnSub(int $burnSub, ?int $subCount = null): int {
 }
 
 /**
- * Compte les pistes sous-titres d'un fichier via probe_cache.
+ * Lit les données ffprobe en cache pour un chemin.
+ * @return array<string,mixed>|null Le résultat ffprobe décodé, ou null si absent/illisible.
  */
-function getSubtitleCount(PDO $db, string $path): int {
+function probe_cache_data(PDO $db, string $path): ?array {
     try {
         $stmt = $db->prepare("SELECT result FROM probe_cache WHERE path = :p");
         $stmt->execute([':p' => $path]);
         if ($row = $stmt->fetch()) {
             $data = json_decode($row['result'], true);
-            return count($data['subtitles'] ?? []);
+            return is_array($data) ? $data : null;
         }
     } catch (PDOException $e) { /* ignore */ }
-    return 0;
+    return null;
+}
+
+/**
+ * Compte les pistes sous-titres d'un fichier via probe_cache.
+ */
+function getSubtitleCount(PDO $db, string $path): int {
+    $data = probe_cache_data($db, $path);
+    return $data === null ? 0 : count($data['subtitles'] ?? []);
 }
 
 /**
@@ -801,16 +810,11 @@ function getSubtitleCount(PDO $db, string $path): int {
  * @return bool True si le fichier est en HDR (smpte2084, arib-std-b67, smpte428)
  */
 function isHDRFile(PDO $db, string $path): bool {
-    try {
-        $stmt = $db->prepare("SELECT result FROM probe_cache WHERE path = :p");
-        $stmt->execute([':p' => $path]);
-        if ($row = $stmt->fetch()) {
-            $data = json_decode($row['result'], true);
-            $ct = $data['colorTransfer'] ?? '';
-            return in_array($ct, ['smpte2084', 'arib-std-b67', 'smpte428'], true);
-        }
-    } catch (PDOException $e) { /* ignore */ }
-    return false;
+    $data = probe_cache_data($db, $path);
+    if ($data === null) {
+        return false;
+    }
+    return in_array($data['colorTransfer'] ?? '', ['smpte2084', 'arib-std-b67', 'smpte428'], true);
 }
 
 /**
@@ -858,15 +862,9 @@ function buildFilterGraph(int $quality, int $audioTrack, int $burnSub = -1, stri
  * Vérifie si un fichier a au moins une piste audio (via probe_cache).
  */
 function hasAudioTrack(PDO $db, string $path): bool {
-    try {
-        $stmt = $db->prepare("SELECT result FROM probe_cache WHERE path = :p");
-        $stmt->execute([':p' => $path]);
-        if ($row = $stmt->fetch()) {
-            $data = json_decode($row['result'], true);
-            return !empty($data['audio']);
-        }
-    } catch (PDOException $e) { /* ignore */ }
-    return true; // assume audio exists if no probe data
+    $data = probe_cache_data($db, $path);
+    // Pas de données probe → on suppose qu'il y a de l'audio (comportement historique).
+    return $data === null ? true : !empty($data['audio']);
 }
 
 /**
