@@ -3,11 +3,9 @@ config.php
 .worktrees/
 vendor/
 .phpunit.cache/
-composer.lock
 /composer
 __pycache__/
 node_modules/
-package-lock.json
 playwright-report/
 test-results/
 

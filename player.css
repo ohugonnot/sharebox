@@ -174,3 +174,13 @@ video{max-height:100vh !important;height:100vh !important;max-height:100dvh !imp
 .autonext-actions .an-play:hover { background:#ffc060; }
 .autonext-actions .an-cancel { background:rgba(255,255,255,.08); color:var(--text-secondary); border:1px solid rgba(255,255,255,.1); }
 .autonext-actions .an-cancel:hover { background:rgba(255,255,255,.12); color:var(--text-primary); }
+
+/* ── Accessibilité : focus clavier visible sur les contrôles du player ────────
+ * Les .ctrl-*, .track-select et .vol-slider ont outline:none ; on rétablit un
+ * anneau visible uniquement au clavier (Tab), pas au clic. */
+.player-wrap :focus-visible,
+.ctrl-play:focus-visible, .ctrl-mute:focus-visible,
+.track-select:focus-visible, .vol-slider:focus-visible {
+    outline: 2px solid var(--accent, #f0a030) !important;
+    outline-offset: 2px !important;
+}
