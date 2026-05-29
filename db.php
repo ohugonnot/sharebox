@@ -9,6 +9,26 @@ if (file_exists(__DIR__ . '/config.php')) {
 }
 
 /**
+ * Sauvegarde passive de la base vers share.db.bak.
+ * Appelée par un cron dédié (cron/backup_db.php), JAMAIS depuis get_db() : une
+ * requête web ne doit pas déclencher une copie complète de la base.
+ * PASSIVE : ne bloque ni readers ni writers.
+ */
+function backup_db(): void {
+    if (!defined('DB_PATH')) return;
+    $dbFile = DB_PATH;
+    if (!file_exists($dbFile)) return;
+    $db = get_db();
+    // Flush the WAL into the main db file FIRST — in WAL mode the main file can
+    // stay tiny (data lives in -wal) until a checkpoint, so the size guard must
+    // run after, not before. PASSIVE ne bloque ni readers ni writers.
+    $db->exec('PRAGMA wal_checkpoint(PASSIVE)');
+    clearstatcache(true, $dbFile);
+    if (filesize($dbFile) <= 4096) return;  // base vide / non initialisée → skip
+    @copy($dbFile, dirname($dbFile) . '/share.db.bak');
+}
+
+/**
  * Retourne une connexion PDO vers la base SQLite
  * Crée les tables si elles n'existent pas encore
  */
@@ -21,7 +41,6 @@ function get_db(): PDO {
     }
 
     $dbFile = DB_PATH;
-    $backupFile = dirname($dbFile) . '/share.db.bak';
     $dbExisted = file_exists($dbFile) && filesize($dbFile) > 0;
 
     $db = new PDO('sqlite:' . $dbFile, null, null, [
@@ -45,17 +64,9 @@ function get_db(): PDO {
         }
     }
 
-    // Safety: auto-backup après ouverture (max 1h).
-    // PASSIVE : ne bloque ni readers ni writers (contrairement à TRUNCATE/FULL qui
-    // bloquent tous les nouveaux writers et peuvent provoquer des "database is locked"
-    // sur les requêtes concurrentes). Le backup peut rater quelques frames WAL récentes
-    // mais c'est acceptable — le worker fait un TRUNCATE propre en fin de scan.
-    if ($dbExisted && filesize($dbFile) > 4096) {
-        if (!file_exists($backupFile) || (time() - filemtime($backupFile)) > 3600) {
-            $db->exec('PRAGMA wal_checkpoint(PASSIVE)');
-            @copy($dbFile, $backupFile);
-        }
-    }
+    // NB : la sauvegarde de la base n'est PAS faite ici. Un simple GET (y compris
+    // les endpoints pollés du dashboard) ne doit pas déclencher un @copy() de toute
+    // la base — coûteux sur carte SD de Pi. Voir backup_db() + cron/backup_db.php.
 
     // Crée les tables si elles n'existent pas
     $db->query("

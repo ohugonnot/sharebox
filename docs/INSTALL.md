@@ -175,6 +175,15 @@ sudo chmod 750 /var/www/sharebox/data
 sudo htpasswd -c /etc/sharebox.htpasswd admin
 ```
 
+> **Two authentication modes.** ShareBox ships with a built-in **session login**
+> (the `/share/login.php` form — the default for the Docker image, no web-server
+> auth needed). Alternatively, you can put **HTTP auth at the reverse proxy**
+> (Basic via `htpasswd` as above, or Digest) and let ShareBox trust the
+> authenticated identity through a header — set `TRUSTED_AUTH_HEADER` (e.g.
+> `REMOTE_USER`) in `config.php`. The `htpasswd` step below is only needed for
+> this proxy-auth mode. If a logged-in username matches `ADMIN_USER`, it gets the
+> `admin` role; everyone else is a regular `user`.
+
 ### Nginx config
 
 Create `/etc/nginx/sites-available/sharebox`:
@@ -413,6 +422,7 @@ sudo cp /var/www/sharebox/cron/sharebox.cron /etc/cron.d/sharebox
 
 This sets up:
 - Network speed recording (every minute, for dashboard graph)
+- Passive SQLite backup to `share.db.bak` (hourly)
 - HLS temp directory cleanup (every 15 min)
 - SQLite cache pruning (daily at 4 AM)
 

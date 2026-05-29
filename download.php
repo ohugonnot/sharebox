@@ -9,6 +9,7 @@
 
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/auth.php';  // is_admin() for gating TMDB write endpoints
 
 /**
  * Écrit l'état du stream actif dans /tmp/sharebox_stream_{md5(session_id())}.json
@@ -289,6 +290,20 @@ if (is_dir($resolvedPath)) {
 
     // TMDB poster endpoints (search, batch, set)
     if (isset($_GET['posters']) || isset($_GET['tmdb_search']) || isset($_GET['tmdb_set']) || isset($_GET['folder_type_set']) || isset($_GET['ai_recheck']) || isset($_GET['tmdb_reload']) || isset($_GET['web_search']) || isset($_GET['web_poster_save'])) {
+        // ?posters is the public grid display. Every other endpoint mutates
+        // shared poster/type state or hits an external API (SSRF surface), so
+        // it must be admin-only — a public /dl/{token} holder cannot write.
+        $readOnlyPosters = isset($_GET['posters'])
+            && !isset($_GET['tmdb_search']) && !isset($_GET['tmdb_set'])
+            && !isset($_GET['folder_type_set']) && !isset($_GET['ai_recheck'])
+            && !isset($_GET['tmdb_reload']) && !isset($_GET['web_search'])
+            && !isset($_GET['web_poster_save']);
+        if (!$readOnlyPosters && !is_admin()) {
+            http_response_code(403);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['error' => 'forbidden']);
+            exit;
+        }
         require __DIR__ . '/handlers/tmdb.php';
     }
 
@@ -306,12 +321,20 @@ if (is_dir($resolvedPath)) {
         $parentDir = dirname($resolvedPath);
         $baseName = basename($resolvedPath);
 
+        // Bound concurrency + cap runtime: a ZIP walks and compresses a whole
+        // directory tree, so treat it like a streaming job (503 if saturated)
+        // and wrap it in `timeout` so a huge/slow tree can't hold the slot forever.
+        [$zipSlot, $zipQueued] = acquireStreamSlot();
+        register_shutdown_function(function () use (&$zipSlot) { releaseStreamSlot($zipSlot); });
+
         header('Content-Type: application/zip');
         $safeZipName = preg_replace('/[\r\n\0]/', '', $zipName);
         header('Content-Disposition: attachment; filename="' . addcslashes($safeZipName, '"\\') . '"');
         header('X-Accel-Buffering: no');
 
-        passthru('cd ' . escapeshellarg($parentDir) . ' && zip -r -0 - ' . escapeshellarg($baseName));
+        $zipTimeout = defined('ZIP_TIMEOUT') ? (int)ZIP_TIMEOUT : 3600;
+        $zipCmd = 'cd ' . escapeshellarg($parentDir) . ' && zip -r -0 - ' . escapeshellarg($baseName);
+        passthru('timeout ' . $zipTimeout . ' sh -c ' . escapeshellarg($zipCmd));
         exit;
     }
 

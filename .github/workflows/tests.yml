@@ -20,7 +20,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: pdo_sqlite, mbstring
+          extensions: pdo_sqlite, mbstring, curl, gd, posix
 
       - name: PHP syntax check
         run: find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -P4 -n1 php -l > /dev/null
@@ -54,7 +54,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: pdo_sqlite, mbstring
+          extensions: pdo_sqlite, mbstring, curl, gd, posix
           coverage: xdebug
 
       - name: Cache Composer dependencies
@@ -80,7 +80,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          extensions: pdo_sqlite, mbstring
+          extensions: pdo_sqlite, mbstring, curl, gd, posix
 
       - name: Cache Composer dependencies
         uses: actions/cache@v4
