@@ -901,6 +901,19 @@ body::before {
     box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* Champ numérique (max téléchargements) — retire le spinner natif + espace du bouton */
+.sheet-num-input {
+    margin-bottom: 1.15rem;
+    padding: 0 1rem;
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+.sheet-num-input::-webkit-outer-spin-button,
+.sheet-num-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
 .sheet-pwd-input::placeholder {
     color: var(--text-muted);
     font-size: .9rem;
@@ -1086,6 +1099,49 @@ body::before {
 .sheet-close-btn:hover {
     color: var(--text-secondary);
     border-color: var(--border-strong);
+}
+
+.prompt-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .6);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: 900;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn .15s ease-out;
+}
+
+.prompt-modal-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem 1.5rem 1.25rem;
+    width: calc(100% - 2rem);
+    max-width: 380px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, .6);
+    /* Card centré par le flex du parent → l'anim ne doit PAS translater (sinon saut à la fin). */
+    animation: promptPop .22s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+@keyframes promptPop {
+    from { opacity: 0; transform: scale(.92); }
+    to   { opacity: 1; transform: scale(1); }
+}
+
+.prompt-modal-title {
+    font-size: .95rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 1.1rem;
+}
+
+.prompt-modal-actions {
+    display: flex;
+    gap: .6rem;
+    justify-content: flex-end;
 }
 
 /* ============================================================================
