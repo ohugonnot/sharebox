@@ -306,7 +306,7 @@ function ouvrirShareSheet(path, name) {
     maxDlInput.type = 'number';
     maxDlInput.min = '1';
     maxDlInput.placeholder = 'Illimité';
-    maxDlInput.className = 'sheet-pwd-input';
+    maxDlInput.className = 'sheet-pwd-input sheet-num-input';
     maxDlInput.style.width = '50%';
 
     // Bouton créer
@@ -374,15 +374,18 @@ async function creerLienSheet(path, password, expiresStr, sheet, maxDownloads = 
         copyBtn.addEventListener('click', async () => {
             let text = fullUrl;
             if (password) text += '\nMot de passe\u00a0: ' + password;
-            try {
-                await navigator.clipboard.writeText(text);
+            const ok = await copyText(text);
+            if (ok) {
                 copyBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Copié\u00a0!';
                 copyBtn.classList.add('is-copied');
+                showToast('Lien copié', 'success');
                 setTimeout(() => {
                     copyBtn.innerHTML = svgCopy() + ' Copier le lien';
                     copyBtn.classList.remove('is-copied');
                 }, 2500);
-            } catch { prompt('Lien :', fullUrl); }
+            } else {
+                showToast('Copie impossible', 'error');
+            }
         });
 
         const closeBtn = creerElement('button', 'sheet-close-btn');
@@ -455,24 +458,87 @@ async function creerLien(path, password, expiresStr, container) {
     }
 }
 
+async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch { /* fall through */ }
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { /* ignore */ }
+    ta.remove();
+    return ok;
+}
+
+function promptModal({ title, label, type = 'text', placeholder = '', confirmLabel = 'Confirmer' }) {
+    return new Promise(resolve => {
+        const overlay = creerElement('div', 'prompt-modal-overlay');
+        const card = creerElement('div', 'prompt-modal-card');
+
+        const titleEl = creerElement('div', 'prompt-modal-title');
+        titleEl.textContent = title;
+
+        const labelEl = creerElement('label', 'sheet-field-label');
+        labelEl.textContent = label;
+
+        const input = document.createElement('input');
+        input.type = type;
+        input.placeholder = placeholder;
+        input.className = 'sheet-pwd-input';
+        input.style.marginBottom = '1.2rem';
+
+        const actions = creerElement('div', 'prompt-modal-actions');
+        const cancelBtn = creerElement('button', 'btn btn-ghost');
+        cancelBtn.textContent = 'Annuler';
+        const confirmBtn = creerElement('button', 'btn btn-accent');
+        confirmBtn.textContent = confirmLabel;
+        actions.append(cancelBtn, confirmBtn);
+
+        card.append(titleEl, labelEl, input, actions);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        input.focus();
+
+        function close(value) {
+            overlay.remove();
+            document.removeEventListener('keydown', onKey);
+            resolve(value);
+        }
+
+        function onKey(e) { if (e.key === 'Escape') close(null); }
+        document.addEventListener('keydown', onKey);
+        overlay.addEventListener('click', e => { if (e.target === overlay) close(null); });
+        cancelBtn.addEventListener('click', () => close(null));
+        confirmBtn.addEventListener('click', () => close(input.value));
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') close(input.value); });
+    });
+}
+
 /**
  * Copie un lien dans le presse-papiers
  */
 async function copierLien(url, btn) {
-    try {
-        await navigator.clipboard.writeText(url);
+    const ok = await copyText(url);
+    if (ok) {
         const orig = btn.innerHTML;
         btn.innerHTML = '&#x2713; Copié !';
         btn.classList.add('btn-success');
         btn.classList.remove('btn-primary');
+        showToast('Lien copié', 'success');
         setTimeout(() => {
             btn.innerHTML = orig;
             btn.classList.remove('btn-success');
             btn.classList.add('btn-primary');
         }, 2000);
-    } catch {
-        // Fallback si clipboard API indisponible
-        prompt('Copie ce lien :', url);
+    } else {
+        showToast('Copie impossible', 'error');
     }
 }
 
@@ -545,24 +611,34 @@ async function copierInfoLien(url, hasPwd, pwd, btn) {
         text += '\nMot de passe : ' + pwd;
     }
 
-    try {
-        await navigator.clipboard.writeText(text);
+    const ok = await copyText(text);
+    if (ok) {
         const orig = btn.innerHTML;
         btn.innerHTML = '&#x2713; Copié !';
+        showToast('Lien copié', 'success');
         setTimeout(() => { btn.innerHTML = orig; }, 2000);
-    } catch {
-        prompt('Copie ces infos :', text);
+    } else {
+        showToast('Copie impossible', 'error');
     }
 }
 
 /**
  * Envoie un lien de partage par email via l'API
- * Demande l'adresse email dans un prompt
  */
 // eslint-disable-next-line no-unused-vars
 async function envoyerEmail(linkId) {
-    const email = prompt('Adresse email du destinataire :');
+    const email = await promptModal({
+        title: 'Envoyer le lien par email',
+        label: 'Adresse email du destinataire',
+        type: 'email',
+        placeholder: 'destinataire@exemple.com',
+        confirmLabel: 'Envoyer',
+    });
     if (!email || !email.trim()) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+        showToast('Adresse email invalide', 'error');
+        return;
+    }
 
     try {
         const resp = await fetch('/share/ctrl.php?cmd=send_email', {

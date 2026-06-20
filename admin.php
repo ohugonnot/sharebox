@@ -1047,7 +1047,7 @@ if ($action !== '') {
         <?php if ($isAdmin): ?>
         <button class="tab-btn active" onclick="switchTab('utilisateurs')">Utilisateurs</button>
         <button class="tab-btn" onclick="switchTab('activite')">Activité</button>
-        <button class="tab-btn" onclick="switchTab('statistiques')">Statistiques</button>
+        <?php if ($seedboxMode): ?><button class="tab-btn" onclick="switchTab('statistiques')">Statistiques</button><?php endif; ?>
         <button class="tab-btn" onclick="switchTab('systeme')">Système</button>
         <?php endif; ?>
         <button class="tab-btn <?= $isAdmin ? '' : 'active' ?>" onclick="switchTab('compte')">Mon compte</button>
@@ -1163,7 +1163,7 @@ if ($action !== '') {
     <?php endif; ?>
 
     <!-- ══════ Onglet Statistiques ══════ -->
-    <?php if ($isAdmin): ?>
+    <?php if ($isAdmin && $seedboxMode): ?>
     <div id="tab-statistiques" class="tab-panel">
         <div class="card">
             <div class="card-header" style="display:flex;justify-content:space-between;align-items:center">
@@ -2104,7 +2104,7 @@ initAccordion('activite-recente', false);
 initAccordion('evenements-systeme', false);
 
 // ── Seed Stats ────────────────────────────────────────────────────────────────
-<?php if ($isAdmin): ?>
+<?php if ($isAdmin && $seedboxMode): ?>
 (function() {
     const BASE = 'api/torrent_stats.php';
     let seedRange  = localStorage.getItem('seed_range') || '7d';
