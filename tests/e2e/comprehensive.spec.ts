@@ -69,7 +69,7 @@ test.describe('Public Browse', () => {
     await expect(page.locator('.row-name.is-folder, .grid-card-title')).toContainText(['Series']);
   });
 
-  test('Films folder contains 12 items', async ({ page }) => {
+  test('Films folder contains 18 items', async ({ page }) => {
     requireLocal();
     await page.goto(BROWSE_ROOT + '?p=Films');
     const html = await page.content();
@@ -77,12 +77,12 @@ test.describe('Public Browse', () => {
       test.skip(true, 'Films folder not available');
       return;
     }
-    // 12 film files seeded by demo-data.sh
+    // 18 film files seeded by demo-data.sh
     const items = page.locator('.row:not(:has(.row-name:text("..")))');
-    await expect(items).toHaveCount(12, { timeout: 10000 });
+    await expect(items).toHaveCount(18, { timeout: 10000 });
   });
 
-  test('Anime folder contains 3 sub-items (Attack on Titan, Death Note, One Piece)', async ({ page }) => {
+  test('Anime folder contains 5 sub-items (incl. Attack on Titan, Death Note, One Piece)', async ({ page }) => {
     requireLocal();
     await page.goto(BROWSE_ROOT + '?p=Anime');
     const html = await page.content();
@@ -108,7 +108,7 @@ test.describe('Public Browse', () => {
     await expect(page.locator('.row-name.is-folder')).toContainText(['Season'], { timeout: 10000 });
   });
 
-  test('Series folder contains 4 sub-items', async ({ page }) => {
+  test('Series folder contains 6 sub-items', async ({ page }) => {
     requireLocal();
     await page.goto(BROWSE_ROOT + '?p=Series');
     const html = await page.content();
@@ -223,7 +223,7 @@ test.describe('TMDB Posters', () => {
     expect(typeof data.pending).toBe('number');
   });
 
-  test('Films posters JSON has 12 entries (one per film)', async ({ page }) => {
+  test('Films posters JSON has 18 entries (one per film)', async ({ page }) => {
     requireLocal();
     const resp = await page.request.get(BROWSE_ROOT + '?p=Films&posters=1');
     if (!resp.ok()) {
