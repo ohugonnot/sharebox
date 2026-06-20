@@ -101,17 +101,18 @@ if [ "${SHAREBOX_AUTO_SHARE:-}" = "yes" ]; then
 fi
 
 # ── Demo data (optional) ────────────────────────────────────────────────────
+# Crée uniquement les médias d'exemple ; les affiches sont matchées par le vrai worker
+# (lancé en tâche de fond après le démarrage) — même chemin de code qu'une install réelle.
 if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
     /bin/bash /docker/demo-data.sh "$MEDIA_DIR"
-    if [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
-        php /docker/seed-tmdb.php "$MEDIA_DIR" "${SHAREBOX_TMDB_API_KEY}" || true
-    fi
 fi
 
 # ── Cron (bandwidth history + hourly DB backup) ──────────────────────────────
 {
     echo "* * * * * www-data php /app/cron/record_netspeed.php"
     echo "0 * * * * www-data php /app/cron/backup_db.php"
+    # Worker affiches TMDB : découvre les nouveaux dossiers et matche via TMDB.
+    [ -n "${SHAREBOX_TMDB_API_KEY:-}" ] && echo "*/10 * * * * www-data php /app/tools/tmdb-worker.php >> /data/tmdb-worker.log 2>&1"
 } > /etc/cron.d/sharebox
 chmod 644 /etc/cron.d/sharebox
 cron
@@ -135,4 +136,12 @@ fi
 
 # ── Start services ───────────────────────────────────────────────────────────
 php-fpm8.3 --daemonize
+
+# Bootstrap démo : peuple les affiches via le vrai worker, en tâche de fond (www-data).
+if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ] && [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
+    # $MEDIA_DIR via variable exportée (pas d'interpolation dans -c) → pas d'injection shell.
+    export _DEMO_MEDIA_DIR="$MEDIA_DIR"
+    su -s /bin/sh www-data -c 'php /docker/demo-bootstrap.php "$_DEMO_MEDIA_DIR" >> /data/tmdb-worker.log 2>&1' &
+fi
+
 exec nginx -g 'daemon off;'

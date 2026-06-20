@@ -1059,31 +1059,44 @@ class StreamingHandlersTest extends TestCase
         );
     }
 
-    // ── Worker : word truncation garde min 3 mots ───────────────────────
+    // ── Worker : matching délégué à tmdb_match (boucle word-removal) ─────
 
-    public function testWorkerWordTruncationKeepsMinThreeWords(): void
+    public function testWorkerUsesTmdbMatch(): void
     {
         $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
-        // Le retry attempt 1 doit garder au minimum 3 mots
+        // La recherche du candidat passe désormais par tmdb_match (word-removal + cache).
         $this->assertStringContainsString(
-            'max(3',
+            'tmdb_match(',
             $source,
-            'Le retry attempt 1 doit garder au minimum 3 mots lors du truncation'
+            'Le worker doit déléguer la recherche du candidat à tmdb_match'
         );
     }
 
-    // ── Worker : rate limit TMDB ≥ 250ms ────────────────────────────────
+    // ── Recherche TMDB : word truncation garde au moins 1 mot ───────────
 
-    public function testWorkerRateLimitTmdb(): void
+    public function testTmdbMatchKeepsAtLeastOneWord(): void
     {
-        $source = file_get_contents(__DIR__ . '/../tools/tmdb-worker.php');
-        // Le usleep entre les requêtes TMDB doit être ≥ 250ms (250000µs)
+        $source = file_get_contents(__DIR__ . '/../functions.php');
+        // La boucle word-removal de tmdb_match borne le minimum à au moins 1 mot.
+        $this->assertStringContainsString(
+            'max(1, count($words) - 4)',
+            $source,
+            'tmdb_match doit garder au minimum 1 mot et borner la récursion à 5 essais'
+        );
+    }
+
+    // ── Recherche TMDB : rate limit ≥ 250ms (dans tmdb_search_candidates) ─
+
+    public function testTmdbSearchRateLimit(): void
+    {
+        $source = file_get_contents(__DIR__ . '/../functions.php');
+        // Le usleep entre les requêtes TMDB vit maintenant dans tmdb_search_candidates.
         preg_match_all('/usleep\((\d+)\)/', $source, $matches);
-        $this->assertNotEmpty($matches[1], 'Le worker doit avoir des usleep pour le rate limit');
+        $this->assertNotEmpty($matches[1], 'functions.php doit avoir des usleep pour le rate limit');
         $apiSleeps = array_filter($matches[1], fn($us) => (int)$us >= 250000);
         $this->assertNotEmpty(
             $apiSleeps,
-            'Le worker doit avoir au moins un usleep ≥ 250ms pour le rate limit TMDB API'
+            'tmdb_search_candidates doit avoir au moins un usleep ≥ 250ms pour le rate limit TMDB'
         );
     }
 
