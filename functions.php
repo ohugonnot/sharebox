@@ -206,7 +206,7 @@ function extract_title_year(string $name): array {
     // Remove "HD Remasted" pattern
     $clean = preg_replace('/\bHD\s+Remast\w*/i', '', $clean);
     // Couper au premier tag technique
-    $title = preg_replace('/\b(multi|vff|vfq|truefrench|french|english|vostfr|vost|subfrench|dual|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|hdtv|dvdrip|hdrip|x264|x265|h264|h265|hevc|avc|xvid|divx|avi|mpeg|mpg|10bit|remux|2160p|1080p|720p|480p|uhd|4k|hdr|hdr10|dts|truehd|atmos|aac|ac3|flac|ddp?\d|proper\d?|repack|internal|extended|unrated|directors?-?cut|complete|s\d{2}e?\d{0,2}|e\d{2,4})\b.*/i', '', $clean);
+    $title = preg_replace('/\b(multi|vff|vfq|truefrench|french|english|vostfr|vost|subfrench|dual|bluray|blu-ray|bdrip|brrip|webrip|web-?dl|hdtv|dvdrip|hdrip|x264|x265|h264|h265|hevc|avc|xvid|divx|avi|mpeg|mpg|10bit|remux|2160p|1080p|720p|480p|uhd|4k|hdr|hdr10|dts|truehd|atmos|aac|ac3|flac|ddp?\d|proper\d?|repack|internal|extended|unrated|directors?-?cut|complete|s\d{1,2}e?\d{0,4}|e\d{2,4})\b.*/i', '', $clean);
     // "DC" = Directors Cut — retire seulement en fin de titre (évite de couper "DC Comics" au début)
     $title = preg_replace('/\s+dc\s*$/i', '', $title);
     // Si on a coupé à l'année, la retirer du titre aussi
@@ -505,7 +505,8 @@ function tmdb_fetch(string $url, $ctx = null, int $maxRetries = 2): ?array {
  *                    Mettre à 0 pour bypass le cache (force refresh).
  * @return array|null Decoded JSON ou null si echec et pas en cache.
  */
-function tmdb_fetch_cached(string $url, int $ttlSec = 604800): ?array {
+function tmdb_fetch_cached(string $url, int $ttlSec = 604800, bool &$fromCache = false): ?array {
+    $fromCache = false;
     if ($ttlSec <= 0) return tmdb_fetch($url);
 
     static $cacheStmt = null, $writeStmt = null;
@@ -529,7 +530,7 @@ function tmdb_fetch_cached(string $url, int $ttlSec = 604800): ?array {
     $hit = $cacheStmt->fetchColumn();
     if ($hit !== false) {
         $decoded = json_decode($hit, true);
-        if (is_array($decoded)) return $decoded;
+        if (is_array($decoded)) { $fromCache = true; return $decoded; }
     }
 
     // Miss → fetch
@@ -558,40 +559,110 @@ function tmdb_fetch_cached(string $url, int $ttlSec = 604800): ?array {
  * Cherche un titre sur TMDB et retourne TOUS les candidats (pour le pick IA).
  * @return array[] Array of {id, title, year, type, overview, poster}
  */
-function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx, int $limit = 15): array {
+function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx, int $limit = 15, bool $preferTv = false, bool &$responded = false): array {
     $candidates = [];
     $seenIds = [];
+    $responded = false; // true dès qu'un appel TMDB renvoie une réponse valide (≠ échec réseau/5xx)
     $encoded = urlencode($title);
-    $urls = [
-        "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-        "https://api.themoviedb.org/3/search/tv?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-        "https://api.themoviedb.org/3/search/movie?api_key={$apiKey}&query={$encoded}&language=fr&page=1",
-    ];
-    if ($year) {
-        $urls[] = "https://api.themoviedb.org/3/search/multi?api_key={$apiKey}&query=" . urlencode($title . ' ' . $year) . "&language=fr&page=1";
-    }
-    foreach ($urls as $searchUrl) {
-        $data = tmdb_fetch($searchUrl, $ctx);
-        if (!$data || empty($data['results'])) continue;
-        foreach ($data['results'] as $r) {
-            if (empty($r['poster_path']) || isset($seenIds[$r['id']])) continue;
-            $seenIds[$r['id']] = true;
-            $candidates[] = [
-                'id' => $r['id'],
-                'title' => $r['title'] ?? $r['name'] ?? '?',
-                'original_title' => $r['original_title'] ?? $r['original_name'] ?? null,
-                'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
-                'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
-                'overview' => substr($r['overview'] ?? '', 0, 150),
-                'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
-                'rating' => round((float)($r['vote_average'] ?? 0), 1),
-                'vote_count' => (int)($r['vote_count'] ?? 0),
-            ];
-            if (count($candidates) >= $limit) break 2;
+
+    // On interroge TOUJOURS les deux types (movie ET tv) : c'est le SCORING (popularité +
+    // cohérence de type + similarité) qui tranche. Se limiter au type "probable" matchait un
+    // film homonyme pour toute série dont preferTv n'avait pas été détecté (Breaking Bad → un
+    // film "Breaking Bad Wolf", etc.). preferTv ne sert plus qu'à ordonner et bonifier le score.
+    // Année en VRAI paramètre TMDB (year / first_air_date_year), filtré côté serveur.
+    $endpoints = $preferTv ? ['tv', 'movie'] : ['movie', 'tv'];
+    $perCall = max(6, (int)ceil($limit / 2)); // borne par appel → garantit la diversité de type
+
+    foreach ($endpoints as $endpoint) {
+        foreach (['fr', 'en-US'] as $lang) {
+            $yearParam = $year ? '&' . ($endpoint === 'tv' ? 'first_air_date_year' : 'year') . '=' . $year : '';
+            $url = "https://api.themoviedb.org/3/search/{$endpoint}?api_key={$apiKey}&query={$encoded}&language={$lang}&page=1{$yearParam}";
+            $fromCache = false;
+            $data = tmdb_fetch_cached($url, 604800, $fromCache);
+            if ($data !== null) $responded = true; // TMDB a répondu (même 0 résultat) — pas un échec réseau
+            if (!$fromCache) usleep(300000);       // rate-limit : uniquement sur appel réseau réel
+            if (!$data || empty($data['results'])) continue;
+            $taken = 0;
+            foreach ($data['results'] as $r) {
+                if (empty($r['poster_path'])) continue;
+                $locTitle = $r['title'] ?? $r['name'] ?? null;
+                // Déjà vu (autre langue) → on agrège juste la variante de titre pour le scoring.
+                if (isset($seenIds[$r['id']])) {
+                    if ($locTitle) $candidates[$seenIds[$r['id']]]['titles'][] = $locTitle;
+                    continue;
+                }
+                $origTitle = $r['original_title'] ?? $r['original_name'] ?? null;
+                $seenIds[$r['id']] = count($candidates);
+                $candidates[] = [
+                    'id' => $r['id'],
+                    'title' => $locTitle ?? '?',
+                    'titles' => array_values(array_filter([$locTitle, $origTitle])), // variantes fr/en/original
+                    'original_title' => $origTitle,
+                    'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
+                    'type' => $r['media_type'] ?? ($endpoint === 'tv' ? 'tv' : 'movie'),
+                    'overview' => substr($r['overview'] ?? '', 0, 150),
+                    'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
+                    'rating' => round((float)($r['vote_average'] ?? 0), 1),
+                    'vote_count' => (int)($r['vote_count'] ?? 0),
+                ];
+                if (++$taken >= $perCall) break;
+            }
         }
-        usleep(300000);
     }
+
     return $candidates;
+}
+
+/**
+ * Cherche le meilleur match TMDB pour un titre, en raccourcissant la requête
+ * mot par mot (depuis la fin) jusqu'à dépasser le seuil de confiance.
+ * Les releases collent souvent un sous-titre/seconde langue après le vrai titre
+ * (« 1BR The Apartement » → « 1BR ») : on garde la requête la PLUS LONGUE qui passe
+ * le seuil, et on score contre la requête réellement utilisée pour éviter les dérives.
+ *
+ * $responded (out) indique si TMDB a répondu au moins une fois : permet à l'appelant de
+ * distinguer un vrai « rien trouvé » (on peut abandonner) d'un échec réseau/5xx transitoire
+ * (à réessayer plus tard, sans brûler de tentative).
+ *
+ * @return array|null ['candidate' => array, 'score' => int] ou null si < 35 (seuil bas tmdb_score_to_verified)
+ */
+function tmdb_match(string $title, ?int $year, bool $preferTv, string $apiKey, $ctx = null, bool &$responded = false): ?array {
+    $responded = false;
+    $words = explode(' ', trim($title));
+    $minWords = max(1, count($words) - 4); // borne la récursion à 5 essais max
+
+    // Une passe word-removal pour une année de recherche donnée (filtre TMDB).
+    // Le scoring utilise toujours la VRAIE année (bonus), même quand on relâche le filtre.
+    $run = function (?int $searchYear) use ($words, $minWords, $year, $preferTv, $apiKey, $ctx, &$responded): array {
+        $best = null;
+        $bestScore = 0;
+        for ($n = count($words); $n >= $minWords; $n--) {
+            $query = implode(' ', array_slice($words, 0, $n));
+            if (mb_strlen($query) < 2) break;
+
+            $r = false;
+            foreach (tmdb_search_candidates($query, $searchYear, $apiKey, $ctx, 15, $preferTv, $r) as $cand) {
+                $score = tmdb_score_candidate($query, $year, $cand, $preferTv); // score contre la requête utilisée
+                if ($score > $bestScore) {
+                    $bestScore = $score;
+                    $best = $cand;
+                }
+            }
+            if ($r) $responded = true;
+            if ($bestScore >= 55) break; // match fiable (palier "verified 60") → on arrête de tronquer
+        }
+        return [$best, $bestScore];
+    };
+
+    [$best, $bestScore] = $run($year);
+    // Filtre année trop strict (0 candidat retenu) : on relâche le filtre côté recherche,
+    // le scoring conserve le bonus d'année. Évite qu'une année off-by-one tue le match.
+    if ($bestScore < 35 && $year !== null) {
+        [$best, $bestScore] = $run(null);
+    }
+
+    // 35 = seuil bas de tmdb_score_to_verified (verified=40) : en dessous, aucun match retourné.
+    return $bestScore >= 35 ? ['candidate' => $best, 'score' => $bestScore] : null;
 }
 
 /**
@@ -623,31 +694,24 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
     if (mb_strlen($a) > 80) $a = mb_substr($a, 0, 80);
     $lenA = mb_strlen($a);
 
-    // Score against localized title
-    $b = $norm($candidate['title'] ?? '');
+    // Score contre TOUTES les variantes de titre (fr + en + original), agrégées par id lors de
+    // la recherche bilingue. Crucial pour l'anime/contenu étranger : on cherche en anglais mais
+    // TMDB peut renvoyer un titre fr ou japonais ; il suffit qu'UNE variante matche.
+    $variants = $candidate['titles'] ?? [];
+    foreach ([$candidate['title'] ?? null, $candidate['original_title'] ?? null] as $extra) {
+        if ($extra !== null && $extra !== '') $variants[] = $extra;
+    }
     $bestPct = 0;
-    $bestB = $b;
-    if ($b !== '') {
+    $bestB = '';
+    foreach ($variants as $variant) {
+        $b = $norm((string)$variant);
+        if ($b === '') continue;
         similar_text($a, $b, $pct);
         // Penalize length divergence to avoid short-title false positives ("One" vs "One Piece")
         $lenB = mb_strlen($b);
         $lenRatio = min($lenA, $lenB) / max($lenA, $lenB);
         if ($lenRatio < 0.5) $pct *= $lenRatio * 1.5;
-        $bestPct = $pct;
-    }
-
-    // Also try original title (handles anime, non-English media)
-    $bOrig = isset($candidate['original_title']) ? $norm($candidate['original_title']) : '';
-    if ($bOrig !== '' && $bOrig !== $b) {
-        similar_text($a, $bOrig, $pctOrig);
-        // Same length penalty for original title
-        $lenBO = mb_strlen($bOrig);
-        $lenRatioO = min($lenA, $lenBO) / max($lenA, $lenBO);
-        if ($lenRatioO < 0.5) $pctOrig *= $lenRatioO * 1.5;
-        if ($pctOrig > $bestPct) {
-            $bestPct = $pctOrig;
-            $bestB = $bOrig;
-        }
+        if ($pct > $bestPct) { $bestPct = $pct; $bestB = $b; }
     }
 
     if ($bestB === '') return 0;
@@ -672,14 +736,18 @@ function tmdb_score_candidate(string $extractedTitle, ?int $extractedYear, array
         }
     }
 
-    // ── Type coherence (0-10 points) ──
+    // ── Type coherence (0-18 points) ──
+    // preferTv n'est vrai que si le dossier contient des saisons/épisodes : signal FORT de
+    // série. On bonifie alors lourdement la TV (et on ne bonifie pas le film) pour battre un
+    // film homonyme au titre exact (ex. "Demon Slayer" le film vs la série au sous-titre long).
+    // Sans signal de saison (films à plat), on garde la préférence film modérée.
     $cType = $candidate['type'] ?? '';
-    if ($preferTv && $cType === 'tv') {
+    if ($preferTv) {
+        $score += ($cType === 'tv') ? 18 : 0;
+    } elseif ($cType === 'movie') {
         $score += 10;
-    } elseif (!$preferTv && $cType === 'movie') {
-        $score += 10;
-    } elseif ($cType === 'tv' || $cType === 'movie') {
-        $score += 3; // wrong preference but still valid media
+    } elseif ($cType === 'tv') {
+        $score += 3; // pas de signal de saison mais média valide
     }
 
     // ── Popularity (0-12 points) — finer granularity to break ties ──

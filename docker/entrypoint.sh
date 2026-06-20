@@ -86,12 +86,11 @@ if [ "${SHAREBOX_AUTO_SHARE:-}" = "yes" ]; then
 fi
 
 # ── Demo data (optional) ────────────────────────────────────────────────────
+# Crée uniquement les médias d'exemple. Le matching des affiches est délégué au VRAI
+# worker (lancé en tâche de fond après le démarrage des services) : la démo emprunte
+# ainsi le même chemin de code qu'une install réelle, au lieu d'un seed en dur.
 if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
     /bin/sh /docker/demo-data.sh "$MEDIA_DIR"
-    # Seed TMDB posters/overviews/ratings if API key is set
-    if [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
-        php /docker/seed-tmdb.php "$MEDIA_DIR" "${SHAREBOX_TMDB_API_KEY}" || true
-    fi
 fi
 
 # ── PHP limits (streaming + large uploads) ──────────────────────────────────
@@ -107,6 +106,10 @@ PHPINI
 {
     echo "* * * * * php /app/cron/record_netspeed.php"
     echo "0 * * * * php /app/cron/backup_db.php"
+    # Worker affiches TMDB : découvre les nouveaux dossiers et matche via TMDB.
+    # Absent par défaut de l'image jusqu'ici → un install Docker n'avait jamais de
+    # cron poster (seul le ?posters au browse alimentait la grille).
+    [ -n "${SHAREBOX_TMDB_API_KEY:-}" ] && echo "*/10 * * * * php /app/tools/tmdb-worker.php >> /data/tmdb-worker.log 2>&1"
 } > /etc/crontabs/www-data
 crond -b -l 8
 
@@ -120,5 +123,17 @@ chown www-data:www-data /data/share.db /data/share.db-wal /data/share.db-shm /da
 
 # ── Start services ───────────────────────────────────────────────────────────
 php-fpm -D
+
+# ── Bootstrap démo : peuple les affiches via le vrai worker ──────────────────
+# En tâche de fond (www-data, propriétaire de la DB) pour ne pas bloquer le démarrage —
+# les affiches apparaissent en ~1 min, exactement comme le premier passage de cron
+# sur une install fraîche. Pas de seed en dur : même chemin de code que la prod.
+if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ] && [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
+    # $MEDIA_DIR passé via une variable exportée (pas d'interpolation dans la chaîne -c) →
+    # aucune injection shell possible même si l'env contient des guillemets/backticks.
+    export _DEMO_MEDIA_DIR="$MEDIA_DIR"
+    su -s /bin/sh www-data -c 'php /docker/demo-bootstrap.php "$_DEMO_MEDIA_DIR" >> /data/tmdb-worker.log 2>&1' &
+fi
+
 echo "ShareBox ready — admin: http://localhost/share"
 exec nginx -g 'daemon off;'

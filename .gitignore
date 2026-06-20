@@ -19,3 +19,6 @@ test_router.php
 *.mov
 *.avi
 *.mkv
+
+# Benchmark / workspace d'analyse (corpus privé de torrents + artefacts) — local only
+bench/
