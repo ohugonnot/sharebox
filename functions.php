@@ -505,7 +505,7 @@ function tmdb_fetch(string $url, $ctx = null, int $maxRetries = 2): ?array {
  *                    Mettre à 0 pour bypass le cache (force refresh).
  * @return array|null Decoded JSON ou null si echec et pas en cache.
  */
-function tmdb_fetch_cached(string $url, int $ttlSec = 604800, bool &$fromCache = null): ?array {
+function tmdb_fetch_cached(string $url, int $ttlSec = 604800, bool &$fromCache = false): ?array {
     $fromCache = false;
     if ($ttlSec <= 0) return tmdb_fetch($url);
 
@@ -559,7 +559,7 @@ function tmdb_fetch_cached(string $url, int $ttlSec = 604800, bool &$fromCache =
  * Cherche un titre sur TMDB et retourne TOUS les candidats (pour le pick IA).
  * @return array[] Array of {id, title, year, type, overview, poster}
  */
-function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx, int $limit = 15, bool $preferTv = false, bool &$responded = null): array {
+function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx, int $limit = 15, bool $preferTv = false, bool &$responded = false): array {
     $candidates = [];
     $seenIds = [];
     $responded = false; // true dès qu'un appel TMDB renvoie une réponse valide (≠ échec réseau/5xx)
@@ -626,7 +626,7 @@ function tmdb_search_candidates(string $title, ?int $year, string $apiKey, $ctx,
  *
  * @return array|null ['candidate' => array, 'score' => int] ou null si < 35 (seuil bas tmdb_score_to_verified)
  */
-function tmdb_match(string $title, ?int $year, bool $preferTv, string $apiKey, $ctx = null, bool &$responded = null): ?array {
+function tmdb_match(string $title, ?int $year, bool $preferTv, string $apiKey, $ctx = null, bool &$responded = false): ?array {
     $responded = false;
     $words = explode(' ', trim($title));
     $minWords = max(1, count($words) - 4); // borne la récursion à 5 essais max
