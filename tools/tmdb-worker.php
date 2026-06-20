@@ -342,62 +342,36 @@ do {
             $searchTitle = $first['title'];
             $searchYear = $first['year'];
 
-            // Per-entry TV preference: if the folder name itself contains S01-S99 pattern
-            $entryPreferTv = $preferTv || preg_match('/\bS\d{1,2}\b/i', $first['name']);
-
-            // ── Retry strategy based on attempt level ──
-            // Attempt 0: full title, FR, multi+tv candidates
-            // Attempt 1: short title (first half of words), FR, multi+tv+movie
-            // Attempt 2: full title, no language (English fallback)
-            if ($attempt === 1) {
-                $words = explode(' ', $searchTitle);
-                if (count($words) > 3) {
-                    $searchTitle = implode(' ', array_slice($words, 0, max(3, (int)ceil(count($words) / 2))));
-                }
-            }
-
-            $candidates = [];
-            if ($attempt <= 1) {
-                $candidates = tmdb_search_candidates($searchTitle, $searchYear, $TMDB_API_KEY, $ctx, 8);
-            } else {
-                // Attempt 2: English fallback — direct fetch without language param
-                $encoded = urlencode($searchTitle);
-                $urls = [
-                    "https://api.themoviedb.org/3/search/multi?api_key={$TMDB_API_KEY}&query={$encoded}&page=1",
-                ];
-                foreach ($urls as $u) {
-                    $data = tmdb_fetch($u, $ctx);
-                    if ($data && !empty($data['results'])) {
-                        foreach ($data['results'] as $r) {
-                            if (empty($r['poster_path'])) continue;
-                            $candidates[] = [
-                                'id' => $r['id'],
-                                'title' => $r['title'] ?? $r['name'] ?? '?',
-                                'original_title' => $r['original_title'] ?? $r['original_name'] ?? null,
-                                'year' => substr($r['release_date'] ?? $r['first_air_date'] ?? '', 0, 4),
-                                'type' => $r['media_type'] ?? ($r['first_air_date'] ?? false ? 'tv' : 'movie'),
-                                'overview' => substr($r['overview'] ?? '', 0, 150),
-                                'poster' => 'https://image.tmdb.org/t/p/w300' . $r['poster_path'],
-                                'rating' => round((float)($r['vote_average'] ?? 0), 1),
-                                'vote_count' => (int)($r['vote_count'] ?? 0),
-                            ];
-                            if (count($candidates) >= 8) break;
+            // Per-entry TV preference. Signal le plus fiable = la STRUCTURE du dossier, pas le nom :
+            // une série a plusieurs épisodes (≥2 vidéos à plat) OU des sous-dossiers de saison /
+            // numérotés (Season 1, Saison 3, 01, 02…) ; un film n'a qu'une vidéo. On garde aussi
+            // le marqueur S01-S99 dans le nom comme signal complémentaire.
+            $entryPreferTv = $preferTv || (bool)preg_match('/\bS\d{1,2}\b/i', $first['name']);
+            if (!$entryPreferTv) {
+                $entryPath = $dir . '/' . $first['name'];
+                if (is_dir($entryPath)) {
+                    $videoCount = 0; $seasonish = 0;
+                    foreach (@scandir($entryPath) ?: [] as $sub) {
+                        if ($sub[0] === '.') continue;
+                        $full = $entryPath . '/' . $sub;
+                        if (is_dir($full)) {
+                            // sous-dossier saison/arc/partie OU purement numérique (01, 02…)
+                            if (preg_match('/^(s\d{1,2}\b|saison|season|saga|arc|part|\d{1,3}$)/i', $sub)) $seasonish++;
+                        } elseif (in_array(strtolower(pathinfo($sub, PATHINFO_EXTENSION)), $VIDEO_EXTS, true)) {
+                            $videoCount++;
                         }
                     }
-                    usleep(300000);
+                    if ($videoCount >= 2 || $seasonish >= 1) $entryPreferTv = true;
                 }
             }
 
-            // ── Score candidates and pick best ──
-            $bestMatch = null;
-            $bestScore = 0;
-            foreach ($candidates as $c) {
-                $score = tmdb_score_candidate($first['title'], $first['year'], $c, $entryPreferTv);
-                if ($score > $bestScore) {
-                    $bestScore = $score;
-                    $bestMatch = $c;
-                }
-            }
+            // ── Recherche du meilleur candidat (boucle word-removal + cache + retry) ──
+            // tmdb_match raccourcit la requête mot par mot et score contre la requête utilisée.
+            // $responded distingue un vrai "rien trouvé" d'un échec réseau/5xx transitoire.
+            $responded = false;
+            $result = tmdb_match($searchTitle, $searchYear, $entryPreferTv, $TMDB_API_KEY, null, $responded);
+            $bestScore = $result['score'] ?? 0;
+            $bestMatch = $result['candidate'] ?? null;
 
             $verified = tmdb_score_to_verified($bestScore);
             $match = null;
@@ -426,8 +400,10 @@ do {
                     } catch (PDOException $e) {
                         ai_log('DB error (match write): ' . $e->getMessage());
                     }
-                } else {
-                    // Increment match_attempts for next retry pass
+                } elseif ($responded) {
+                    // Vrai "rien trouvé" (TMDB a répondu) → on consomme une tentative.
+                    // Échec réseau/5xx transitoire : on NE touche pas match_attempts, le
+                    // prochain passage cron réessaiera (évite de griller une entrée sur un 502).
                     $nextAttempt = $attempt + 1;
                     try {
                         $db->prepare("UPDATE folder_posters SET match_attempts = :a WHERE rowid = :id")
@@ -440,7 +416,9 @@ do {
 
             if ($match) {
                 ai_log('MATCH | "' . $first['title'] . '" x' . count($files) . ' -> ' . $match['title'] . ' (id=' . $match['id'] . ' score=' . $bestScore . ' verified=' . $verified . ')');
-            } elseif ($candidates) {
+            } elseif (!$responded) {
+                ai_log('SKIP  | "' . $first['title'] . '" TMDB injoignable (transitoire) — match_attempts inchangé');
+            } else {
                 ai_log('WEAK  | "' . $first['title'] . '" best_score=' . $bestScore . ' (below threshold, attempt=' . ($attempt+1) . ')');
             }
         }

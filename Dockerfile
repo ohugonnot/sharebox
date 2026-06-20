@@ -17,7 +17,7 @@ COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/php-fpm.conf /usr/local/etc/php-fpm.d/www.conf
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/demo-data.sh /docker/demo-data.sh
-COPY docker/seed-tmdb.php /docker/seed-tmdb.php
+COPY docker/demo-bootstrap.php /docker/demo-bootstrap.php
 RUN chmod +x /docker/demo-data.sh
 
 COPY . /app

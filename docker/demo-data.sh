@@ -106,8 +106,15 @@ make_episodes "$MEDIA_DIR/Series/Stranger Things/Season 1" "Stranger.Things.S01E
 make_episodes "$MEDIA_DIR/Series/Stranger Things/Season 2" "Stranger.Things.S02E" 1 3
 make_episodes "$MEDIA_DIR/Series/The Mandalorian/Season 1" "The.Mandalorian.S01E" 1 3
 make_episodes "$MEDIA_DIR/Series/The Mandalorian/Season 2" "The.Mandalorian.S02E" 1 3
+make_episodes "$MEDIA_DIR/Series/The Witcher/Season 1"     "The.Witcher.S01E" 1 3
+# Série AVEC année dans le nom de release (réel) → teste l'extraction année + preferTv
+make_episodes "$MEDIA_DIR/Series/The Flash/Season 5"      "The.Flash.2014.S05E" 1 4
 
 # ── Films ──
+# Le bloc bas teste volontairement les cas tordus du matching : homonyme à
+# départager par l'année (Dune 1984 vs 2021), titre qui EST un nombre (1917),
+# tag de site + crochets, titre long à raccourcir (LOTR), titre original japonais
+# (Your Name / Kimi no Na wa), et séquelle numérotée (John Wick Chapter 4).
 mkdir -p "$MEDIA_DIR/Films"
 for f in \
     "Inception.2010.1080p.BluRay.x264.mkv" \
@@ -121,7 +128,13 @@ for f in \
     "The.Shawshank.Redemption.1994.1080p.mkv" \
     "Spirited.Away.2001.JAPANESE.BluRay.mkv" \
     "Blade.Runner.2049.2017.MULTI.2160p.HDR.mkv" \
-    "Dune.2021.IMAX.1080p.WEB-DL.mkv"
+    "Dune.2021.IMAX.1080p.WEB-DL.mkv" \
+    "Dune.1984.MULTI.1080p.BluRay.x264.mkv" \
+    "1917.2019.MULTI.1080p.BluRay.mkv" \
+    "[Torrent911.com].Avatar.2009.TRUEFRENCH.1080p.mkv" \
+    "The.Lord.of.the.Rings.The.Fellowship.of.the.Ring.2001.EXTENDED.2160p.mkv" \
+    "Your.Name.2016.JAPANESE.VOSTFR.1080p.mkv" \
+    "John.Wick.Chapter.4.2023.MULTI.2160p.mkv"
 do
     cp "$CLIP" "$MEDIA_DIR/Films/$f"
 done
@@ -131,6 +144,8 @@ make_episodes "$MEDIA_DIR/Anime/Attack on Titan/Season 1" "Attack.on.Titan.S01E"
 make_episodes "$MEDIA_DIR/Anime/Attack on Titan/Season 2" "Attack.on.Titan.S02E" 1 3
 make_episodes "$MEDIA_DIR/Anime/Death Note/Season 1"      "Death.Note.S01E" 1 4
 make_episodes "$MEDIA_DIR/Anime/One Piece/Season 1"        "One.Piece.S01E" 1 5
+make_episodes "$MEDIA_DIR/Anime/Demon Slayer Kimetsu no Yaiba/Season 1" "Demon.Slayer.Kimetsu.no.Yaiba.S01E" 1 4
+make_episodes "$MEDIA_DIR/Anime/Jujutsu Kaisen/Season 1"  "Jujutsu.Kaisen.S01E" 1 3
 
 # Clean up temp files
 rm -f "$CLIP" /tmp/sub_en.srt /tmp/sub_fr.srt
