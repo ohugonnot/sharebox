@@ -22,3 +22,4 @@ test_router.php
 
 # Benchmark / workspace d'analyse (corpus privé de torrents + artefacts) — local only
 bench/
+.feature-loop/

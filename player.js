@@ -197,15 +197,16 @@ function plog(tag, msg, data) {
         else (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
     }
     var fsTitle = document.getElementById('fs-title');
+    var autoHideDelay = ('ontouchstart' in window) ? 3000 : 2000; // snapshot at load — hybrid touch/mouse inherit touch delay
     function showFsControls() {
         playerCtrl.classList.remove('fs-hidden');
         if (fsTitle) fsTitle.classList.remove('fs-hidden');
         playerCard.classList.remove('hide-cursor');
         clearTimeout(S.fsHideTimer);
-        if (isImmersive() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); if (fsTitle) fsTitle.classList.add('fs-hidden'); playerCard.classList.add('hide-cursor'); }, 3000);
+        if (isImmersive() && !player.paused) S.fsHideTimer = setTimeout(function() { playerCtrl.classList.add('fs-hidden'); if (fsTitle) fsTitle.classList.add('fs-hidden'); playerCard.classList.add('hide-cursor'); }, autoHideDelay);
     }
     function onFsChange() {
-        if (fsBtn) fsBtn.innerHTML = isFs() ? svgFsExit : svgFs;  // safe: static SVG constants
+        if (fsBtn) { fsBtn.innerHTML = isFs() ? svgFsExit : svgFs; fsBtn.setAttribute('aria-pressed', isFs() ? 'true' : 'false'); }  // safe: static SVG constants
         if (isFs()) {
             player.style.height = ''; showFsControls();
             try { if (screen.orientation && screen.orientation.lock) screen.orientation.lock('landscape').catch(function(){}); } catch(e){}
@@ -453,13 +454,30 @@ function plog(tag, msg, data) {
     }
     // Reset stallCount après 30s de lecture stable (évite les délais de 2min après une reprise réseau)
     var stableTimer = null;
-    // Fallback durée si probe échoue et stream natif d'un vrai MP4
+    // CHAPTER_MARKERS must be set synchronously before the page script runs; runtime
+    // assignment after loadedmetadata fires won't take effect until next video load.
+    function renderChapterMarkers() {
+        var chapters = window.CHAPTER_MARKERS;
+        seekBar.querySelectorAll('.seek-marker').forEach(function(m) { m.remove(); });
+        var dur = S.duration > 0 ? S.duration : (player.duration && isFinite(player.duration) ? player.duration : 0);
+        if (!chapters || !chapters.length || !dur) return;
+        chapters.forEach(function(ch) {
+            if (typeof ch.time !== 'number' || ch.time <= 0 || ch.time >= dur) return;
+            var mark = document.createElement('span');
+            mark.className = 'seek-marker';
+            mark.style.left = (ch.time / dur * 100) + '%';
+            if (ch.title) mark.title = ch.title;
+            seekBar.appendChild(mark);
+        });
+    }
+
     player.addEventListener('loadedmetadata', function() {
         if (S.duration <= 0 && player.duration && isFinite(player.duration)) {
             S.duration = player.duration;
             timeTotal.textContent = fmtTime(S.duration);
             seekBar.style.display = 'flex';
         }
+        renderChapterMarkers();
     });
 
     player.addEventListener('waiting', function() { plog('EVENT', 'waiting | stallCount=' + S.stallCount + ' ct=' + (player.currentTime||0).toFixed(1)); clearTimeout(stableTimer); stableTimer = null; startStallWatchdog(); });
@@ -784,7 +802,9 @@ function plog(tag, msg, data) {
     function updateVolUI() {
         var pct = (player.muted ? 0 : player.volume) * 100;
         if (volSlider) { volSlider.value = player.muted ? 0 : player.volume; volSlider.style.setProperty('--vol-pct', pct + '%'); }
-        muteBtn.innerHTML = (player.muted || player.volume === 0) ? svgMute : svgVol;
+        var isMuted = player.muted || player.volume === 0;
+        muteBtn.innerHTML = isMuted ? svgMute : svgVol;
+        muteBtn.setAttribute('aria-pressed', isMuted ? 'true' : 'false');
     }
     function updateModeUI() {
         if (!modeBtn) return;
@@ -1033,11 +1053,11 @@ function plog(tag, msg, data) {
             if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
             else               player.pause();
         });
-        player.addEventListener('play',    function() { playBtn.innerHTML = svgPause; updateTitle(); });
-        player.addEventListener('playing', function() { playBtn.innerHTML = svgPause; playIconEl.classList.remove('visible', 'pop-pause'); if (isFs()) showFsControls(); });
-        player.addEventListener('pause',   function() { playBtn.innerHTML = svgPlay; playIconEl.innerHTML = svgPauseIcon; playIconEl.classList.remove('pop-pause','pop-play'); playIconEl.classList.add('visible'); updateTitle(); });
-        player.addEventListener('waiting', function() { playBtn.innerHTML = svgPause; });
-        player.addEventListener('ended',   function() { playBtn.innerHTML = svgPlay; document.title = originalTitle; });
+        player.addEventListener('play',    function() { playBtn.innerHTML = svgPause; playBtn.setAttribute('aria-pressed', 'true'); updateTitle(); });
+        player.addEventListener('playing', function() { playBtn.innerHTML = svgPause; playBtn.setAttribute('aria-pressed', 'true'); playIconEl.classList.remove('visible', 'pop-pause'); if (isFs()) showFsControls(); });
+        player.addEventListener('pause',   function() { playBtn.innerHTML = svgPlay; playBtn.setAttribute('aria-pressed', 'false'); playIconEl.innerHTML = svgPauseIcon; playIconEl.classList.remove('pop-pause','pop-play'); playIconEl.classList.add('visible'); updateTitle(); });
+        player.addEventListener('waiting', function() { playBtn.innerHTML = svgPause; playBtn.setAttribute('aria-pressed', 'true'); });
+        player.addEventListener('ended',   function() { playBtn.innerHTML = svgPlay; playBtn.setAttribute('aria-pressed', 'false'); document.title = originalTitle; });
         // Fullscreen
         if (fsBtn) fsBtn.addEventListener('click', toggleFs);
         // Zoom
@@ -1060,13 +1080,16 @@ function plog(tag, msg, data) {
         var savedVol = parseFloat(lsGet('player_volume', '1'));
         player.volume = isNaN(savedVol) ? 1 : Math.max(0, Math.min(1, savedVol));
         player.muted  = lsGet('player_muted', 'false') === 'true';
-        updateVolUI();
+        updateVolUI(); // also sets muteBtn aria-pressed via isMuted
+        playBtn.setAttribute('aria-pressed', player.paused ? 'false' : 'true');
+        if (fsBtn) fsBtn.setAttribute('aria-pressed', 'false');
         // iOS Safari ignore player.volume/muted via JS — cacher les contrôles volume
         if (isIOS) {
             muteBtn.style.display = 'none';
             var volWrap = muteBtn.closest('.vol-wrap') || (volSlider ? volSlider.parentNode : null);
             if (volWrap) volWrap.style.display = 'none';
         }
+        player.addEventListener('volumechange', updateVolUI);
         muteBtn.addEventListener('click', function() {
             player.muted = !player.muted;
             lsSet('player_muted', player.muted);
@@ -1086,11 +1109,15 @@ function plog(tag, msg, data) {
             }, 500);
         });
         // Molette : volume (pas sur iOS — volume contrôlé par boutons physiques uniquement)
-        if (!isIOS) playerCard.addEventListener('wheel', function(e) {
-            e.preventDefault();
-            var delta = e.deltaY < 0 ? 0.05 : -0.05;
-            player.volume = Math.min(1, Math.max(0, player.volume + delta));
-            player.muted = player.volume === 0;
+        function handleWheelVolume(e) {
+            var inverted = !!e.webkitDirectionInvertedFromDevice; // Safari trackpad: natural scroll inversion
+            var dx = e.deltaX, dy = -e.deltaY;
+            if (inverted) { dx = -dx; dy = -dy; }
+            var direction = Math.sign(Math.abs(dx) > Math.abs(dy) ? dx : dy);
+            if (!direction) return;
+            var next = Math.min(1, Math.max(0, player.volume + direction * 0.02));
+            player.volume = next;
+            player.muted = next === 0;
             updateVolUI();
             showVolOsd();
             clearTimeout(volSaveTimer);
@@ -1098,7 +1125,10 @@ function plog(tag, msg, data) {
                 lsSet('player_volume', player.volume);
                 lsSet('player_muted', player.muted);
             }, 500);
-        }, { passive: false });
+            if ((direction === 1 && next < 1) || (direction === -1 && next > 0))
+                e.preventDefault();
+        }
+        if (!isIOS) playerCard.addEventListener('wheel', handleWheelVolume, { passive: false });
         // Vitesse
         var speeds = [0.5, 0.75, 1, 1.5, 2];
         var savedSpd = parseFloat(lsGet('player_speed', '1'));
