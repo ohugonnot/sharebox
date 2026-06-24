@@ -794,13 +794,48 @@ function plog(tag, msg, data) {
     seekBar.addEventListener('touchmove', function(e) { if (S.dragging) { e.preventDefault(); seekToFraction(getFraction(e)); if (seekTooltip) { var f = getFraction(e); seekTooltip.textContent = fmtTime(f * S.duration); seekTooltip.style.left = (f * 100) + '%'; seekTooltip.style.display = 'block'; } } }, {passive:false});
     document.addEventListener('mouseup',   function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } }, _sig);
     document.addEventListener('touchend',  function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); if (seekTooltip) seekTooltip.style.display = 'none'; } }, _sig);
+    var _thumbCache = {};
+    var _thumbAbort = null;
+    var _thumbDebounce = null;
     seekBar.addEventListener('mousemove', function(e) {
         if (!S.duration || !seekTooltip) return;
         var rect = seekBar.getBoundingClientRect(), frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        seekTooltip.textContent = fmtTime(frac * S.duration);
+        var t = frac * S.duration;
+        var span = seekTooltip.querySelector('span');
+        if (span) { span.textContent = fmtTime(t); } else { seekTooltip.textContent = fmtTime(t); }
         seekTooltip.style.left = (frac * 100) + '%'; seekTooltip.style.display = 'block';
+        clearTimeout(_thumbDebounce);
+        _thumbDebounce = setTimeout(function() {
+            var ts5 = Math.round(t / 5) * 5;
+            if (_thumbCache[ts5]) { _setThumb(seekTooltip, _thumbCache[ts5], fmtTime(t)); return; }
+            if (_thumbAbort) { try { _thumbAbort.abort(); } catch(x) {} }
+            var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            _thumbAbort = ctrl;
+            fetch(base + '?' + pp + 'keyframe_thumb=' + ts5.toFixed(0), ctrl ? {signal: ctrl.signal} : {})
+                .then(function(r) { if (!r.ok || r.status === 204) throw new Error('no-thumb'); return r.blob(); })
+                .then(function(blob) {
+                    var url = URL.createObjectURL(blob);
+                    _thumbCache[ts5] = url;
+                    _setThumb(seekTooltip, url, fmtTime(t));
+                })
+                .catch(function() {});
+        }, 100);
     });
-    seekBar.addEventListener('mouseleave', function() { if (seekTooltip) seekTooltip.style.display = 'none'; });
+    seekBar.addEventListener('mouseleave', function() {
+        if (seekTooltip) seekTooltip.style.display = 'none';
+        clearTimeout(_thumbDebounce);
+    });
+    function _setThumb(tooltip, url, label) {
+        var img = tooltip.querySelector('img');
+        var span = tooltip.querySelector('span');
+        if (!img) {
+            tooltip.innerHTML = '<img alt=""><span></span>';
+            img = tooltip.querySelector('img');
+            span = tooltip.querySelector('span');
+        }
+        img.src = url;
+        span.textContent = label;
+    }
 
     // ── Volume ────────────────────────────────────────────────────────────────
     function updateVolUI() {
@@ -809,6 +844,9 @@ function plog(tag, msg, data) {
         var isMuted = player.muted || player.volume === 0;
         muteBtn.innerHTML = isMuted ? svgMute : svgVol;
         muteBtn.setAttribute('aria-pressed', isMuted ? 'true' : 'false');
+        // Icône orange si amplification active
+        if (!isMuted && _gainValue > 1) muteBtn.style.color = 'var(--accent, #f0a030)';
+        else muteBtn.style.color = '';
     }
     function updateModeUI() {
         if (!modeBtn) return;
@@ -970,8 +1008,8 @@ function plog(tag, msg, data) {
         var osd = document.getElementById('vol-osd');
         var osdTimer = null;
         function showVolOsd() {
-            var pct = player.muted ? 0 : Math.round(player.volume * 100);
-            var icon = player.muted || pct === 0 ? '\uD83D\uDD07' : pct < 50 ? '\uD83D\uDD09' : '\uD83D\uDD0A';
+            var pct = getEffectivePct();
+            var icon = player.muted || pct === 0 ? '\uD83D\uDD07' : pct < 50 ? '\uD83D\uDD09' : pct > 100 ? '\uD83D\uDD0A\uD83D\uDD0A' : '\uD83D\uDD0A';
             osd.textContent = icon + ' ' + pct + '%';
             osd.classList.add('visible');
             clearTimeout(osdTimer);
@@ -1053,6 +1091,44 @@ function plog(tag, msg, data) {
                 seekToFraction(t / S.duration);
             });
         })();
+
+        // Double-tap mobile : zones gauche/droite pour −10s/+10s
+        (function() {
+            if (!('ontouchstart' in window)) return; // desktop : skip
+            var lastTouchTime = 0, lastTouchX = 0;
+            var dtFlash = document.createElement('div');
+            dtFlash.className = 'dt-flash';
+            clickArea.appendChild(dtFlash);
+
+            clickArea.addEventListener('touchstart', function(e) {
+                if (e.touches.length !== 1) return;
+                var now = Date.now();
+                var tx = e.touches[0].clientX;
+                if (now - lastTouchTime < 250 && Math.abs(tx - lastTouchX) < 60) {
+                    // Double-tap détecté
+                    e.preventDefault(); // annule le click qui suivrait
+                    lastTouchTime = 0; // reset pour éviter triple-tap
+                    var rect = clickArea.getBoundingClientRect();
+                    var isRight = (tx - rect.left) > rect.width / 2;
+                    var skip = isRight ? 10 : -10;
+                    if (!S.duration) return;
+                    var t = Math.max(0, Math.min(S.duration, realTime() + skip));
+                    seekToFraction(t / S.duration);
+                    osd.textContent = (skip > 0 ? '+' : '') + skip + 's';
+                    osd.classList.add('visible');
+                    clearTimeout(osdTimer);
+                    osdTimer = setTimeout(function() { osd.classList.remove('visible'); }, 800);
+                    // Flash animation
+                    dtFlash.textContent = (skip > 0 ? '+10s ▶▶' : '◄◄ −10s');
+                    dtFlash.style.left = isRight ? '60%' : '10%';
+                    dtFlash.classList.add('dt-flash-active');
+                    setTimeout(function() { dtFlash.classList.remove('dt-flash-active'); }, 600);
+                } else {
+                    lastTouchTime = now;
+                    lastTouchX = tx;
+                }
+            }, {passive: false});
+        })();
         playBtn.addEventListener('click', function() {
             if (player.paused) { playIconEl.classList.remove('visible','pop-pause','pop-play'); player.play().catch(function(){}); }
             else               player.pause();
@@ -1081,9 +1157,39 @@ function plog(tag, msg, data) {
             });
         }
         // Volume
+        // WebAudio GainNode — lazy init au premier geste volume utilisateur
+        var _audioCtx = null, _gainNode = null, _gainValue = 1;
+
+        function _initGain() {
+            if (_audioCtx) return;
+            try {
+                _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                var src = _audioCtx.createMediaElementSource(player);
+                _gainNode = _audioCtx.createGain();
+                _gainNode.gain.value = _gainValue;
+                src.connect(_gainNode);
+                _gainNode.connect(_audioCtx.destination);
+            } catch(e) { _audioCtx = null; _gainNode = null; }
+        }
+
+        function setGain(v) {
+            _gainValue = Math.max(1, Math.min(2, v));
+            if (_gainNode) _gainNode.gain.value = _gainValue;
+            lsSet('sb_volume_gain', _gainValue);
+        }
+
+        function getEffectivePct() {
+            return player.muted ? 0 : Math.round(player.volume * _gainValue * 100);
+        }
+
         var savedVol = parseFloat(lsGet('player_volume', '1'));
         player.volume = isNaN(savedVol) ? 1 : Math.max(0, Math.min(1, savedVol));
         player.muted  = lsGet('player_muted', 'false') === 'true';
+        var savedGain = parseFloat(lsGet('sb_volume_gain', '1'));
+        if (!isNaN(savedGain) && savedGain > 1) {
+            _gainValue = Math.min(2, savedGain);
+            // Le GainNode sera initialisé au premier geste (lazy), mais on préserve la valeur
+        }
         updateVolUI(); // also sets muteBtn aria-pressed via isMuted
         playBtn.setAttribute('aria-pressed', player.paused ? 'false' : 'true');
         if (fsBtn) fsBtn.setAttribute('aria-pressed', 'false');
@@ -1095,6 +1201,7 @@ function plog(tag, msg, data) {
         }
         player.addEventListener('volumechange', updateVolUI);
         muteBtn.addEventListener('click', function() {
+            _initGain(); // lazy init au premier geste volume
             player.muted = !player.muted;
             lsSet('player_muted', player.muted);
             updateVolUI();
@@ -1102,6 +1209,7 @@ function plog(tag, msg, data) {
         });
         var volSaveTimer = null;
         if (volSlider) volSlider.addEventListener('input', function() {
+            _initGain(); // lazy init au premier geste volume
             player.volume = parseFloat(volSlider.value);
             player.muted  = player.volume === 0;
             updateVolUI();
@@ -1119,6 +1227,26 @@ function plog(tag, msg, data) {
             if (inverted) { dx = -dx; dy = -dy; }
             var direction = Math.sign(Math.abs(dx) > Math.abs(dy) ? dx : dy);
             if (!direction) return;
+
+            // Si on est à 100% et direction monte → amplification GainNode
+            if (direction === 1 && player.volume >= 1 && !player.muted) {
+                _initGain();
+                setGain(_gainValue + 0.1);
+                updateVolUI(); showVolOsd();
+                e.preventDefault();
+                return;
+            }
+            // Si on descend et gain > 1 → réduire le gain d'abord
+            if (direction === -1 && _gainValue > 1) {
+                setGain(_gainValue - 0.1);
+                if (_gainValue <= 1) { _gainValue = 1; if (_gainNode) _gainNode.gain.value = 1; }
+                updateVolUI(); showVolOsd();
+                clearTimeout(volSaveTimer);
+                volSaveTimer = setTimeout(function() { lsSet('sb_volume_gain', _gainValue); }, 500);
+                e.preventDefault();
+                return;
+            }
+
             var next = Math.min(1, Math.max(0, player.volume + direction * 0.02));
             player.volume = next;
             player.muted = next === 0;
@@ -1313,7 +1441,7 @@ function plog(tag, msg, data) {
         kbCard.appendChild(kbTitle);
         var kbShortcuts = [['Espace / K','Lecture / Pause'],['← →','\u221210s / +10s'],['J / L','\u221230s / +30s'],
          ['\u2191 \u2193','Volume \u00B15\u00A0%'],['0\u20139','Aller \u00e0 N\u00d710\u00a0%'],
-         ['F','Plein \u00e9cran'],['Z','Zoom (Fit/Fill/Stretch)'],['P','Picture-in-Picture'],['M','Muet'],['R','Resync son/image'],['?','Cette aide']];
+         ['F','Plein \u00e9cran'],['Z','Zoom (Fit/Fill/Stretch)'],['P','Picture-in-Picture'],['M','Muet'],['R','Resync son/image'],[', / .','Vitesse \u22120.25\u00d7 / +0.25\u00d7'],['?','Cette aide']];
         if (episodeNav.prev || episodeNav.next) kbShortcuts.push(['N / B','\u00c9pisode suivant / pr\u00e9c\u00e9dent']);
         kbShortcuts.forEach(function(r) {
             var row = document.createElement('div'); row.className = 'kb-row';
@@ -1393,6 +1521,24 @@ function plog(tag, msg, data) {
             else if (e.key === 'z' || e.key === 'Z') {
                 e.preventDefault();
                 toggleZoom();
+            }
+            else if (e.key === '>' || e.key === '.') {
+                e.preventDefault();
+                S.speed = parseFloat(Math.min(2, S.speed + 0.25).toFixed(2));
+                player.playbackRate = S.speed;
+                if (speedBtn) speedBtn.textContent = S.speed + '×';
+                lsSet('player_speed', S.speed);
+                osd.textContent = S.speed + '×'; osd.classList.add('visible');
+                clearTimeout(osdTimer); osdTimer = setTimeout(function() { osd.classList.remove('visible'); }, 1000);
+            }
+            else if (e.key === '<' || e.key === ',') {
+                e.preventDefault();
+                S.speed = parseFloat(Math.max(0.5, S.speed - 0.25).toFixed(2));
+                player.playbackRate = S.speed;
+                if (speedBtn) speedBtn.textContent = S.speed + '×';
+                lsSet('player_speed', S.speed);
+                osd.textContent = S.speed + '×'; osd.classList.add('visible');
+                clearTimeout(osdTimer); osdTimer = setTimeout(function() { osd.classList.remove('visible'); }, 1000);
             }
             else if ((e.key === 'n' || e.key === 'N') && episodeNav.next) {
                 e.preventDefault(); navigateEpisode('next');
