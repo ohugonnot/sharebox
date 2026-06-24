@@ -185,6 +185,28 @@ if (is_file($resolvedPath)) {
         require __DIR__ . '/handlers/keyframe.php';
     }
 
+    // Thumbnail pour preview seekbar : frame JPEG 160×90 à un instant donné
+    if (isset($_GET['keyframe_thumb'])) {
+        $t = max(0, min(86400, (float)$_GET['keyframe_thumb']));
+        if (!$resolvedPath || !file_exists($resolvedPath)) { http_response_code(204); exit; }
+        $cmd = 'timeout 8 ffmpeg -hide_banner -loglevel error -ss ' . escapeshellarg(sprintf('%.3f', $t))
+             . ' -i ' . escapeshellarg($resolvedPath)
+             . ' -vframes 1 -vf ' . escapeshellarg('scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2')
+             . ' -q:v 8 -f image2pipe -vcodec mjpeg pipe:1';
+        $desc = [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $proc = proc_open($cmd, $desc, $pipes);
+        if (!$proc) { http_response_code(204); exit; }
+        $jpeg = stream_get_contents($pipes[1]);
+        stream_get_contents($pipes[2]); // évite le blocage pipe stderr sous charge
+        fclose($pipes[1]); fclose($pipes[2]);
+        $ret = proc_close($proc);
+        if ($ret !== 0 || !$jpeg) { http_response_code(204); exit; }
+        header('Content-Type: image/jpeg');
+        header('Cache-Control: max-age=300');
+        echo $jpeg;
+        exit;
+    }
+
     // Mode streaming natif : sert le fichier brut (audio uniquement, ou fallback)
     if (isset($_GET['stream']) && $_GET['stream'] === '1') {
         write_stream_info([
@@ -619,8 +641,8 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 /* ── Continue Watching ── */
 .cw-section{margin-bottom:1.5rem}
 .cw-title{font-size:.75rem;font-weight:700;color:var(--text-muted);margin-bottom:.5rem;text-transform:uppercase;letter-spacing:.06em}
-.cw-scroll{display:flex;gap:.75rem;overflow-x:auto;padding-bottom:.5rem;scrollbar-width:thin}
-.cw-scroll::-webkit-scrollbar{height:4px}.cw-scroll::-webkit-scrollbar-track{background:transparent}.cw-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px}
+.cw-scroll{display:flex;gap:.75rem;flex-wrap:wrap}
+
 .cw-card{flex:0 0 180px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:8px;padding:.75rem;text-decoration:none;color:inherit;transition:background .15s,border-color .15s;display:block}
 .cw-card:hover{background:rgba(255,255,255,.08);border-color:rgba(240,160,48,.3)}
 .cw-filename{font-size:.8rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:.25rem}
@@ -892,10 +914,12 @@ function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
     var cutoff=Date.now()-30*86400000;
     items=items.filter(function(i){return i.timestamp>cutoff&&i.duration>0&&i.position>0;});
     if(!items.length)return;
+    items.sort(function(a,b){return b.timestamp-a.timestamp;});
+    items=items.slice(0,6);
     var container=document.getElementById('continue-watching');
     if(!container)return;
     container.style.display='';
-    var html='<div class="cw-title">Reprendre</div><div class="cw-scroll">';
+    var html='<div class="cw-title">Reprendre</div><div class="cw-scroll-wrap"><div class="cw-scroll">';
     items.forEach(function(item){
         var pct=Math.min(99,Math.round((item.position/item.duration)*100));
         var remaining=Math.round((item.duration-item.position)/60);
@@ -906,7 +930,7 @@ function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
             +'<div class="cw-bar"><div class="cw-progress" style="width:'+pct+'%"></div></div>'
             +'</a>';
     });
-    html+='</div>';
+    html+='</div></div>';
     container.innerHTML=html;
 })();
 
