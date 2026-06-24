@@ -263,11 +263,14 @@ test.describe('Feature 4 — Chapter markers on seekbar', () => {
     await page.evaluate(() => {
       const vid = document.getElementById('player') as HTMLVideoElement | null;
       if (!vid) return;
-      // Patch duration so renderChapterMarkers() gets a non-zero value
-      try {
-        Object.defineProperty(vid, 'duration', { value: 1200, configurable: true });
-      } catch {}
+      // duration is non-configurable on the instance in headless Chromium.
+      // Patch the prototype getter instead — dispatchEvent is synchronous so the
+      // handler sees duration=1200, then we restore the original descriptor.
+      const proto = HTMLVideoElement.prototype;
+      const orig = Object.getOwnPropertyDescriptor(proto, 'duration');
+      Object.defineProperty(proto, 'duration', { get: () => 1200, configurable: true });
       vid.dispatchEvent(new Event('loadedmetadata'));
+      if (orig) Object.defineProperty(proto, 'duration', orig);
     });
 
     // Markers should be appended to #seek-bar as .seek-marker spans
