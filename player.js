@@ -811,7 +811,7 @@ function plog(tag, msg, data) {
             if (_thumbAbort) { try { _thumbAbort.abort(); } catch(x) {} }
             var ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
             _thumbAbort = ctrl;
-            fetch(base + '?' + pp + 'keyframe_thumb=' + ts5.toFixed(0), ctrl ? {signal: ctrl.signal} : {})
+            fetch(base + '?' + pp + 'keyframe_thumb=' + ts5.toFixed(0), ctrl ? {signal: ctrl.signal, credentials: 'same-origin'} : {credentials: 'same-origin'})
                 .then(function(r) { if (!r.ok || r.status === 204) throw new Error('no-thumb'); return r.blob(); })
                 .then(function(blob) {
                     var url = URL.createObjectURL(blob);
