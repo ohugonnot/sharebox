@@ -191,11 +191,11 @@ if (is_file($resolvedPath)) {
         if (!$resolvedPath || !file_exists($resolvedPath)) { http_response_code(204); exit; }
         $cmd = 'timeout 8 ffmpeg -hide_banner -loglevel error -ss ' . escapeshellarg(sprintf('%.3f', $t))
              . ' -i ' . escapeshellarg($resolvedPath)
-             . ' -vframes 1 -vf scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2'
+             . ' -vframes 1 -vf ' . escapeshellarg('scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2')
              . ' -q:v 8 -f image2pipe -vcodec mjpeg pipe:1';
         header('Content-Type: image/jpeg');
         header('Cache-Control: max-age=300');
-        $desc = [0 => ['/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $desc = [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
         $proc = proc_open($cmd, $desc, $pipes);
         if (!$proc) { http_response_code(204); exit; }
         $jpeg = stream_get_contents($pipes[1]);
