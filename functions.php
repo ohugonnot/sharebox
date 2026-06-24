@@ -365,12 +365,20 @@ function sharebox_log(string $msg, string $channel = 'stream'): void {
  */
 function find_php_cli(): string {
     if (defined('PHP_CLI_BINARY') && PHP_CLI_BINARY) return PHP_CLI_BINARY;
-    // PHP_BINARY peut être /usr/local/sbin/php-fpm ; on regarde /usr/local/bin/php aussi
+    // PHP_BINARY en contexte FPM pointe vers php-fpm, pas le CLI.
+    // Priorité au binaire versionné (ex: php8.2 sur Debian multi-PHP) pour éviter
+    // de tomber sur /usr/bin/php qui peut être une version différente sans pdo_sqlite.
+    $ver = PHP_MAJOR_VERSION . '.' . PHP_MINOR_VERSION;
     $binDir = dirname(PHP_BINARY);
-    foreach ([$binDir . '/php', dirname($binDir) . '/bin/php', '/usr/local/bin/php', '/usr/bin/php'] as $candidate) {
+    foreach ([
+        '/usr/local/bin/php',        // Alpine/Docker (version unique)
+        '/usr/bin/php' . $ver,       // Debian multi-PHP: php8.2, php8.4…
+        $binDir . '/php',            // même répertoire que PHP_BINARY
+        '/usr/bin/php',              // fallback générique (peut être une version différente)
+    ] as $candidate) {
         if (is_executable($candidate)) return $candidate;
     }
-    return 'php';  // fallback sur PATH
+    return 'php';
 }
 
 // Aliases pour compatibilité et lisibilité

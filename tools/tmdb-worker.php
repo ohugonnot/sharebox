@@ -60,6 +60,8 @@ function discover_folders(PDO $db): int {
                 $real = $current->getRealPath();
                 if ($real && isset($seenPaths[$real])) return false;
                 if ($real) $seenPaths[$real] = true;
+                static $SKIP_DIRS = ['vendor', 'node_modules', 'var', 'cache', '__pycache__'];
+                if (in_array($current->getFilename(), $SKIP_DIRS, true)) return false;
                 return true;
             }
         ),
@@ -74,6 +76,24 @@ function discover_folders(PDO $db): int {
         $rel = ltrim(str_replace($basePath, '', $path), '/');
         $depth = substr_count($rel, '/') + 1;
         if ($depth < $minDepth) continue;
+
+        // Skip folders that contain only non-streamable files (CBR, EPUB, PDF, etc.).
+        // Folders with subdirectories are kept — they might be series with season subfolders.
+        $contents = @scandir($path, SCANDIR_SORT_NONE);
+        if ($contents !== false) {
+            $hasVideo = false;
+            $hasSubdir = false;
+            foreach ($contents as $item) {
+                if ($item === '.' || $item === '..') continue;
+                if (is_dir($path . '/' . $item)) { $hasSubdir = true; break; }
+                $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+                if (in_array($ext, ['mp4','mkv','avi','m4v','mov','wmv','flv','webm','ts','m2ts','mpg','mpeg'], true)) {
+                    $hasVideo = true;
+                    break;
+                }
+            }
+            if (!$hasVideo && !$hasSubdir) continue;
+        }
 
         try {
             $stmt->execute([':p' => $path]);

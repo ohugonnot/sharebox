@@ -736,6 +736,7 @@ function plog(tag, msg, data) {
         seekFill.style.width = pct + '%'; seekThumb.style.left = pct + '%'; timeCurrent.textContent = fmtTime(t);
         clearTimeout(S.seekDebounce);
         if (S.confirmed === 'native') {
+            S.offset = 0; // safety: ensure no stale offset from an earlier unconfirmed seek
             S.seekPending = false; player.currentTime = t; hint.textContent = '';
             Subs.resetIdx(); Subs._syncTrack();
         } else {
@@ -755,7 +756,10 @@ function plog(tag, msg, data) {
                         .then(function(r) { return r.json(); })
                         .then(function(d) {
                             if (seekGen === S.seekGen && typeof d.pts === 'number' && d.pts >= 0) {
-                                S.offset = d.pts; Subs.resetIdx();
+                                // Native mode uses player.currentTime for absolute position — S.offset must stay 0.
+                                // Updating it here would cause realTime() = offset + currentTime = 2× the seek target.
+                                if (S.confirmed !== 'native' && S.step !== 'native') S.offset = d.pts;
+                                Subs.resetIdx();
                                 Subs._syncTrack();
                             }
                         })
