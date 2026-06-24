@@ -185,6 +185,28 @@ if (is_file($resolvedPath)) {
         require __DIR__ . '/handlers/keyframe.php';
     }
 
+    // Thumbnail pour preview seekbar : frame JPEG 160×90 à un instant donné
+    if (isset($_GET['keyframe_thumb'])) {
+        $t = max(0, min(86400, (float)$_GET['keyframe_thumb']));
+        if (!$resolvedPath || !file_exists($resolvedPath)) { http_response_code(204); exit; }
+        $cmd = 'timeout 8 ffmpeg -hide_banner -loglevel error -ss ' . escapeshellarg(sprintf('%.3f', $t))
+             . ' -i ' . escapeshellarg($resolvedPath)
+             . ' -vframes 1 -vf scale=160:90:force_original_aspect_ratio=decrease,pad=160:90:(ow-iw)/2:(oh-ih)/2'
+             . ' -q:v 8 -f image2pipe -vcodec mjpeg pipe:1';
+        header('Content-Type: image/jpeg');
+        header('Cache-Control: max-age=300');
+        $desc = [0 => ['/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $proc = proc_open($cmd, $desc, $pipes);
+        if (!$proc) { http_response_code(204); exit; }
+        $jpeg = stream_get_contents($pipes[1]);
+        stream_get_contents($pipes[2]); // évite le blocage pipe stderr sous charge
+        fclose($pipes[1]); fclose($pipes[2]);
+        $ret = proc_close($proc);
+        if ($ret !== 0 || !$jpeg) { http_response_code(204); exit; }
+        echo $jpeg;
+        exit;
+    }
+
     // Mode streaming natif : sert le fichier brut (audio uniquement, ou fallback)
     if (isset($_GET['stream']) && $_GET['stream'] === '1') {
         write_stream_info([
