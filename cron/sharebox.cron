@@ -10,7 +10,8 @@
 
 
 # Cleanup stale HLS temp directories (older than 2h)
-*/15 * * * * www-data find /tmp -maxdepth 1 -name "hls_*" -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
+# Path must match dirname(STREAM_LOG)/hls_cache in config.php — the cache moved out of /tmp
+*/15 * * * * www-data find /var/www/sharebox/data/hls_cache -mindepth 1 -maxdepth 1 -name "hls_*" -type d -mmin +120 -exec rm -rf {} + 2>/dev/null
 
 # Purge orphaned probe/subtitle cache entries (daily 4am)
 0 4 * * * www-data php -r "require '/var/www/sharebox/db.php'; purge_probe_cache(get_db());" 2>/dev/null

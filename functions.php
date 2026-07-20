@@ -962,6 +962,8 @@ function buildFfmpegInputArgs(string $filePath, string $seekBefore = '', string 
         $vaapiDevice = defined('FFMPEG_VAAPI_DEVICE') ? FFMPEG_VAAPI_DEVICE : '/dev/dri/renderD128';
         $hwFlags = ' -hwaccel vaapi -hwaccel_device ' . escapeshellarg($vaapiDevice) . ' -hwaccel_output_format vaapi';
     }
+    // ionice -n 0 : un stream actif prend le disque devant les rtorrent (prio 4) ; pas de
+    // stream = pas de ffmpeg, les torrents gardent 100%. Le frein global, c'est adaptive-qos.
     return 'timeout 3600 ionice -c 2 -n 0 nice -n 5 ffmpeg -nostdin' . $seekBefore . $hwFlags . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
 }
 
@@ -1078,7 +1080,8 @@ function computeEpisodeNav(string $subPath, string $basePath, string $baseUrl): 
 function warmFileCache(string $filePath): void {
     if (!is_file($filePath)) return;
     if (filesize($filePath) < VMTOUCH_SIZE_LIMIT) {
-        shell_exec('vmtouch -qt ' . escapeshellarg($filePath) . ' >/dev/null 2>&1 &');
+        // Classe idle : le warming ne lit que quand le disque est libre, jamais contre les seeders.
+        shell_exec('ionice -c 3 vmtouch -qt ' . escapeshellarg($filePath) . ' >/dev/null 2>&1 &');
     }
 }
 
