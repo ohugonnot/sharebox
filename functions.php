@@ -1038,6 +1038,16 @@ function buildFmp4MuxerArgs(): string {
 }
 
 /**
+ * Retourne le folder_type ('movies' ou 'series') stocké pour un dossier, 'series' par défaut.
+ */
+function get_folder_type(PDO $db, string $path): string {
+    $stmt = $db->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
+    $stmt->execute([':p' => $path]);
+    $row = $stmt->fetch();
+    return ($row && $row['folder_type']) ? $row['folder_type'] : 'series';
+}
+
+/**
  * Calcule les épisodes précédent/suivant pour la navigation dans le player.
  *
  * @param string $subPath   Sous-chemin relatif du fichier courant (ex: "Season1/ep02.mkv")
