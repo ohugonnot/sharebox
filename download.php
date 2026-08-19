@@ -1940,9 +1940,15 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     $prevFile = null;
     $nextFile = null;
     if ($subPath && $basePath && $mediaType === 'video') {
-        $nav = computeEpisodeNav($subPath, $basePath, $baseUrl);
-        $prevFile = $nav['prev'];
-        $nextFile = $nav['next'];
+        $parentSub = dirname($subPath);
+        $parentDir = ($parentSub === '.') ? $basePath : $basePath . '/' . $parentSub;
+        // Un dossier "films" n'a pas d'épisode suivant, même s'il contient plusieurs vidéos.
+        $navFolderType = get_folder_type(get_db(), realpath($parentDir) ?: $parentDir);
+        if ($navFolderType !== 'movies') {
+            $nav = computeEpisodeNav($subPath, $basePath, $baseUrl);
+            $prevFile = $nav['prev'];
+            $nextFile = $nav['next'];
+        }
     }
     $episodeNavJson = json_encode(['prev' => $prevFile, 'next' => $nextFile], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG);
     if ($prevFile || $nextFile) {

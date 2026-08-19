@@ -197,6 +197,22 @@ class DatabaseTest extends TestCase
         $this->assertSame('series', $value);
     }
 
+    // ── 5f. get_folder_type() helper ─────────────────────────────────────
+
+    public function testGetFolderTypeReturnsSeriesForUnknownPath(): void
+    {
+        $db = get_db();
+        $this->assertSame('series', get_folder_type($db, '/test/never-scanned'));
+    }
+
+    public function testGetFolderTypeReturnsStoredValue(): void
+    {
+        $db = get_db();
+        $db->prepare("INSERT OR REPLACE INTO folder_posters (path, folder_type) VALUES (?, 'movies')")
+           ->execute(['/test/movies-folder']);
+        $this->assertSame('movies', get_folder_type($db, '/test/movies-folder'));
+    }
+
     // ── 5d. folder_posters has tmdb_year and tmdb_type columns ──────────
 
     public function testFolderPostersHasTmdbYearAndTypeColumns(): void
