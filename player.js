@@ -188,14 +188,18 @@ function plog(tag, msg, data) {
     }
 
     // ── Avertissement source 4K ───────────────────────────────────────────────
-    var isUHDSource = isVideo && (PLAYER_CONFIG.sourceHeight || 0) >= (PLAYER_CONFIG.uhdMinHeight || 1440);
+    // La hauteur injectée par PHP vient du cache ffprobe, vide pour un fichier
+    // jamais lu : elle vaut 0 la première fois. La sonde asynchrone la corrige
+    // plus bas — sans ça l'avertissement ne partirait jamais sur un fichier neuf.
+    var uhdMinHeight = PLAYER_CONFIG.uhdMinHeight || 1440;
+    var isUHDSource  = isVideo && (PLAYER_CONFIG.sourceHeight || 0) >= uhdMinHeight;
 
     function warnUHDTranscode() {
         if (!isUHDSource) return;
         showToast({
             once: 'uhd-transcode',
             type: 'warn',
-            title: 'Source 4K \u2014 pr\u00E9f\u00E9rez le t\u00E9l\u00E9chargement',
+            title: 'Source tr\u00E8s lourde \u2014 pr\u00E9f\u00E9rez le t\u00E9l\u00E9chargement',
             message: 'Le serveur r\u00E9encode la vid\u00E9o en ' + S.quality + 'p en direct : vous perdez la qualit\u00E9 d\u2019origine et le processeur tourne \u00E0 plein r\u00E9gime pour tout le monde. Le fichier t\u00E9l\u00E9charg\u00E9 est intact et ne co\u00FBte rien au serveur.',
             action: {href: PLAYER_CONFIG.dlUrl, label: 'T\u00E9l\u00E9charger l\u2019original'}
         });
@@ -211,13 +215,13 @@ function plog(tag, msg, data) {
             .then(function(d) {
                 if (!d || !d.busy) return;
                 plog('ERROR', 'refus verrou UHD');
-                hint.textContent = 'Un autre flux 4K est en cours.';
+                hint.textContent = 'Un autre flux haute r\u00E9solution est en cours.';
                 hint.className = 'player-hint error';
                 showToast({
                     once: 'uhd-busy',
                     type: 'error',
-                    title: 'Un seul flux 4K \u00E0 la fois',
-                    message: 'Quelqu\u2019un regarde d\u00E9j\u00E0 un fichier 4K : le serveur ne peut pas en r\u00E9encoder deux en temps r\u00E9el. T\u00E9l\u00E9chargez le fichier, ou r\u00E9essayez plus tard.',
+                    title: 'Un seul flux haute r\u00E9solution \u00E0 la fois',
+                    message: 'Quelqu\u2019un regarde d\u00E9j\u00E0 une vid\u00E9o de ce type : le serveur ne peut pas en r\u00E9encoder deux en temps r\u00E9el. T\u00E9l\u00E9chargez le fichier, ou r\u00E9essayez plus tard.',
                     action: {href: PLAYER_CONFIG.dlUrl, label: 'T\u00E9l\u00E9charger l\u2019original'},
                     timeout: 0
                 });
@@ -1764,6 +1768,11 @@ function plog(tag, msg, data) {
                 clearTimeout(fallbackTimer);
                 probeData = d;
                 plog('PROBE', 'received', {codec: d.videoCodec, h: d.videoHeight, dur: d.duration, isMP4: d.isMP4, isMKV: d.isMKV, audio: (d.audio||[]).length, subs: (d.subtitles||[]).length});
+                if (isVideo && !isUHDSource && (d.videoHeight || 0) >= uhdMinHeight) {
+                    isUHDSource = true;
+                    plog('PROBE', 'source UHD confirmee par la sonde (h=' + d.videoHeight + ')');
+                    if ((S.confirmed || S.step) === 'transcode') warnUHDTranscode();
+                }
                 if (savedCfg) restoreCfg();
                 applyProbe(d);
                 if (!streamStarted) {

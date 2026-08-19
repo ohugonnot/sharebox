@@ -126,7 +126,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 20; // bump when adding migrations
+    $targetVersion = 21; // bump when adding migrations
     if ($version >= $targetVersion) return $db;
 
     if ($version < 1) {
@@ -356,7 +356,6 @@ function get_db(): PDO {
         $db->query('PRAGMA user_version = 19');
     }
 
-    /** @phpstan-ignore smaller.alwaysTrue */
     if ($version < 20) {
         // v20 : fix DEFAULT 'admin' → DEFAULT 'user' on users.role (SQLite can't ALTER COLUMN)
         $db->exec("ALTER TABLE users RENAME TO users_v19");
@@ -373,6 +372,21 @@ function get_db(): PDO {
         $db->exec("INSERT INTO users SELECT id, username, password_hash, role, created_at, private FROM users_v19");
         $db->exec("DROP TABLE users_v19");
         $db->query('PRAGMA user_version = 20');
+    }
+
+    /** @phpstan-ignore smaller.alwaysTrue */
+    if ($version < 21) {
+        // v21 : hauteur vidéo mémorisée à part. On ne peut pas la ranger dans
+        // probe_cache : une entrée partielle y serait servie telle quelle au
+        // player, qui y perdrait ses pistes audio et ses sous-titres.
+        $db->query("
+            CREATE TABLE IF NOT EXISTS video_height_cache (
+                path TEXT NOT NULL PRIMARY KEY,
+                mtime INTEGER NOT NULL,
+                height INTEGER NOT NULL
+            )
+        ");
+        $db->query('PRAGMA user_version = 21');
     }
 
     /** @phpstan-ignore smaller.alwaysTrue */

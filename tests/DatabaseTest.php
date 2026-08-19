@@ -136,7 +136,12 @@ class DatabaseTest extends TestCase
     {
         $db = get_db();
         $version = (int) $db->query('PRAGMA user_version')->fetchColumn();
-        $this->assertSame(20, $version);
+        $this->assertSame(21, $version);
+        // La v21 doit avoir créé sa table : son absence est silencieuse en prod
+        // (lecture et écriture avalent la PDOException) et supprimerait
+        // l'amortissement de la sonde sans le moindre signal.
+        $cols = array_column(get_db()->query('PRAGMA table_info(video_height_cache)')->fetchAll(), 'name');
+        $this->assertSame(['path', 'mtime', 'height'], $cols);
     }
 
     public function testUsersTableHasPrivateColumn(): void

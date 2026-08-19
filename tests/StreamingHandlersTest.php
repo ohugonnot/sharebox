@@ -565,16 +565,18 @@ class StreamingHandlersTest extends TestCase
         $source = file_get_contents(__DIR__ . '/../handlers/stream_hls.php');
         // Le check pid + rm -rf doit être protégé par flock sur .startup.lock
         // pour éviter le TOCTOU entre la lecture du pidFile et le rm -rf
+        // fd 8 et non 200 : /bin/sh est dash, qui refuse les descripteurs à plus
+        // d'un chiffre — la commande entière échouait au parse avant d'exister.
         $this->assertStringContainsString(
-            'flock -x 200',
+            'flock -x 8',
             $source,
-            'Le cleanup HLS doit acquérir un flock exclusif (fd 200) avant check+rm'
+            'Le cleanup HLS doit acquérir un flock exclusif avant check+rm'
         );
         // Le flock doit rediriger vers .startup.lock
         $this->assertStringContainsString(
-            '200>',
+            '8>',
             $source,
-            'Le fd 200 doit être redirigé vers le fichier .startup.lock'
+            'Le fd du flock doit être redirigé vers le fichier .startup.lock'
         );
         $this->assertStringContainsString(
             '.startup.lock',

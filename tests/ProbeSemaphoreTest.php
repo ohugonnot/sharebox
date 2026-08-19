@@ -6,8 +6,15 @@ class ProbeSemaphoreTest extends TestCase
 {
     protected function setUp(): void
     {
+        // Root a CAP_DAC_OVERRIDE : un échec de fopen() ne protège pas. Comparer le
+        // chemin, sinon la suite écrirait dans data/ de prod des fichiers que
+        // www-data ne pourrait plus ouvrir — incident déjà vécu.
+        if (str_starts_with(probeSlotPath(1), realpath(__DIR__ . '/..') . '/data/')) {
+            $this->markTestSkipped('les slots de sonde pointent sur ceux de prod');
+        }
+
         for ($i = 1; $i <= 5; $i++) {
-            $path = "/tmp/sharebox_probe_slot_{$i}.lock";
+            $path = probeSlotPath($i);
             $fp = @fopen($path, 'w');
             if ($fp === false) {
                 $this->markTestSkipped("Cannot open $path for writing (owned by www-data?)");
@@ -18,7 +25,7 @@ class ProbeSemaphoreTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach (glob('/tmp/sharebox_probe_slot_*.lock') as $f) {
+        foreach (glob(dirname(probeSlotPath(1)) . '/*probe_slot_*.lock') as $f) {
             @unlink($f);
         }
     }
