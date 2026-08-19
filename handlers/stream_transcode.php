@@ -5,6 +5,30 @@ if (!$mime || !str_starts_with($mime, 'video/')) {
     echo json_encode(['error' => 'not_video']);
     exit;
 }
+$uhdHolder = uhdHolderId();
+
+// Sonde du player : dit si un AUTRE spectateur tient le verrou, sans lancer ffmpeg.
+if (isset($_GET['slotcheck'])) {
+    header('Content-Type: application/json');
+    $probeUHD = isUHDFile($db, $resolvedPath);
+    echo json_encode(['uhd' => $probeUHD, 'busy' => $probeUHD && uhdSlotBusy($uhdHolder)]);
+    exit;
+}
+
+// Un seul spectateur en UHD à la fois : deux transcodes 2160p concurrents
+// tombent tous les deux sous le temps réel. Refus immédiat plutôt que file
+// d'attente — le player propose le téléchargement à la place.
+$uhdFp = null;
+if (isUHDFile($db, $resolvedPath)) {
+    $uhdFp = acquireUHDSlot($uhdHolder);
+    if ($uhdFp === null) {
+        stream_log('TRANSCODE refused | UHD slot busy | ' . basename($resolvedPath));
+        http_response_code(503);
+        header('Content-Type: application/json');
+        echo json_encode(['error' => 'uhd_busy']);
+        exit;
+    }
+}
 set_time_limit(0);
 ob_implicit_flush(true);
 if (ob_get_level()) ob_end_flush();
@@ -53,10 +77,11 @@ $cmd = $buildTranscodeCmd($hwEncoder);
 [$slotFp, $queued] = acquireStreamSlot();
 if ($queued) { stream_log('TRANSCODE queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }
 $shellPid = null;
-register_shutdown_function(function() use (&$slotFp, &$shellPid) {
+register_shutdown_function(function() use (&$slotFp, &$uhdFp, &$shellPid) {
     // Kill process group to terminate ffmpeg even behind shell wrapper
     if ($shellPid) { @posix_kill(-$shellPid, SIGTERM); @posix_kill($shellPid, SIGTERM); }
     releaseStreamSlot($slotFp);
+    releaseStreamSlot($uhdFp);
 });
 warmFileCache($resolvedPath);
 $proc = proc_open($cmd, [1 => ['pipe', 'w']], $pipes);
