@@ -962,9 +962,12 @@ function buildFfmpegInputArgs(string $filePath, string $seekBefore = '', string 
         $vaapiDevice = defined('FFMPEG_VAAPI_DEVICE') ? FFMPEG_VAAPI_DEVICE : '/dev/dri/renderD128';
         $hwFlags = ' -hwaccel vaapi -hwaccel_device ' . escapeshellarg($vaapiDevice) . ' -hwaccel_output_format vaapi';
     }
+    // Doit dépasser la durée du plus long film : au-delà, ffmpeg termine proprement sur
+    // le SIGTERM et le client (qui ne connaît jamais la durée totale d'un flux fragmenté)
+    // interprète cette coupure comme un `ended` légitime.
     // ionice -n 0 : un stream actif prend le disque devant les rtorrent (prio 4) ; pas de
     // stream = pas de ffmpeg, les torrents gardent 100%. Le frein global, c'est adaptive-qos.
-    return 'timeout 3600 ionice -c 2 -n 0 nice -n 5 ffmpeg -nostdin' . $seekBefore . $hwFlags . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
+    return 'timeout 14400 ionice -c 2 -n 0 nice -n 5 ffmpeg -nostdin' . $seekBefore . $hwFlags . ' -thread_queue_size 512 -fflags +genpts+discardcorrupt -i ' . escapeshellarg($filePath);
 }
 
 /**
