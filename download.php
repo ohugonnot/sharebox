@@ -1979,6 +1979,17 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     $watchPathJs = $watchPath ? json_encode($watchPath) : 'null';
     $watchCsrfJs = $watchCsrf ? json_encode($watchCsrf) : 'null';
 
+    // Hauteur source : sert au player à prévenir avant un transcode UHD.
+    // La clé du cache ffprobe est le realpath (cf. $resolvedPath dans le routeur).
+    $sourceHeight = 0;
+    if ($mediaType === 'video' && $basePath) {
+        $probePath = $subPath ? $basePath . '/' . $subPath : $basePath;
+        $probe = probe_cache_data(get_db(), realpath($probePath) ?: $probePath);
+        $sourceHeight = (int)($probe['videoHeight'] ?? 0);
+    }
+    $uhdMinHeight = STREAM_UHD_MIN_HEIGHT;
+    $dlUrlJs = json_encode($dlUrl, JSON_HEX_TAG | JSON_HEX_APOS);
+
     $remuxEnabled = STREAM_REMUX_ENABLED ? 'true' : 'false';
     $jsMtime = filemtime(__DIR__ . '/player.js');
     $cssMtime = filemtime(__DIR__ . '/player.css');
@@ -2064,7 +2075,10 @@ var PLAYER_CONFIG = {
     pp: {$pParamJsEnc},
     episodeNav: {$episodeNavJson},
     watchPath: {$watchPathJs},
-    watchCsrf: {$watchCsrfJs}
+    watchCsrf: {$watchCsrfJs},
+    sourceHeight: {$sourceHeight},
+    uhdMinHeight: {$uhdMinHeight},
+    dlUrl: {$dlUrlJs}
 };
 </script>
 <script src="/share/player.js?v={$jsMtime}"></script>

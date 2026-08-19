@@ -139,6 +139,92 @@ function plog(tag, msg, data) {
         return url;
     }
 
+    // ── Toast ─────────────────────────────────────────────────────────────────
+    var toastSeen = {};
+    function showToast(o) {
+        if (o.once) {
+            if (toastSeen[o.once]) return;
+            toastSeen[o.once] = true;
+        }
+        var box = document.getElementById('toast-container');
+        if (!box) {
+            box = document.createElement('div');
+            box.id = 'toast-container';
+            document.body.appendChild(box);
+        }
+        var toast = document.createElement('div');
+        toast.className = 'toast' + (o.type ? ' is-' + o.type : '');
+        var body = document.createElement('div');
+        body.className = 'toast-body';
+        if (o.title) {
+            var h = document.createElement('strong');
+            h.className = 'toast-title';
+            h.textContent = o.title;
+            body.appendChild(h);
+        }
+        var txt = document.createElement('span');
+        txt.textContent = o.message;
+        body.appendChild(txt);
+        if (o.action) {
+            var a = document.createElement('a');
+            a.className = 'toast-action';
+            a.href = o.action.href;
+            a.textContent = o.action.label;
+            body.appendChild(a);
+        }
+        var close = document.createElement('button');
+        close.className = 'toast-dismiss';
+        close.setAttribute('aria-label', 'Fermer');
+        close.textContent = '\u2715';
+        toast.append(body, close);
+        box.appendChild(toast);
+        var remove = function() {
+            if (!toast.isConnected) return;
+            toast.classList.add('is-out');
+            toast.addEventListener('animationend', function() { toast.remove(); }, {once: true});
+        };
+        close.addEventListener('click', remove);
+        if (o.timeout !== 0) setTimeout(remove, o.timeout || 15000);
+    }
+
+    // ── Avertissement source 4K ───────────────────────────────────────────────
+    var isUHDSource = isVideo && (PLAYER_CONFIG.sourceHeight || 0) >= (PLAYER_CONFIG.uhdMinHeight || 1440);
+
+    function warnUHDTranscode() {
+        if (!isUHDSource) return;
+        showToast({
+            once: 'uhd-transcode',
+            type: 'warn',
+            title: 'Source 4K \u2014 pr\u00E9f\u00E9rez le t\u00E9l\u00E9chargement',
+            message: 'Le serveur r\u00E9encode la vid\u00E9o en ' + S.quality + 'p en direct : vous perdez la qualit\u00E9 d\u2019origine et le processeur tourne \u00E0 plein r\u00E9gime pour tout le monde. Le fichier t\u00E9l\u00E9charg\u00E9 est intact et ne co\u00FBte rien au serveur.',
+            action: {href: PLAYER_CONFIG.dlUrl, label: 'T\u00E9l\u00E9charger l\u2019original'}
+        });
+    }
+
+    // Confirme aupres du serveur qu'un autre 4K occupe le verrou avant de
+    // l'annoncer : un errCode 4 seul ne dit pas pourquoi le flux a ete refuse.
+    function checkUHDBusy() {
+        var probeUrl = base + '?' + pp + 'stream=transcode&audio=' + (S.audioIdx || 0)
+                     + '&quality=' + S.quality + '&slotcheck=1';
+        fetch(probeUrl)
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                if (!d || !d.busy) return;
+                plog('ERROR', 'refus verrou UHD');
+                hint.textContent = 'Un autre flux 4K est en cours.';
+                hint.className = 'player-hint error';
+                showToast({
+                    once: 'uhd-busy',
+                    type: 'error',
+                    title: 'Un seul flux 4K \u00E0 la fois',
+                    message: 'Quelqu\u2019un regarde d\u00E9j\u00E0 un fichier 4K : le serveur ne peut pas en r\u00E9encoder deux en temps r\u00E9el. T\u00E9l\u00E9chargez le fichier, ou r\u00E9essayez plus tard.',
+                    action: {href: PLAYER_CONFIG.dlUrl, label: 'T\u00E9l\u00E9charger l\u2019original'},
+                    timeout: 0
+                });
+            })
+            .catch(function() {});
+    }
+
     // ── Position et config mémorisées ───────────────────────────────────────
     var posKey   = 'player_seek_' + base + pp;
     var cfgKey   = 'player_cfg_'  + base + pp;
@@ -270,6 +356,7 @@ function plog(tag, msg, data) {
 
     function startStream(resumeAt) {
         var mode = S.confirmed || S.step;
+        if (mode === 'transcode') warnUHDTranscode();
         plog('STREAM', 'startStream mode=' + mode + ' resumeAt=' + (resumeAt || 0).toFixed(1) + ' audio=' + S.audioIdx + ' quality=' + S.quality + ' burnSub=' + S.burnSub);
         sendTelemetry('start', {mode: mode, extra: {quality: S.quality, audio: S.audioIdx, burnSub: S.burnSub, resume: Math.round(resumeAt||0)}});
         firstPlayingEmitted = false;
@@ -400,6 +487,10 @@ function plog(tag, msg, data) {
             hint.textContent = errorMessage(errCode, S.confirmed || S.step);
             hint.className = 'player-hint error';
             return;
+        }
+        // Un refus du verrou UHD remonte en errCode 4 : lever le doute avant d'afficher
+        if (errCode === 4 && isUHDSource && (S.confirmed || S.step) === 'transcode') {
+            checkUHDBusy();
         }
         // Cascade : native/remux → transcode → erreur définitive
         if (S.confirmed !== 'transcode' && (S.step === 'native' || S.step === 'remux')) {

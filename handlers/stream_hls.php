@@ -93,6 +93,21 @@ if ($mime && str_starts_with($mime, 'video/')) {
         $hwEncoder = detect_hw_encoder();
         $fc = buildFilterGraph($quality, $audioTrack, $burnSub, $filterMode, $hwEncoder);
 
+        // Même plafond UHD que le transcode direct : Safari iOS passe par HLS et
+        // lancerait sinon un second décodage 2160p en parallèle.
+        $uhdHolder = uhdHolderId();
+        $uhdFp = null;
+        if (isUHDFile($db, $resolvedPath)) {
+            $uhdFp = acquireUHDSlot($uhdHolder);
+            if ($uhdFp === null) {
+                stream_log('HLS refused | UHD slot busy | ' . basename($resolvedPath));
+                http_response_code(503);
+                header('Content-Type: application/json');
+                echo json_encode(['error' => 'uhd_busy']);
+                exit;
+            }
+        }
+
         [$slotFp, $queued] = acquireStreamSlot();
         if ($queued) stream_log('HLS queued | ' . basename($resolvedPath));
         stream_log('HLS start | quality=' . $quality . 'p audio=' . $audioTrack . ' start=' . $startSec . ' hw=' . $hwEncoder . ' | ' . basename($resolvedPath));
@@ -154,10 +169,18 @@ if ($mime && str_starts_with($mime, 'video/')) {
             . 'rm -rf ' . escapeshellarg($hlsDir)
             . ') 200>' . $startupLockFile;
         $cleanupCmd = $slotPath
-            ? '(flock -x 9; ' . $cleanupBody . ') 9>' . escapeshellarg($slotPath) . ' >/dev/null 2>&1 &'
-            : '(' . $cleanupBody . ') >/dev/null 2>&1 &';
-        // Fermer le FD PHP avant exec — le shell cleanup reprend le lock via flock 9>
+            ? '(flock -x 9; ' . $cleanupBody . ') 9>' . escapeshellarg($slotPath)
+            : '(' . $cleanupBody . ')';
+        // Le verrou UHD suit le même relais que le slot : sans ça il tomberait à la
+        // fin de la requête PHP alors que ffmpeg tourne encore en arrière-plan.
+        $uhdPath = $uhdFp ? stream_get_meta_data($uhdFp)['uri'] : '';
+        if ($uhdPath !== '') {
+            $cleanupCmd = '(flock -x 8; ' . $cleanupCmd . ') 8>' . escapeshellarg($uhdPath);
+        }
+        $cleanupCmd .= ' >/dev/null 2>&1 &';
+        // Fermer les FD PHP avant exec — le shell cleanup reprend les locks via flock
         if ($slotFp) fclose($slotFp);
+        if ($uhdFp) fclose($uhdFp);
         exec($cleanupCmd);
     } else {
         // Session existante — marquer activité

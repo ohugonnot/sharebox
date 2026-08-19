@@ -48,6 +48,13 @@ defined('FFMPEG_REMUX_AUDIO_FILTER') || define('FFMPEG_REMUX_AUDIO_FILTER', 'are
 defined('FFMPEG_HDR_THREADS')      || define('FFMPEG_HDR_THREADS', 6);       // tonemapping float32 gourmand (75% des 8 cores)
 defined('FFMPEG_HDR_CRF')          || define('FFMPEG_HDR_CRF', 22);         // aligné avec SDR (le tonemapping domine le CPU, pas l'encodage)
 
+// Streaming UHD — mesuré sur ce serveur : décoder du HEVC 10-bit 2160p coûte
+// ~2,4 cœurs, soit 73% du pipeline (l'encodage x264 720p n'en pèse que 0,3).
+// À 4 cœurs physiques, deux transcodes UHD simultanés passent tous les deux
+// sous le temps réel — d'où le verrou dédié dans acquireUHDSlot().
+defined('STREAM_UHD_MIN_HEIGHT')   || define('STREAM_UHD_MIN_HEIGHT', 1440);
+defined('UHD_TAKEOVER_WAIT')       || define('UHD_TAKEOVER_WAIT', 3.0);  // s d'attente avant qu'un spectateur reprenne son propre verrou
+
 /**
  * Acquire a stream slot using flock — limits concurrent ffmpeg processes.
  * Tries non-blocking first, falls back to blocking wait on slot 1.
@@ -85,6 +92,72 @@ function releaseStreamSlot(mixed &$fp): void {
     flock($fp, LOCK_UN);
     fclose($fp);
     $fp = null;
+}
+
+/**
+ * Identifie le spectateur qui tient le verrou UHD. Le player relance un
+ * transcode à chaque seek ou changement de piste : sans cette identité, un
+ * spectateur se ferait refuser son propre flux une seconde après l'avoir lancé.
+ */
+/**
+ * Chemin du verrou UHD, résolu à l'appel : functions.php est chargé par
+ * l'autoload composer avant le bootstrap PHPUnit, une constante figée ici
+ * ferait taper les tests dans les verrous de production.
+ */
+function uhdLockPath(): string {
+    return defined('UHD_LOCK_PATH') ? UHD_LOCK_PATH : '/tmp/sharebox_stream_uhd.lock';
+}
+
+function uhdHolderId(): string {
+    $user = $_SESSION['sharebox_user'] ?? '';
+    return $user !== '' ? 'u:' . $user : 'ip:' . ($_SERVER['REMOTE_ADDR'] ?? '?');
+}
+
+/**
+ * Réserve le droit de transcoder de l'UHD — un seul spectateur à la fois, deux
+ * transcodes 2160p concurrents passant tous les deux sous le temps réel.
+ * Le flock sert de mutex : le noyau le relâche même si PHP meurt brutalement.
+ * Le fichier porte l'identité du titulaire, pour que ses propres relances
+ * (seek, changement de piste) attendent son flux précédent au lieu d'être
+ * refusées. Se libère avec releaseStreamSlot().
+ * @param string $holder Identité renvoyée par uhdHolderId()
+ * @return resource|null Pointeur à garder ouvert, ou null si un AUTRE spectateur transcode de l'UHD
+ */
+function acquireUHDSlot(string $holder): mixed {
+    $path = uhdLockPath();
+    $fp = @fopen($path, 'c+');
+    // Verrou illisible (droits, /tmp plein) : laisser passer plutôt que de
+    // bloquer tout l'UHD sur un problème qui n'a rien à voir avec la charge.
+    if (!$fp) {
+        stream_log('UHD verrou inaccessible, transcode autorisé | ' . $path);
+        return fopen('php://memory', 'w');
+    }
+
+    if (!flock($fp, LOCK_EX | LOCK_NB)) {
+        if (trim((string)@file_get_contents($path)) !== $holder) {
+            fclose($fp);
+            return null;
+        }
+        // Notre propre flux précédent se termine : lui laisser rendre le verrou.
+        $got = false;
+        $deadline = microtime(true) + UHD_TAKEOVER_WAIT;
+        while (microtime(true) < $deadline) {
+            usleep(100000);
+            if (flock($fp, LOCK_EX | LOCK_NB)) { $got = true; break; }
+        }
+        // Toujours occupé par notre flux précédent : passer outre plutôt que
+        // refuser le spectateur qui tient déjà le créneau. Chevauchement bref
+        // et auto-limité — un navigateur ne lit qu'un flux à la fois.
+        if (!$got) {
+            stream_log('UHD takeover sans verrou | ' . $holder);
+        }
+    }
+
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, $holder);
+    fflush($fp);
+    return $fp;
 }
 
 /**
@@ -896,6 +969,36 @@ function isHDRFile(PDO $db, string $path): bool {
         return false;
     }
     return in_array($data['colorTransfer'] ?? '', ['smpte2084', 'arib-std-b67', 'smpte428'], true);
+}
+
+/**
+ * Teste si un AUTRE spectateur tient le verrou UHD, sans le prendre ni l'altérer.
+ * @param string $holder Identité renvoyée par uhdHolderId()
+ */
+function uhdSlotBusy(string $holder): bool {
+    $path = uhdLockPath();
+    $fp = @fopen($path, 'c+');
+    if (!$fp) return false;
+    if (flock($fp, LOCK_EX | LOCK_NB)) {
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        return false;
+    }
+    $busy = trim((string)@file_get_contents($path)) !== $holder;
+    fclose($fp);
+    return $busy;
+}
+
+/**
+ * Détecte une source au-dessus du 1080p, dont le décodage software domine le
+ * coût du transcode.
+ * @param PDO $db Database connection
+ * @param string $path Chemin absolu (realpath) du fichier
+ * @return bool True si la hauteur source atteint STREAM_UHD_MIN_HEIGHT
+ */
+function isUHDFile(PDO $db, string $path): bool {
+    $data = probe_cache_data($db, $path);
+    return (int)($data['videoHeight'] ?? 0) >= STREAM_UHD_MIN_HEIGHT;
 }
 
 /**

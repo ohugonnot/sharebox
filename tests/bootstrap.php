@@ -21,6 +21,7 @@ define('STREAM_MAX_CONCURRENT', 4);
 define('STREAM_REMUX_ENABLED',  false);
 define('STREAM_LOG',            false);
 define('BANDWIDTH_QUOTA_TB',    100);
+define('UHD_LOCK_PATH',         sys_get_temp_dir() . '/sharebox_test_uhd.lock');
 
 // Nettoyage à la fin du process PHPUnit
 register_shutdown_function(function () use ($testDb): void {
