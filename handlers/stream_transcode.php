@@ -10,7 +10,12 @@ $uhdHolder = uhdHolderId();
 // Sonde du player : dit si un AUTRE spectateur tient le verrou, sans lancer ffmpeg.
 if (isset($_GET['slotcheck'])) {
     header('Content-Type: application/json');
-    $probeUHD = isUHDFile($db, $resolvedPath);
+    // Sonde interdite ici : cet endpoint est atteignable sans authentification et
+    // ne sert qu'à formuler un message, pas à décider. Une rafale de requêtes ne
+    // doit pas déclencher autant d'ffprobe sur le disque partagé.
+    $probeUHD = isUHDFile($db, $resolvedPath, false);
+    // `busy` reste couplé au fichier interrogé : découplé, l'endpoint dirait à
+    // n'importe quel porteur de lien si quelqu'un d'autre regarde du lourd.
     echo json_encode(['uhd' => $probeUHD, 'busy' => $probeUHD && uhdSlotBusy($uhdHolder)]);
     exit;
 }

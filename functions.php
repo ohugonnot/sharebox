@@ -8,6 +8,8 @@
 
 const PROBE_MAX_CONCURRENT    = 5;              // max parallel ffprobe processes
 const PROBE_TIMEOUT           = 10;             // ffprobe timeout (seconds)
+const PROBE_WAIT              = 2;              // attente max d'un slot de sonde (seconds)
+const UHD_KILL_GRACE          = 3;              // attente de la mort du flux repris (seconds)
 const SUBTITLE_EXTRACT_TIMEOUT = 120;           // ffmpeg subtitle extraction timeout (seconds)
 const SUBTITLE_TRACK_MAX      = 99;             // max subtitle track index (anti-DoS)
 const KEYFRAME_LOOKUP_TIMEOUT = 5;              // ffprobe keyframe PTS lookup timeout (seconds)
@@ -50,10 +52,12 @@ defined('FFMPEG_HDR_CRF')          || define('FFMPEG_HDR_CRF', 22);         // a
 
 // Streaming UHD — mesuré sur ce serveur : décoder du HEVC 10-bit 2160p coûte
 // ~2,4 cœurs, soit 73% du pipeline (l'encodage x264 720p n'en pèse que 0,3).
+// Seuil sur la HAUTEUR à 1440, pas 2160 : les sorties 4K réelles sont en format
+// cinéma (3840x1600, 3840x1608, 3840x1920...) et n'atteignent jamais 2160 de haut.
+// Un seuil à 2160 ne détecterait quasiment aucun fichier 4K de la bibliothèque.
 // À 4 cœurs physiques, deux transcodes UHD simultanés passent tous les deux
 // sous le temps réel — d'où le verrou dédié dans acquireUHDSlot().
 defined('STREAM_UHD_MIN_HEIGHT')   || define('STREAM_UHD_MIN_HEIGHT', 1440);
-defined('UHD_TAKEOVER_WAIT')       || define('UHD_TAKEOVER_WAIT', 3.0);  // s d'attente avant qu'un spectateur reprenne son propre verrou
 
 /**
  * Acquire a stream slot using flock — limits concurrent ffmpeg processes.
@@ -95,22 +99,51 @@ function releaseStreamSlot(mixed &$fp): void {
 }
 
 /**
+ * Chemin du verrou UHD, résolu à l'appel : functions.php est chargé par
+ * l'autoload composer avant le bootstrap PHPUnit, une constante figée ici
+ * ferait taper les tests dans les verrous de production.
+ * Vit dans data/ (0770 www-data) et non /tmp : sur cette machine partagée,
+ * n'importe lequel des comptes locaux pourrait pré-créer le fichier dans /tmp
+ * et rendre le verrou inouvrable donc inopérant.
+ */
+function uhdLockPath(): string {
+    return defined('UHD_LOCK_PATH') ? UHD_LOCK_PATH : __DIR__ . '/data/stream_uhd.lock';
+}
+
+/**
  * Identifie le spectateur qui tient le verrou UHD. Le player relance un
  * transcode à chaque seek ou changement de piste : sans cette identité, un
  * spectateur se ferait refuser son propre flux une seconde après l'avoir lancé.
  */
-/**
- * Chemin du verrou UHD, résolu à l'appel : functions.php est chargé par
- * l'autoload composer avant le bootstrap PHPUnit, une constante figée ici
- * ferait taper les tests dans les verrous de production.
- */
-function uhdLockPath(): string {
-    return defined('UHD_LOCK_PATH') ? UHD_LOCK_PATH : '/tmp/sharebox_stream_uhd.lock';
-}
-
 function uhdHolderId(): string {
     $user = $_SESSION['sharebox_user'] ?? '';
     return $user !== '' ? 'u:' . $user : 'ip:' . ($_SERVER['REMOTE_ADDR'] ?? '?');
+}
+
+/**
+ * Extrait l'identité du titulaire du contenu brut du verrou, qui porte
+ * « titulaire|pid|démarrage » depuis que la reprise HLS a besoin du pid.
+ */
+function uhdSlotHolder(string $raw): string {
+    return explode('|', trim($raw), 3)[0];
+}
+
+/**
+ * Date de démarrage d'un processus (champ 22 de /proc/pid/stat, en tics depuis
+ * le boot). Couplée au pid, elle identifie un processus de façon non ambiguë :
+ * l'espace de pid de cette machine se recycle en quelques jours, et un pid seul
+ * pourrait désigner le rtorrent ou le ffmpeg d'un autre utilisateur.
+ * @return string|null null si le processus n'existe pas ou n'est pas lisible
+ */
+function procStartTime(int $pid): ?string {
+    if ($pid <= 0) return null;
+    $stat = @file_get_contents('/proc/' . $pid . '/stat');
+    if ($stat === false) return null;
+    // Le nom de commande (champ 2) peut contenir des espaces et des parenthèses :
+    // on repart de la DERNIÈRE parenthèse fermante, comme le fait procps.
+    $tail = substr($stat, (int)strrpos($stat, ')') + 2);
+    $fields = explode(' ', $tail);
+    return $fields[19] ?? null;   // champ 22 du fichier = index 19 après le nom
 }
 
 /**
@@ -118,8 +151,8 @@ function uhdHolderId(): string {
  * transcodes 2160p concurrents passant tous les deux sous le temps réel.
  * Le flock sert de mutex : le noyau le relâche même si PHP meurt brutalement.
  * Le fichier porte l'identité du titulaire, pour que ses propres relances
- * (seek, changement de piste) attendent son flux précédent au lieu d'être
- * refusées. Se libère avec releaseStreamSlot().
+ * (seek, changement de piste) reprennent le créneau au lieu d'être refusées.
+ * Se libère avec releaseStreamSlot().
  * @param string $holder Identité renvoyée par uhdHolderId()
  * @return resource|null Pointeur à garder ouvert, ou null si un AUTRE spectateur transcode de l'UHD
  */
@@ -134,22 +167,43 @@ function acquireUHDSlot(string $holder): mixed {
     }
 
     if (!flock($fp, LOCK_EX | LOCK_NB)) {
-        if (trim((string)@file_get_contents($path)) !== $holder) {
+        $state = explode('|', trim((string)@file_get_contents($path)), 3);
+        if ($state[0] !== $holder) {
             fclose($fp);
             return null;
         }
+        // Notre propre flux précédent. Sur le chemin HLS, ffmpeg est détaché et
+        // survit à la requête : sans le tuer, un simple seek se ferait refuser son
+        // propre créneau. Le pid est celui que stream_hls a enregistré ici.
+        $prevPid = (int)($state[1] ?? 0);
+        $prevStart = $state[2] ?? '';
+        // Vérifier la date de démarrage avant de tuer : un pid relu d'un fichier
+        // peut avoir été recyclé et désigner le processus d'un autre utilisateur.
+        $killed = false;
+        if ($prevPid > 0 && $prevStart !== '' && procStartTime($prevPid) === $prevStart) {
+            stream_log('UHD reprise | on tue le flux precedent du meme titulaire | pid=' . $prevPid);
+            @posix_kill(-$prevPid, SIGTERM);
+            @posix_kill($prevPid, SIGTERM);
+            $killed = true;
+        }
         // Notre propre flux précédent se termine : lui laisser rendre le verrou.
         $got = false;
-        $deadline = microtime(true) + UHD_TAKEOVER_WAIT;
+        $wait = defined('UHD_TAKEOVER_WAIT') ? (float)UHD_TAKEOVER_WAIT : 3.0;
+        // Après un kill, on SAIT que le détenteur s'en va : lui laisser le temps de
+        // mourir plutôt que de refuser sur une attente calibrée pour l'autre cas.
+        $deadline = microtime(true) + ($killed ? max($wait, UHD_KILL_GRACE) : $wait);
         while (microtime(true) < $deadline) {
             usleep(100000);
             if (flock($fp, LOCK_EX | LOCK_NB)) { $got = true; break; }
         }
-        // Toujours occupé par notre flux précédent : passer outre plutôt que
-        // refuser le spectateur qui tient déjà le créneau. Chevauchement bref
-        // et auto-limité — un navigateur ne lit qu'un flux à la fois.
+        // Le flux précédent tient encore après l'attente : refuser. Laisser
+        // passer permettrait à un même appelant de lancer autant de décodages
+        // 2160p concurrents qu'il ouvre de requêtes — exactement ce que ce
+        // verrou empêche. Un vrai reseek libère bien avant la fin de l'attente.
         if (!$got) {
-            stream_log('UHD takeover sans verrou | ' . $holder);
+            stream_log('UHD refus | flux precedent encore actif | ' . $holder);
+            fclose($fp);
+            return null;
         }
     }
 
@@ -161,13 +215,38 @@ function acquireUHDSlot(string $holder): mixed {
 }
 
 /**
+ * Note le pid du ffmpeg détaché qui va tenir le verrou, pour qu'une reprise par le
+ * même spectateur puisse l'interrompre au lieu de se refuser elle-même.
+ * @param resource $fp Pointeur renvoyé par acquireUHDSlot()
+ */
+function uhdSlotRecordPid(mixed $fp, string $holder, int $pid): void {
+    if (!is_resource($fp) || $pid <= 0) return;
+    $start = procStartTime($pid);
+    if ($start === null) return;   // déjà mort : rien à noter
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, $holder . '|' . $pid . '|' . $start);
+    fflush($fp);
+}
+
+/**
+ * Chemin d'un slot de sonde. Dans data/ (0770 www-data) et non /tmp : la
+ * détection UHD s'appuie dessus, et dans un /tmp partagé n'importe quel compte
+ * local pourrait pré-créer les fichiers pour la mettre hors service.
+ */
+function probeSlotPath(int $i): string {
+    return defined('PROBE_SLOT_DIR') ? PROBE_SLOT_DIR . "/sharebox_probe_slot_{$i}.lock"
+                                     : __DIR__ . "/data/probe_slot_{$i}.lock";
+}
+
+/**
  * Acquire a probe slot (non-blocking, max 5 concurrent ffprobe processes).
  * Returns file pointer or null if all slots busy → caller should return 429.
  * @return resource|null
  */
 function acquireProbeSlot(): mixed {
     for ($i = 1; $i <= PROBE_MAX_CONCURRENT; $i++) {
-        $fp = fopen("/tmp/sharebox_probe_slot_{$i}.lock", 'w');
+        $fp = @fopen(probeSlotPath($i), 'w');
         if ($fp !== false && flock($fp, LOCK_EX | LOCK_NB)) return $fp;
         if ($fp !== false) fclose($fp);
     }
@@ -984,9 +1063,81 @@ function uhdSlotBusy(string $holder): bool {
         fclose($fp);
         return false;
     }
-    $busy = trim((string)@file_get_contents($path)) !== $holder;
+    $busy = uhdSlotHolder((string)@file_get_contents($path)) !== $holder;
     fclose($fp);
     return $busy;
+}
+
+/**
+ * Hauteur vidéo de la source, sondée à la volée si le cache ffprobe est vide.
+ * @param bool $allowProbe false sur les chemins non authentifiés bon marché, pour
+ *                         qu'une rafale de requêtes ne déclenche pas autant d'ffprobe
+ * @return int|null null si la hauteur reste indéterminable
+ */
+function sourceVideoHeight(PDO $db, string $path, bool $allowProbe = true): ?int {
+    $mtime = @filemtime($path) ?: 0;
+
+    // Lecture sensible au mtime, comme handlers/probe.php : un fichier remplacé au
+    // même chemin par une version plus lourde garderait sinon son ancienne hauteur.
+    // probe_cache_data() ignore le mtime, on ne s'en sert pas ici.
+    foreach ([
+        ['SELECT result FROM probe_cache WHERE path = :p AND mtime = :m', 'json'],
+        ['SELECT height FROM video_height_cache WHERE path = :p AND mtime = :m', 'int'],
+    ] as [$sql, $kind]) {
+        try {
+            $stmt = $db->prepare($sql);
+            $stmt->execute([':p' => $path, ':m' => $mtime]);
+            $row = $stmt->fetch(PDO::FETCH_NUM);
+            if ($row === false) {
+                continue;
+            }
+            if ($kind === 'int') {
+                return (int)$row[0];
+            }
+            $decoded = json_decode((string)$row[0], true);
+            if (is_array($decoded)) {
+                return (int)($decoded['videoHeight'] ?? 0);
+            }
+        } catch (PDOException $e) { /* cache illisible : on sonde */ }
+    }
+
+    if (!$allowProbe) {
+        return null;
+    }
+
+    // Cache vide : la quasi-totalité de la bibliothèque n'a jamais été sondée,
+    // et sans hauteur un fichier 2160p passerait pour du SD. ffprobe ne lit que
+    // l'en-tête du conteneur ici, mais on reste derrière le sémaphore de sonde
+    // pour qu'une rafale de requêtes ne parte pas en fork-bomb ffprobe.
+    $slot = null;
+    $deadline = microtime(true) + PROBE_WAIT;
+    do {
+        $slot = acquireProbeSlot();
+        if ($slot !== null) {
+            break;
+        }
+        usleep(100000);
+    } while (microtime(true) < $deadline);
+    if ($slot === null) {
+        return null;
+    }
+    // `timeout` comme partout ailleurs dans le projet : sans borne, un fichier
+    // illisible (FIFO, montage lent, conteneur corrompu) bloque le worker PHP
+    // et retient un des cinq slots de sonde indéfiniment.
+    $out = @shell_exec('timeout ' . PROBE_TIMEOUT . ' ffprobe -v error -select_streams v:0'
+        . ' -show_entries stream=height -of csv=p=0 ' . escapeshellarg($path) . ' 2>/dev/null');
+    releaseProbeSlot($slot);
+    $h = (int)trim((string)$out);
+    if ($h <= 0) {
+        return null;
+    }
+    // Mémoriser : sans ça chaque requête sur un fichier non indexé relance un
+    // ffprobe, et l'endpoint de streaming est atteignable avec un simple lien.
+    try {
+        $db->prepare('INSERT OR REPLACE INTO video_height_cache (path, mtime, height) VALUES (:p, :m, :h)')
+           ->execute([':p' => $path, ':m' => $mtime, ':h' => $h]);
+    } catch (PDOException $e) { /* cache en écriture seule optionnel */ }
+    return $h;
 }
 
 /**
@@ -994,11 +1145,14 @@ function uhdSlotBusy(string $holder): bool {
  * coût du transcode.
  * @param PDO $db Database connection
  * @param string $path Chemin absolu (realpath) du fichier
- * @return bool True si la hauteur source atteint STREAM_UHD_MIN_HEIGHT
+ * @return bool True si la hauteur atteint STREAM_UHD_MIN_HEIGHT, ou si elle reste indéterminable
  */
-function isUHDFile(PDO $db, string $path): bool {
-    $data = probe_cache_data($db, $path);
-    return (int)($data['videoHeight'] ?? 0) >= STREAM_UHD_MIN_HEIGHT;
+function isUHDFile(PDO $db, string $path, bool $allowProbe = true): bool {
+    $h = sourceVideoHeight($db, $path, $allowProbe);
+    // Hauteur indéterminable (cache vide ET sonde indisponible) : compter le
+    // fichier comme lourd. Le contraire ferait tomber le verrou en fail-open
+    // dès que les slots de sonde sont saturés ou squattés.
+    return $h === null ? true : $h >= STREAM_UHD_MIN_HEIGHT;
 }
 
 /**
@@ -1148,6 +1302,24 @@ function get_folder_type(PDO $db, string $path): string {
     $stmt->execute([':p' => $path]);
     $row = $stmt->fetch();
     return ($row && $row['folder_type']) ? $row['folder_type'] : 'series';
+}
+
+/**
+ * Assemble la commande de ménage lancée en fond après le démarrage d'un flux HLS.
+ * Le watchdog reste HORS des enveloppes flock : ffmpeg hérite les descripteurs au
+ * lancement et tient les verrous jusqu'à sa mort, donc un `flock -x` placé devant
+ * n'obtiendrait la main qu'une fois ffmpeg fini — le watchdog ne pourrait jamais
+ * tuer le flux abandonné qu'il vise.
+ * @param string $watchdog Boucle qui tue ffmpeg après inactivité
+ * @param string $reclaim  Attente finale puis suppression du cache de segments
+ * @param string $slotPath Verrou de slot à retenir, ou '' si aucun
+ */
+function buildHlsCleanupCmd(string $watchdog, string $reclaim, string $slotPath): string
+{
+    $inner = $slotPath !== ''
+        ? '(flock -x 9; ' . $reclaim . ') 9>' . escapeshellarg($slotPath)
+        : $reclaim;
+    return '(' . $watchdog . $inner . ') >/dev/null 2>&1 &';
 }
 
 /**
