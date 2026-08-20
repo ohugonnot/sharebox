@@ -341,6 +341,35 @@ class UhdSlotTest extends TestCase
         }
     }
 
+    /**
+     * Un verrou dont le champ pid vaut 1 ne doit JAMAIS déclencher le kill :
+     * posix_kill(-1, …) diffuse le signal à tous les processus signalables, ce
+     * qui coucherait le serveur web entier. Idem pour le pid du process courant.
+     */
+    public function testNeverKillsPidOneNorItself(): void
+    {
+        // En root, un plancher retire (mutation testing) transforme posix_kill(-1) en
+        // diffusion SIGTERM a toute la machine : ce test a deja couche le serveur.
+        if (posix_geteuid() === 0) {
+            $this->markTestSkipped('suite lancee en root : ce test peut signaler tous les process');
+        }
+        foreach ([1, getmypid()] as $dangerous) {
+            @unlink(uhdLockPath());
+            file_put_contents(uhdLockPath(), 'u:alice|' . $dangerous . '|' . procStartTime($dangerous));
+            $blocker = fopen(uhdLockPath(), 'c+');
+            $this->assertTrue(flock($blocker, LOCK_EX | LOCK_NB));
+            try {
+                // Le verrou est tenu et l'identité correspond : sans le plancher, le
+                // code tuerait ce pid. Il doit refuser plutôt que de signaler.
+                $this->assertNull(acquireUHDSlot('u:alice'), "pid $dangerous ne doit pas être ciblé");
+                $this->assertTrue(posix_kill(getmypid(), 0), 'le process de test doit être intact');
+            } finally {
+                flock($blocker, LOCK_UN);
+                fclose($blocker);
+            }
+        }
+    }
+
     public function testProcStartTimeIdentifiesAProcess(): void
     {
         $this->assertNull(procStartTime(0));
