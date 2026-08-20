@@ -59,6 +59,10 @@ defined('FFMPEG_HDR_CRF')          || define('FFMPEG_HDR_CRF', 22);         // a
 // sous le temps réel — d'où le verrou dédié dans acquireUHDSlot().
 defined('STREAM_UHD_MIN_HEIGHT')   || define('STREAM_UHD_MIN_HEIGHT', 1440);
 
+// Debian ne compile pcntl que dans le SAPI CLI : sous FPM la constante SIGTERM
+// n'existe pas, et les posix_kill() de fin de flux mouraient en Fatal error.
+defined('SIGTERM')                 || define('SIGTERM', 15);
+
 /**
  * Acquire a stream slot using flock — limits concurrent ffmpeg processes.
  * Tries non-blocking first, falls back to blocking wait on slot 1.
@@ -180,7 +184,10 @@ function acquireUHDSlot(string $holder): mixed {
         // Vérifier la date de démarrage avant de tuer : un pid relu d'un fichier
         // peut avoir été recyclé et désigner le processus d'un autre utilisateur.
         $killed = false;
-        if ($prevPid > 0 && $prevStart !== '' && procStartTime($prevPid) === $prevStart) {
+        // Plancher à 1 exclu : posix_kill(-1, …) n'est PAS un kill de groupe mais une
+        // diffusion à tous les processus signalables. Et ne jamais se tuer soi-même.
+        if ($prevPid > 1 && $prevPid !== getmypid()
+            && $prevStart !== '' && procStartTime($prevPid) === $prevStart) {
             stream_log('UHD reprise | on tue le flux precedent du meme titulaire | pid=' . $prevPid);
             @posix_kill(-$prevPid, SIGTERM);
             @posix_kill($prevPid, SIGTERM);
