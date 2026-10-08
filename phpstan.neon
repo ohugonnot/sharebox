@@ -13,6 +13,7 @@ parameters:
         - cron/
         - handlers/
         - functions.php
+        - media_kinds.php
         - ctrl.php
         - db.php
         - auth.php
