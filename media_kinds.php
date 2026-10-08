@@ -18,19 +18,37 @@ function media_ext(string $name): string {
  *
  * @param string[] $names
  */
-function folder_media_kind(array $names): ?string {
-    $audio = 0;
-    $books = 0;
+function folder_media_kind(array $names, bool $epub = READER_EPUB_ENABLED): ?string {
     foreach ($names as $name) {
-        $ext = media_ext($name);
         // A single video means a film or series folder: the video player owns it.
-        if (in_array($ext, MEDIA_VIDEO_EXTS, true)) return null;
-        if (in_array($ext, MEDIA_AUDIO_EXTS, true)) $audio++;
-        elseif (in_array($ext, MEDIA_BOOK_EXTS, true)) $books++;
+        if (in_array(media_ext($name), MEDIA_VIDEO_EXTS, true)) return null;
     }
+    $audio = count(audio_names($names));
+    // Only books the reader can open: unreadable epubs must not outvote the tracks.
+    $books = count(readable_book_names($names, $epub));
     if ($audio >= 2 && $audio >= $books) return 'audiobook';
     if ($books >= 1) return 'library';
     return null;
+}
+
+/**
+ * @param string[] $names
+ * @return string[]
+ */
+function audio_names(array $names): array {
+    $audio = array_values(array_filter($names, fn($n) => in_array(media_ext($n), MEDIA_AUDIO_EXTS, true)));
+    usort($audio, 'strnatcasecmp');
+    return $audio;
+}
+
+/**
+ * @param string[] $names
+ * @return string[]
+ */
+function readable_book_names(array $names, bool $epub = READER_EPUB_ENABLED): array {
+    $books = array_values(array_filter($names, fn($n) => book_readable($n, $epub)));
+    usort($books, 'strnatcasecmp');
+    return $books;
 }
 
 /**
@@ -103,12 +121,12 @@ function media_page_common(array $names, string $token, string $subPath): array 
 function reader_page_data(array $files, string $token, string $subPath, ?string $book, bool $epub = false): array {
     $books = [];
     foreach ($files as $f) {
-        $kind = reader_kind($f['name']);
-        if ($kind === null || ($kind === 'epub' && !$epub)) continue;
+        // Same rule as readable_book_names(), which the listing counts with.
+        if (!book_readable($f['name'], $epub)) continue;
         $books[] = [
             'name' => $f['name'],
             'url' => share_entry_url($token, $subPath, $f['name'], 'inline'),
-            'kind' => $kind,
+            'kind' => (string)reader_kind($f['name']),
             'size' => max(0, (int)$f['size']),
             'mtime' => (int)$f['mtime'],
         ];
@@ -126,9 +144,7 @@ function reader_page_data(array $files, string $token, string $subPath, ?string 
  * @return array{tracks:list<array{name:string,url:string}>, cover:?string, backUrl:string, storageToken:string}
  */
 function audiobook_page_data(array $names, string $token, string $subPath): array {
-    $audio = array_values(array_filter($names, fn($n) => in_array(media_ext($n), MEDIA_AUDIO_EXTS, true)));
-    usort($audio, 'strnatcasecmp');
-    $tracks = array_map(fn($n) => ['name' => $n, 'url' => share_entry_url($token, $subPath, $n, 'stream')], $audio);
+    $tracks = array_map(fn($n) => ['name' => $n, 'url' => share_entry_url($token, $subPath, $n, 'stream')], audio_names($names));
     return ['tracks' => $tracks] + media_page_common($names, $token, $subPath);
 }
 
@@ -148,12 +164,15 @@ function book_readable(string $name, bool $epub = READER_EPUB_ENABLED): bool {
 /**
  * Boutons du listing : « Lire » sur les lignes de livres, et un raccourci de barre d'outils
  *
+ * @param string[] $names
  * @return array{rowRead:bool, toolbar:?array{param:string, label:string}}
  */
-function listing_actions(?string $kind, int $nBooks, int $nTracks): array {
+function listing_actions(array $names, bool $epub = READER_EPUB_ENABLED): array {
+    $kind = folder_media_kind($names, $epub);
+    $nBooks = count(readable_book_names($names, $epub));
     $toolbar = null;
     if ($kind === 'audiobook') {
-        $toolbar = ['param' => 'listen', 'label' => 'Écouter · ' . $nTracks . ' pistes'];
+        $toolbar = ['param' => 'listen', 'label' => 'Écouter · ' . count(audio_names($names)) . ' pistes'];
     } elseif ($kind === 'library' && $nBooks >= 2) {
         $toolbar = ['param' => 'read', 'label' => 'Bibliothèque · ' . $nBooks . ' livres'];
     }

@@ -698,10 +698,7 @@ HTML;
         echo '<span class="toolbar-info">' . $itemsLabel . '</span>';
 
         // Liseuse / lecteur audio : déduits des noms déjà listés, sans I/O de plus
-        $fileNames = array_column($files, 'name');
-        $listingActions = listing_actions(folder_media_kind($fileNames),
-            count(array_filter($fileNames, 'book_readable')),
-            count(array_filter($fileNames, fn($n) => in_array(media_ext($n), MEDIA_AUDIO_EXTS, true))));
+        $listingActions = listing_actions(array_column($files, 'name'));
         if ($listingActions['toolbar'] !== null) {
             $mediaUrl = $baseUrl . '?' . ($subPath ? 'p=' . rawurlencode($subPath) . '&' : '') . $listingActions['toolbar']['param'] . '=1';
             echo '<a class="btn-zip btn-media" style="background:transparent;border:1px solid var(--accent);color:var(--accent)" href="' . htmlspecialchars($mediaUrl) . '">' . $listingActions['toolbar']['label'] . '</a>';

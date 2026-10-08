@@ -10,7 +10,29 @@ class MediaKindsTest extends TestCase
      */
     public function testFolderMediaKind(array $names, ?string $expected): void
     {
-        $this->assertSame($expected, folder_media_kind($names));
+        $this->assertSame($expected, folder_media_kind($names, true));
+    }
+
+    public function testEpubCountsOnlyWhenTheReaderCanOpenIt(): void
+    {
+        // Regression: 3 unreadable epubs outvoted 2 tracks, and the folder got no button at all.
+        $names = ['a.mp3', 'b.mp3', 'x.epub', 'y.epub', 'z.epub'];
+        $this->assertSame('audiobook', folder_media_kind($names, false));
+        $this->assertSame('library', folder_media_kind($names, true));
+        $this->assertNull(folder_media_kind(['a.epub'], false));
+        $this->assertSame('library', folder_media_kind(['a.epub', 'b.pdf'], false));
+    }
+
+    public function testAudioNamesAreNaturallySorted(): void
+    {
+        $this->assertSame(['1.mp3', '2.M4B', '10.flac'], audio_names(['10.flac', 'cover.jpg', '2.M4B', 'a.pdf', '1.mp3', 'clip.mp4']));
+    }
+
+    public function testReadableBookNamesFollowTheEpubFlag(): void
+    {
+        $names = ['b.epub', 'a.PDF', 'c.mp3', 'd.pdf.txt'];
+        $this->assertSame(['a.PDF'], readable_book_names($names, false));
+        $this->assertSame(['a.PDF', 'b.epub'], readable_book_names($names, true));
     }
 
     /** @return string[] */
@@ -133,7 +155,7 @@ class MediaKindsTest extends TestCase
             symlink("$dir/x.mp3", "$dir/z.mp3");
             $names = media_page_names($dir);
             $this->assertSame(['01.mp3', '02.mp3'], $names);
-            $this->assertSame('audiobook', folder_media_kind($names));
+            $this->assertSame('audiobook', folder_media_kind($names, false));
         } finally {
             shell_exec('rm -rf -- ' . escapeshellarg($dir));
         }
