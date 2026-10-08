@@ -121,6 +121,24 @@ class MediaKindsTest extends TestCase
         ];
     }
 
+    public function testMediaPageNamesSkipFolders(): void
+    {
+        require_once __DIR__ . '/../views/media_layout.php';
+        $dir = sys_get_temp_dir() . '/sb_names_' . bin2hex(random_bytes(6));
+        mkdir($dir);
+        try {
+            foreach (['01.mp3', '02.mp3', '.hidden.mp3'] as $f) touch("$dir/$f");
+            mkdir("$dir/x.mp3");
+            mkdir("$dir/y.pdf");
+            symlink("$dir/x.mp3", "$dir/z.mp3");
+            $names = media_page_names($dir);
+            $this->assertSame(['01.mp3', '02.mp3'], $names);
+            $this->assertSame('audiobook', folder_media_kind($names));
+        } finally {
+            shell_exec('rm -rf -- ' . escapeshellarg($dir));
+        }
+    }
+
     public function testPdfIsNotAStreamMime(): void
     {
         // get_media_type() would then call a PDF "audio" and open the video player.
