@@ -519,6 +519,7 @@ test.describe('mobile portrait', () => {
       await fits(page, page.locator('.toolbar'));
       for (const el of await page.locator('.toolbar > *:visible').all()) await fits(page, el);
       await big(link, `${folder} toolbar button`);
+      expect((await link.boundingBox())!.height, `${folder} toolbar button height`).toBeGreaterThanOrEqual(44);
       await shot(page, `${folder}-listing-mobile`);
     }
   });
