@@ -26,7 +26,7 @@ function folder_media_kind(array $names): ?string {
         elseif (in_array($ext, MEDIA_BOOK_EXTS, true)) $books++;
     }
     if ($audio >= 2 && $audio >= $books) return 'audiobook';
-    if ($books >= 1 && $audio < 2) return 'library';
+    if ($books >= 1) return 'library';
     return null;
 }
 
