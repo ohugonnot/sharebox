@@ -39,6 +39,10 @@ class MediaKindsTest extends TestCase
             '12 pistes + livret pdf' => [array_merge(self::numbered(12, 'mp3'), ['livret.pdf']), 'audiobook'],
             'égalité 2 pistes 2 pdf' => [['a.mp3', 'b.mp3', 'a.pdf', 'b.pdf'], 'audiobook'],
             '1 piste + 1 pdf' => [['a.mp3', 'a.pdf'], 'library'],
+            // Regression: more books than tracks used to fall through to null.
+            '2 pistes + 3 pdf' => [['a.mp3', 'b.mp3', 'a.pdf', 'b.pdf', 'c.pdf'], 'library'],
+            '3 pistes + 3 pdf' => [['a.mp3', 'b.mp3', 'c.mp3', 'a.pdf', 'b.pdf', 'c.pdf'], 'audiobook'],
+            '1 piste seule' => [['01.mp3'], null],
             'un pdf' => [['a.pdf'], 'library'],
             'un epub' => [['a.epub'], 'library'],
             'pdf + epub + cover' => [['a.pdf', 'b.epub', 'cover.jpg'], 'library'],
