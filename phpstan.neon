@@ -14,6 +14,7 @@ parameters:
         - handlers/
         - functions.php
         - media_kinds.php
+        - views/
         - ctrl.php
         - db.php
         - auth.php

@@ -4,7 +4,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Runs the real download.php router behind php -S: ?inline=1 serves PDFs and covers to the
- * reader (Range, no compression), and nothing outside a short list of types.
+ * reader (Range, no compression), and nothing outside a short list of types; the reader and
+ * audiobook pages carry their own CSP.
  */
 class InlineServeHttpTest extends TestCase
 {
@@ -28,6 +29,8 @@ class InlineServeHttpTest extends TestCase
         file_put_contents("$dir/cover.jpg", "\xFF\xD8\xFFfake jpeg");
         file_put_contents("$dir/page.html", '<script>alert(1)</script>');
         file_put_contents("$dir/song.mp3", 'ID3 fake');
+        mkdir(self::$work . '/share/Audio');
+        foreach (['02.mp3', '01.mp3', 'folder.jpg'] as $f) file_put_contents(self::$work . "/share/Audio/$f", 'x');
         file_put_contents("$dir/probe.pdf", self::$content);
 
         $db = self::$work . '/db.sqlite';
@@ -208,5 +211,46 @@ class InlineServeHttpTest extends TestCase
         $this->assertSame(200, $r['code']);
         $this->assertSame('application/octet-stream', $r['headers']['content-type'] ?? null);
         $this->assertStringStartsWith('attachment', $r['headers']['content-disposition'] ?? '');
+    }
+
+    private const CSP = "default-src 'self'; script-src 'self'; worker-src 'self'; style-src 'self' 'unsafe-inline'; "
+        . "img-src 'self' data: blob:; media-src 'self'; connect-src 'self'; font-src 'self'; "
+        . "frame-src 'none'; object-src 'none'; base-uri 'none'";
+
+    public function testReaderPageHasCspAndBooks(): void
+    {
+        $r = self::request('GET', 'p=Livres&read=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertSame(self::CSP, $r['headers']['content-security-policy'] ?? null);
+        $this->assertStringContainsString('id="sb-reader-data"', $r['body']);
+        $this->assertStringContainsString('Livres%2Fbook.pdf\u0026inline=1', $r['body']);
+        $this->assertStringContainsString('"open":null', $r['body']);
+        $this->assertStringNotContainsString('fonts.googleapis', $r['body']);
+    }
+
+    public function testPlayOnABookOpensTheReaderOnIt(): void
+    {
+        $r = self::request('GET', 'p=Livres/book.pdf&play=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertSame(self::CSP, $r['headers']['content-security-policy'] ?? null);
+        $this->assertStringContainsString('"open":"book.pdf"', $r['body']);
+        $this->assertStringContainsString('"storageToken":"sb:inlinetest:Livres"', $r['body']);
+    }
+
+    public function testAudiobookPageHasCspAndTracks(): void
+    {
+        $r = self::request('GET', 'p=Audio&listen=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertSame(self::CSP, $r['headers']['content-security-policy'] ?? null);
+        $this->assertMatchesRegularExpression('#01\.mp3.*02\.mp3#s', $r['body']);
+        $this->assertStringContainsString('id="asc-audiobook-data"', $r['body']);
+        $this->assertStringContainsString('class="ab-cover" src="/dl/inlinetest?p=Audio%2Ffolder.jpg&amp;inline=1"', $r['body']);
+    }
+
+    public function testListingKeepsNoCsp(): void
+    {
+        $r = self::request('GET', 'p=Livres');
+        $this->assertSame(200, $r['code']);
+        $this->assertArrayNotHasKey('content-security-policy', $r['headers']);
     }
 }

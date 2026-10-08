@@ -51,6 +51,10 @@ export default [
         rules: { 'no-unused-vars': 'off' }
     },
     {
+        files: ['reader-boot.js'],
+        languageOptions: { globals: { AscReader: 'readonly' } }
+    },
+    {
         files: ['tests/unit/**/*.js'],
         languageOptions: {
             sourceType: 'commonjs',

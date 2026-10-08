@@ -157,7 +157,7 @@ if (!is_path_within($resolvedPath, $basePath)) {
     exit;
 }
 
-// Liseuse et lecteur audio : fichiers en inline (liste blanche)
+// Liseuse et lecteur audio : fichiers en inline (liste blanche) et pages dédiées
 if (($_GET['inline'] ?? '') === '1' && is_file($resolvedPath)) {
     $inlineMime = inline_mime($resolvedPath);
     if ($inlineMime === null) {
@@ -168,6 +168,17 @@ if (($_GET['inline'] ?? '') === '1' && is_file($resolvedPath)) {
     // A compressing proxy drops Content-Length, and pdf.js then fetches the whole file.
     header('Cache-Control: no-transform');
     serve_file($resolvedPath, $inlineMime, 'inline; filename="' . addcslashes(preg_replace('/[\r\n\0]/', '', basename($resolvedPath)), '"\\') . '"');
+}
+$mediaPage = match (true) {
+    is_dir($resolvedPath) && ($_GET['read'] ?? '') === '1' => 'reader_page',
+    is_dir($resolvedPath) && ($_GET['listen'] ?? '') === '1' => 'audiobook_page',
+    // The play link of a book row opens the reader on that book.
+    is_file($resolvedPath) && ($_GET['play'] ?? '') === '1' && reader_kind($resolvedPath) !== null => 'reader_page',
+    default => null,
+};
+if ($mediaPage !== null) {
+    require __DIR__ . '/views/' . $mediaPage . '.php';
+    exit;
 }
 
 // Si c'est un fichier
