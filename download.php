@@ -157,6 +157,19 @@ if (!is_path_within($resolvedPath, $basePath)) {
     exit;
 }
 
+// Liseuse et lecteur audio : fichiers en inline (liste blanche)
+if (($_GET['inline'] ?? '') === '1' && is_file($resolvedPath)) {
+    $inlineMime = inline_mime($resolvedPath);
+    if ($inlineMime === null) {
+        http_response_code(404);
+        afficher_erreur('Introuvable', 'Ce fichier ne peut pas être affiché ici.');
+        exit;
+    }
+    // A compressing proxy drops Content-Length, and pdf.js then fetches the whole file.
+    header('Cache-Control: no-transform');
+    serve_file($resolvedPath, $inlineMime, 'inline; filename="' . addcslashes(preg_replace('/[\r\n\0]/', '', basename($resolvedPath)), '"\\') . '"');
+}
+
 // Si c'est un fichier
 if (is_file($resolvedPath)) {
     // Mode lecture : page avec player video/audio

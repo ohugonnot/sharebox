@@ -94,4 +94,37 @@ class MediaKindsTest extends TestCase
             'nom pdf sans extension' => ['pdf', null],
         ];
     }
+
+    /**
+     * @dataProvider inlineMimeProvider
+     */
+    public function testInlineMimeWhitelist(string $name, ?string $expected): void
+    {
+        $this->assertSame($expected, inline_mime($name));
+    }
+
+    public static function inlineMimeProvider(): array
+    {
+        return [
+            'pdf' => ['a.PDF', 'application/pdf'],
+            'epub' => ['a.epub', 'application/epub+zip'],
+            'jpg' => ['a.jpg', 'image/jpeg'],
+            'jpeg' => ['a.jpeg', 'image/jpeg'],
+            'png' => ['a.png', 'image/png'],
+            'webp' => ['a.webp', 'image/webp'],
+            'gif' => ['a.gif', 'image/gif'],
+            'html' => ['a.html', null],
+            'svg' => ['a.svg', null],
+            'mp3' => ['a.mp3', null],
+            'double extension' => ['a.pdf.php', null],
+            'no extension' => ['pdf', null],
+        ];
+    }
+
+    public function testPdfIsNotAStreamMime(): void
+    {
+        // get_media_type() would then call a PDF "audio" and open the video player.
+        $this->assertNull(get_stream_mime('pdf'));
+        $this->assertNull(get_media_type('a.pdf'));
+    }
 }
