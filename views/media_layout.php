@@ -74,16 +74,26 @@ function media_page_close(array $js): void {
 /**
  * Folder to show: the one asked for, or the parent of an opened book; null when that parent is
  * not shared (a file link): the page must then show the shared file alone.
+ * The sub-path is rebuilt from the real folder, so 'a/..' gets the same title and resume key as ''.
  *
- * @return array{0:?string, 1:string} [real path, sub-path in the share]
+ * @return array{0:?string, 1:string, 2:?string} [real path, sub-path in the share, opened book]
  */
 function media_page_folder(string $resolvedPath, string $subPath, string $basePath): array {
-    $subPath = trim($subPath, '/');
-    if (!is_file($resolvedPath)) return [$resolvedPath, $subPath];
+    if (!is_file($resolvedPath)) return [$resolvedPath, media_rel_path($resolvedPath, $basePath), null];
     // A symlinked book: list the folder of the link, the one the URLs are built on.
-    $dir = realpath(dirname($basePath . '/' . $subPath));
-    if (!is_path_within($dir, $basePath)) $dir = dirname($resolvedPath);
-    return [is_path_within($dir, $basePath) ? $dir : null, str_contains($subPath, '/') ? dirname($subPath) : ''];
+    $dir = realpath(dirname($basePath . '/' . trim($subPath, '/')));
+    if (is_path_within($dir, $basePath)) return [$dir, media_rel_path($dir, $basePath), basename($subPath)];
+    $dir = dirname($resolvedPath);
+    if (is_path_within($dir, $basePath)) return [$dir, media_rel_path($dir, $basePath), basename($resolvedPath)];
+    return [null, '', basename($resolvedPath)];
+}
+
+function media_rel_path(string $realPath, string $basePath): string {
+    foreach (array_unique([rtrim($basePath, '/'), (string)realpath($basePath)]) as $base) {
+        if ($realPath === $base) return '';
+        if ($base !== '' && str_starts_with($realPath, $base . '/')) return substr($realPath, strlen($base) + 1);
+    }
+    return '';
 }
 
 /**
