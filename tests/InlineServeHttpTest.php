@@ -426,6 +426,25 @@ class InlineServeHttpTest extends TestCase
         $this->assertSame($before, self::counted('inlinetest'));
     }
 
+    /** @dataProvider dotDotProvider */
+    public function testTitleAndResumeKeyUseTheCanonicalPath(string $query, string $title, string $key): void
+    {
+        $r = self::request('GET', $query);
+        $this->assertSame(200, $r['code']);
+        $this->assertStringContainsString('<h1 class="mp-title">' . $title . '</h1>', $r['body']);
+        $this->assertMatchesRegularExpression('#"storageToken":"' . preg_quote($key, '#') . '"|data-token="' . preg_quote($key, '#') . '"#', $r['body']);
+    }
+
+    public static function dotDotProvider(): array
+    {
+        return [
+            'read' => ['p=Audio/../Livres&read=1', 'Livres', 'sb:inlinetest:Livres'],
+            'read root' => ['p=Audio/..&read=1', 'Partage', 'sb:inlinetest:'],
+            'play' => ['p=Audio/../Livres/book.pdf&play=1', 'Livres', 'sb:inlinetest:Livres'],
+            'listen' => ['p=Livres/../Audio&listen=1', 'Audio', 'sb:inlinetest:Audio'],
+        ];
+    }
+
     public function testListingKeepsNoCsp(): void
     {
         $r = self::request('GET', 'p=Livres');

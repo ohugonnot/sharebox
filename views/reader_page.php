@@ -8,9 +8,9 @@ require_once __DIR__ . '/media_layout.php';
 /** @var string $token */
 /** @var array{name:string} $link */
 
-[$rdDir, $rdSub] = media_page_folder($resolvedPath, $subPath, $basePath);
+[$rdDir, $rdSub, $rdBook] = media_page_folder($resolvedPath, $subPath, $basePath);
 $rdFiles = [];
-foreach ($rdDir !== null ? media_page_names($rdDir) : [basename($resolvedPath)] as $rdName) {
+foreach ($rdDir !== null ? media_page_names($rdDir) : [(string)$rdBook] as $rdName) {
     $rdFull = $rdDir !== null ? $rdDir . '/' . $rdName : $resolvedPath;
     // Only books pay filesize/filemtime: the folder may hold hundreds of other files on a busy disk.
     if (reader_kind($rdName) === null) {
@@ -19,7 +19,7 @@ foreach ($rdDir !== null ? media_page_names($rdDir) : [basename($resolvedPath)] 
         $rdFiles[] = ['name' => $rdName, 'size' => (int)filesize($rdFull), 'mtime' => (int)filemtime($rdFull)];
     }
 }
-$rd = reader_page_data($rdFiles, $token, $rdSub, is_file($resolvedPath) ? basename($rdDir !== null ? $subPath : $resolvedPath) : null, READER_EPUB_ENABLED);
+$rd = reader_page_data($rdFiles, $token, $rdSub, $rdBook, READER_EPUB_ENABLED);
 if ($rdDir === null && $rd['books']) {
     // A file link only answers on its own URL: no ?p=.
     $rd['books'][0]['url'] = '/dl/' . $token . '?inline=1';
