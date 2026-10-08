@@ -277,7 +277,7 @@ if (is_file($resolvedPath)) {
         require __DIR__ . '/handlers/stream_hls.php';
     }
 
-    // Liseuse : ?play=1 sur un livre l'ouvre ; ?inline=1 sert ses fichiers (liste blanche de types)
+    // The play link of a book row opens the reader on that book.
     if (($_GET['play'] ?? '') === '1' && book_readable($resolvedPath)) {
         require __DIR__ . '/views/reader_page.php';
         exit;
