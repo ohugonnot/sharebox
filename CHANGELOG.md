@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **TMDB write endpoints now require admin** — `tmdb_set`, `folder_type_set`, `web_poster_save`, `ai_recheck`, `tmdb_reload`, `tmdb_search`, `web_search` are gated behind `is_admin()` on the public `/dl/{token}` path; `?posters` (grid display) stays public.
 
 ### Changed
-- A `HEAD` request on a download no longer reads the file: same headers as `GET` (Content-Length, Content-Range, Accept-Ranges), no body.
+- A `HEAD` request on a download no longer reads the file: same headers as `GET` (Content-Length, Content-Range, Accept-Ranges), no body. This also covers the native audio/video stream (`?stream=1`, `handlers/stream_native.php`), which goes through the same `serve_file()`.
 - On a link to a single file, a plain `GET ?inline=1` now counts as a download (`download_count`, `download_logs`, `max_downloads` limit), like a direct download; `Range` and `HEAD` requests do not count. It used to serve the file without limit. Folder links are unchanged. With `max_downloads=1`, opening the book uses the only download, and the reader's next Range requests then get 410, like any request to a used-up link.
 - **SQLite backup moved out of the request hot path** — `get_db()` no longer triggers a full DB copy on web requests; backup now runs from a dedicated hourly cron (`cron/backup_db.php`).
 - ZIP folder download is now bounded by a concurrency slot + `timeout` (DoS hardening).
