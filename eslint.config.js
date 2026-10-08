@@ -1,6 +1,6 @@
 export default [
     {
-        ignores: ['vendor/**', 'node_modules/**', 'eslint.config.js'],
+        ignores: ['vendor/**', 'node_modules/**', 'eslint.config.js', 'reader/**'],
     },
     {
         files: ['**/*.js'],
@@ -40,6 +40,21 @@ export default [
             'no-duplicate-case': 'error',
             'no-empty': ['warn', { allowEmptyCatch: true }],
             'no-self-assign': 'error',
+        }
+    },
+    {
+        // Copied from the portal by tools/sync-reader.sh: UMD wrappers, browser APIs.
+        files: ['reader.js', 'audiobook.js'],
+        languageOptions: {
+            globals: { module: 'readonly', self: 'readonly', File: 'readonly', MediaMetadata: 'readonly' }
+        },
+        rules: { 'no-unused-vars': 'off' }
+    },
+    {
+        files: ['tests/unit/**/*.js'],
+        languageOptions: {
+            sourceType: 'commonjs',
+            globals: { require: 'readonly', __dirname: 'readonly', module: 'writable' }
         }
     }
 ];
