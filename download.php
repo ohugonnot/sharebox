@@ -696,6 +696,16 @@ HTML;
         echo '<div class="toolbar">';
         echo '<span class="toolbar-info">' . $itemsLabel . '</span>';
 
+        // Liseuse / lecteur audio : déduits des noms déjà listés, sans I/O de plus
+        $fileNames = array_column($files, 'name');
+        $listingActions = listing_actions(folder_media_kind($fileNames),
+            count(array_filter($fileNames, 'book_readable')),
+            count(array_filter($fileNames, fn($n) => in_array(media_ext($n), MEDIA_AUDIO_EXTS, true))));
+        if ($listingActions['toolbar'] !== null) {
+            $mediaUrl = $baseUrl . '?' . ($subPath ? 'p=' . rawurlencode($subPath) . '&' : '') . $listingActions['toolbar']['param'] . '=1';
+            echo '<a class="btn-zip" style="background:transparent;border:1px solid var(--accent);color:var(--accent)" href="' . htmlspecialchars($mediaUrl) . '">' . $listingActions['toolbar']['label'] . '</a>';
+        }
+
         // Barre de tri (seulement si des fichiers à trier)
         if ($totalFiles > 1) {
             $arrow = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12l7 7 7-7"/></svg>';
@@ -901,14 +911,15 @@ HTML;
             $iconClass = 'file';
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
         }
-        // data-play stocke l'URL play pour le JS de clic configurable
-        $dataPlay = $mediaType ? ' data-play="' . htmlspecialchars($playUrl, ENT_QUOTES) . '"' : '';
+        // data-play stocke l'URL play pour le JS de clic configurable ; ?play=1 sur un livre ouvre la liseuse
+        $canPlay = $mediaType || (($listingActions['rowRead'] ?? false) && book_readable($file['name']));
+        $dataPlay = $canPlay ? ' data-play="' . htmlspecialchars($playUrl, ENT_QUOTES) . '"' : '';
         echo '<a class="row" href="' . $fileUrl . '" title="' . $fileHtml . '" data-type="file" data-name="' . $fileHtml . '" data-size="' . $file['size'] . '"' . $dataPlay . '>';
         echo '<div class="row-icon ' . $iconClass . '">' . $iconSvg . '</div>';
         echo '<span class="row-name">' . $fileHtml . '</span>';
         if ($ext) echo '<span class="row-ext">' . htmlspecialchars($ext) . '</span>';
         echo '<span class="row-meta">' . $size . '</span>';
-        if ($mediaType) {
+        if ($canPlay) {
             echo '<span class="btn-play" onclick="event.preventDefault();event.stopPropagation();location.href=\'' . htmlspecialchars($playUrl, ENT_QUOTES) . '\'" title="Lire"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>';
         }
         echo '</a>';
