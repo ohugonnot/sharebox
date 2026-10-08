@@ -3,6 +3,7 @@
     --as-bg: var(--bg-deep);
     --as-surface: var(--bg-surface);
     --as-raised: var(--bg-elevated);
+    /* Not --border (.06): the portal border (#30363d) outlines buttons and inputs, .06 hides them. */
     --as-border: rgba(255,255,255,.12);
     --as-muted: var(--text-secondary);
     --as-text: var(--text-primary);
