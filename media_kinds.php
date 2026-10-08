@@ -6,6 +6,9 @@ const MEDIA_BOOK_EXTS  = ['pdf', 'epub'];
 const MEDIA_VIDEO_EXTS = ['mkv', 'mp4', 'avi', 'mov', 'webm', 'm4v', 'ts', 'wmv', 'mpg', 'mpeg', 'flv', '3gp', 'm2ts'];
 const MEDIA_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
 
+// EPUB needs foliate-js, not shipped yet.
+defined('READER_EPUB_ENABLED') || define('READER_EPUB_ENABLED', false);
+
 function media_ext(string $name): string {
     return strtolower(pathinfo($name, PATHINFO_EXTENSION));
 }
@@ -68,4 +71,71 @@ function inline_mime(string $name): ?string {
         'gif' => 'image/gif',
         default => null,
     };
+}
+
+function share_entry_url(string $token, string $subPath, string $name, string $mode): string {
+    $path = $subPath !== '' ? $subPath . '/' . $name : $name;
+    return '/dl/' . $token . '?p=' . rawurlencode($path) . '&' . $mode . '=1';
+}
+
+/**
+ * Champs communs aux pages liseuse et lecteur audio d'un dossier
+ *
+ * @param string[] $names
+ * @return array{cover:?string, backUrl:string, storageToken:string}
+ */
+function media_page_common(array $names, string $token, string $subPath): array {
+    $cover = folder_cover($names);
+    return [
+        'cover' => $cover !== null ? share_entry_url($token, $subPath, $cover, 'inline') : null,
+        'backUrl' => '/dl/' . $token . ($subPath !== '' ? '?p=' . rawurlencode($subPath) : ''),
+        // The portal may run on the same origin: 'sb:' keeps our localStorage keys apart.
+        'storageToken' => 'sb:' . $token . ':' . $subPath,
+    ];
+}
+
+/**
+ * Données de la liseuse pour les fichiers d'un dossier
+ *
+ * @param array<int, array{name:string, size:int, mtime:int}> $files
+ * @return array{books:list<array{name:string,url:string,kind:string,size:int,mtime:int}>, open:?string, libBase:string, cover:?string, backUrl:string, storageToken:string}
+ */
+function reader_page_data(array $files, string $token, string $subPath, ?string $book, bool $epub = false): array {
+    $books = [];
+    foreach ($files as $f) {
+        $kind = reader_kind($f['name']);
+        if ($kind === null || ($kind === 'epub' && !$epub)) continue;
+        $books[] = [
+            'name' => $f['name'],
+            'url' => share_entry_url($token, $subPath, $f['name'], 'inline'),
+            'kind' => $kind,
+            'size' => max(0, (int)$f['size']),
+            'mtime' => (int)$f['mtime'],
+        ];
+    }
+    usort($books, fn($a, $b) => strnatcasecmp($a['name'], $b['name']));
+    $open = $book !== null && in_array($book, array_column($books, 'name'), true) ? $book : null;
+    return ['books' => $books, 'open' => $open, 'libBase' => '/share/reader/']
+        + media_page_common(array_column($files, 'name'), $token, $subPath);
+}
+
+/**
+ * Données du lecteur audio : pistes du dossier en tri naturel
+ *
+ * @param string[] $names
+ * @return array{tracks:list<array{name:string,url:string}>, cover:?string, backUrl:string, storageToken:string}
+ */
+function audiobook_page_data(array $names, string $token, string $subPath): array {
+    $audio = array_values(array_filter($names, fn($n) => in_array(media_ext($n), MEDIA_AUDIO_EXTS, true)));
+    usort($audio, 'strnatcasecmp');
+    $tracks = array_map(fn($n) => ['name' => $n, 'url' => share_entry_url($token, $subPath, $n, 'stream')], $audio);
+    return ['tracks' => $tracks] + media_page_common($names, $token, $subPath);
+}
+
+/**
+ * JSON sûr dans un <script type="application/json"> (noms de fichiers hostiles)
+ */
+function page_json(mixed $data): string {
+    $json = json_encode($data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE);
+    return $json === false ? '[]' : $json;
 }
