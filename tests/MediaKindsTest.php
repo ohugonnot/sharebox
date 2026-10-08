@@ -95,6 +95,9 @@ class MediaKindsTest extends TestCase
             'cover avant une autre image' => [['01.mp3', 'scan.jpg', 'cover.jpg'], 'cover.jpg'],
             'Folder en majuscules' => [['Folder.JPG'], 'Folder.JPG'],
             'aucune image' => [['a.mp3'], null],
+            'cover avant la première image' => [['a.jpg', 'cover.png'], 'cover.png'],
+            'folder avant front' => [['a.jpg', 'front.png', 'folder.png'], 'folder.png'],
+            'sinon la première en tri naturel' => [['b.jpg', 'a.jpg'], 'a.jpg'],
         ];
     }
 
