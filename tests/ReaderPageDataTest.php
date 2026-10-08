@@ -98,23 +98,39 @@ class ReaderPageDataTest extends TestCase
 
     /**
      * @dataProvider listingActionsProvider
+     * @param string[] $names
      * @param array{param:string,label:string}|null $toolbar
      */
-    public function testListingActions(?string $kind, int $books, int $tracks, bool $rowRead, ?array $toolbar): void
+    public function testListingActions(array $names, bool $rowRead, ?array $toolbar): void
     {
-        $this->assertSame(['rowRead' => $rowRead, 'toolbar' => $toolbar], listing_actions($kind, $books, $tracks));
+        $this->assertSame(['rowRead' => $rowRead, 'toolbar' => $toolbar], listing_actions($names, false));
     }
 
     public static function listingActionsProvider(): array
     {
+        $tracks = array_map(fn($i) => sprintf('%02d.mp3', $i), range(1, 12));
         return [
-            'livre audio + livret' => ['audiobook', 1, 12, true, ['param' => 'listen', 'label' => 'Écouter · 12 pistes']],
-            'bibliothèque' => ['library', 3, 0, true, ['param' => 'read', 'label' => 'Bibliothèque · 3 livres']],
-            'un seul livre : pas de bibliothèque' => ['library', 1, 1, true, null],
-            'epub seuls, désactivés' => ['library', 0, 0, true, null],
-            'dossier vidéo' => [null, 2, 10, false, null],
-            'rien' => [null, 0, 1, false, null],
+            'livre audio + livret' => [array_merge($tracks, ['livret.pdf']), true, ['param' => 'listen', 'label' => 'Écouter · 12 pistes']],
+            'bibliothèque' => [['a.pdf', 'b.pdf', 'c.pdf', 'x.nfo'], true, ['param' => 'read', 'label' => 'Bibliothèque · 3 livres']],
+            'un seul livre : pas de bibliothèque' => [['a.pdf', 'a.mp3'], true, null],
+            'epub seuls, désactivés' => [['a.epub', 'b.epub'], false, null],
+            'epub désactivés ne cachent pas les pistes' => [['a.mp3', 'b.mp3', 'x.epub', 'y.epub', 'z.epub'], true, ['param' => 'listen', 'label' => 'Écouter · 2 pistes']],
+            'dossier vidéo' => [['a.pdf', 'b.pdf', 'clip.mkv'], false, null],
+            'rien' => [['a.mp3'], false, null],
         ];
+    }
+
+    public function testListingCountsMatchWhatThePagesList(): void
+    {
+        $names = ['b.pdf', 'a.PDF', 'x.epub', 'cover.jpg', 'notes.txt', 'c.pdf', 'z.epub'];
+        $files = array_map(fn($n) => ['name' => $n, 'size' => 1, 'mtime' => 1], $names);
+        foreach ([false, true] as $epub) {
+            $books = count(reader_page_data($files, 'tok', '', null, $epub)['books']);
+            $this->assertSame('Bibliothèque · ' . $books . ' livres', listing_actions($names, $epub)['toolbar']['label'] ?? null);
+        }
+        $names = ['2.mp3', '1.M4B', '10.flac', 'a.pdf', 'cover.jpg', 'b.ogg.txt'];
+        $tracks = count(audiobook_page_data($names, 'tok', '')['tracks']);
+        $this->assertSame('Écouter · ' . $tracks . ' pistes', listing_actions($names, false)['toolbar']['label'] ?? null);
     }
 
     public function testBookReadableFollowsTheEpubFlag(): void
