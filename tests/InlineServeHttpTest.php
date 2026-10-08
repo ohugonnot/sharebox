@@ -73,7 +73,7 @@ class InlineServeHttpTest extends TestCase
 
         $db = self::$work . '/db.sqlite';
         $download = realpath(__DIR__ . '/../download.php');
-        $vars = var_export(['db' => $db, 'download' => $download], true);
+        $vars = var_export(['db' => $db, 'download' => $download, 'nvme' => self::$work . '/d'], true);
         // display_errors off: a live config.php redefining constants must not leak into the body.
         file_put_contents(self::$work . '/router.php', <<<PHP
         <?php
@@ -87,6 +87,8 @@ class InlineServeHttpTest extends TestCase
         define('STREAM_REMUX_ENABLED', false);
         define('HIDDEN_DIRS', ['hidden.mp3']);
         \$_GET['token'] ??= 'inlinetest';
+        // is_path_within() accepts anything under NVME_PATH: here the folder of a shared file.
+        if (\$_GET['token'] === 'nvmelink') define('NVME_PATH', \$c['nvme']);
         require \$c['download'];
         PHP);
 
@@ -381,6 +383,17 @@ class InlineServeHttpTest extends TestCase
     public static function fileLinkPageProvider(): array
     {
         return ['play' => ['play=1'], 'read' => ['read=1'], 'listen' => ['listen=1']];
+    }
+
+    public function testAFileLinkUnderNvmePathNeverShowsItsFolder(): void
+    {
+        self::addLink('nvmelink', self::$work . '/d/mine.pdf', 'file', null);
+        $r = self::request('GET', 'token=nvmelink&play=1');
+        $this->assertSame(200, $r['code']);
+        foreach (['secret-contract', 'pw.pdf', (string)filesize('/etc/passwd')] as $leak) {
+            $this->assertStringNotContainsString($leak, $r['body']);
+        }
+        $this->assertSame(['mine.pdf'], array_column(self::pageJson($r['body'], 'sb-reader-data'), 'name'));
     }
 
     public function testPlayOnAFileLinkOpensTheSharedBook(): void

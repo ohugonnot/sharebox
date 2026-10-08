@@ -80,6 +80,8 @@ function media_page_close(array $js): void {
  */
 function media_page_folder(string $resolvedPath, string $subPath, string $basePath): array {
     if (!is_file($resolvedPath)) return [$resolvedPath, media_rel_path($resolvedPath, $basePath), null];
+    // A file link shares no folder. Not left to is_path_within(), which also accepts anything under NVME_PATH.
+    if (is_file($basePath)) return [null, '', basename($basePath)];
     // A symlinked book: list the folder of the link, the one the URLs are built on.
     $dir = realpath(dirname($basePath . '/' . trim($subPath, '/')));
     if (is_path_within($dir, $basePath)) return [$dir, media_rel_path($dir, $basePath), basename($subPath)];
