@@ -468,7 +468,7 @@ test.describe('non-régression', () => {
     const txt = await request.get(url('divers/note.txt', '&inline=1'));
     expect(txt.status()).toBe(404);
     const outside = await request.get(url('../..', '&inline=1'));
-    expect([403, 404]).toContain(outside.status());
+    expect(outside.status()).toBe(403);
     // 404 is a browser-visible response too: make the intent explicit.
     await page.goto(url('divers/note.txt', '&inline=1'));
   });

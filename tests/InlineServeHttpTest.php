@@ -191,6 +191,20 @@ class InlineServeHttpTest extends TestCase
         $this->assertSame(substr(self::$content, 100, 100), $r['body']);
     }
 
+    public function testRangePastTheEndIsRefused(): void
+    {
+        $r = self::request('GET', 'p=Livres/book.pdf&inline=1', ['Range: bytes=99999-']);
+        $this->assertSame(416, $r['code']);
+        $this->assertSame('bytes */' . strlen(self::$content), $r['headers']['content-range'] ?? null);
+    }
+
+    public function testHostileNameIsQuotedInContentDisposition(): void
+    {
+        $r = self::request('GET', 'p=' . rawurlencode(self::HOSTILE_DIR . '/"><script>alert(1).pdf') . '&inline=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertSame('inline; filename="\\"><script>alert(1).pdf"', $r['headers']['content-disposition'] ?? null);
+    }
+
     public function testCoverIsServedAsImage(): void
     {
         $r = self::request('GET', 'p=Livres/cover.jpg&inline=1');
@@ -300,6 +314,10 @@ class InlineServeHttpTest extends TestCase
         $this->assertStringContainsString('Livres%2Fbook.pdf\u0026inline=1', $r['body']);
         $this->assertStringContainsString('"open":null', $r['body']);
         $this->assertStringNotContainsString('fonts.googleapis', $r['body']);
+        $this->assertSame('no-store', $r['headers']['cache-control'] ?? null);
+        $this->assertStringContainsString('<img class="mp-cover" src="/dl/inlinetest?p=Livres%2Fcover.jpg&amp;inline=1"', $r['body']);
+        $books = array_column(self::pageJson($r['body'], 'sb-reader-data'), null, 'name');
+        $this->assertSame(strlen(self::$content), $books['book.pdf']['size'] ?? null);
     }
 
     public function testPlayOnABookOpensTheReaderOnIt(): void
@@ -319,6 +337,7 @@ class InlineServeHttpTest extends TestCase
         $this->assertMatchesRegularExpression('#01\.mp3.*02\.mp3#s', $r['body']);
         $this->assertStringContainsString('id="asc-audiobook-data"', $r['body']);
         $this->assertStringContainsString('class="ab-cover" src="/dl/inlinetest?p=Audio%2Ffolder.jpg&amp;inline=1"', $r['body']);
+        $this->assertSame('no-store', $r['headers']['cache-control'] ?? null);
     }
 
     public function testFoldersAndHiddenNamesAreNeverTracks(): void
