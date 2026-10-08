@@ -5,11 +5,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **PDF reader** — `?read=1` on a folder (or `?play=1` on a book) opens a full-screen reader with the folder's books; files are served by `?inline=1` (short type list: pdf, epub, jpg, png, webp, gif; anything else 404), with Range and `Cache-Control: no-transform`. Reading position is kept in `localStorage`.
+- **Audiobook / album player** — `?listen=1` on a folder plays its tracks in natural order with the folder cover; `.m4b` is now streamed as `audio/mp4`.
+- **Folder detection** — `media_kinds.php` tells audiobook and library folders apart from the names already listed (no extra I/O); a folder with any video keeps the video player. Listing gets « Lire » buttons on books and an « Écouter » / « Bibliothèque » shortcut in the toolbar.
+- Both pages send their own `Content-Security-Policy` (no inline script); the rest of the app is unchanged.
+- `READER_EPUB_ENABLED` (default `false`) in `config.php`: EPUB stays off until foliate-js is shipped.
+- Reader and player code is copied from the portal by `tools/sync-reader.sh` (checksums in `reader/UPSTREAM.txt`).
+
 ### Security
 - **Fixed PHP injection in the Docker entrypoint** — `SHAREBOX_STREAM_MAX_CONCURRENT`, `SHAREBOX_BANDWIDTH_QUOTA_TB` and `SHAREBOX_STREAM_REMUX_ENABLED` were interpolated raw into `config.php`; now strictly validated (integer / `true|false`) before use.
 - **TMDB write endpoints now require admin** — `tmdb_set`, `folder_type_set`, `web_poster_save`, `ai_recheck`, `tmdb_reload`, `tmdb_search`, `web_search` are gated behind `is_admin()` on the public `/dl/{token}` path; `?posters` (grid display) stays public.
 
 ### Changed
+- A `HEAD` request on a download no longer reads the file: same headers as `GET` (Content-Length, Content-Range, Accept-Ranges), no body.
 - **SQLite backup moved out of the request hot path** — `get_db()` no longer triggers a full DB copy on web requests; backup now runs from a dedicated hourly cron (`cron/backup_db.php`).
 - ZIP folder download is now bounded by a concurrency slot + `timeout` (DoS hardening).
 - Lockfiles (`composer.lock`, `package-lock.json`) are committed; `composer.json` declares the runtime contract (`php >=8.1`, `ext-pdo_sqlite/curl/gd/mbstring/posix`) + MIT license; CI installs those extensions and uses `npm ci`.
