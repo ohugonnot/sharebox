@@ -140,9 +140,9 @@ function page_json(mixed $data): string {
     return $json === false ? '[]' : $json;
 }
 
-function book_readable(string $name): bool {
+function book_readable(string $name, bool $epub = READER_EPUB_ENABLED): bool {
     $kind = reader_kind($name);
-    return $kind === 'pdf' || ($kind === 'epub' && READER_EPUB_ENABLED);
+    return $kind === 'pdf' || ($kind === 'epub' && $epub);
 }
 
 /**

@@ -121,6 +121,9 @@ class ReaderPageDataTest extends TestCase
     {
         $this->assertTrue(book_readable('a.PDF'));
         $this->assertSame(READER_EPUB_ENABLED, book_readable('a.epub'));
-        $this->assertFalse(book_readable('a.mp3'));
+        $this->assertTrue(book_readable('a.epub', true));
+        $this->assertFalse(book_readable('a.epub', false));
+        $this->assertTrue(book_readable('a.pdf', false));
+        $this->assertFalse(book_readable('a.mp3', true));
     }
 }
