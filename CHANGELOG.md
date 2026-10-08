@@ -33,6 +33,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Tests
 - **441 tests / 886 assertions** (was 416/824). Converted key paths from source-grep to real execution: `serve_file()` Range handling (206/Content-Range/416), the ffmpeg arg builders, the `probe_cache` readers; e2e for the TMDB admin gate and share-link lifecycle (404 / password / `max_downloads` 410).
 
+### Known limitations
+- A broken symlink named like a book (`x.pdf`) still counts in the listing's « Bibliothèque · N livres »: checking each entry would add one `is_file` per row to the listing. A `max_downloads=0` file link gets no reader and stays a plain download (the safe side).
+
 ## [5.0.0] - 2026-05-25
 
 ### Added
