@@ -72,16 +72,18 @@ function media_page_close(array $js): void {
 }
 
 /**
- * Le dossier affiché : celui demandé, ou le parent quand un livre est ouvert
+ * Folder to show: the one asked for, or the parent of an opened book; null when that parent is
+ * not shared (a file link): the page must then show the shared file alone.
  *
- * @return array{0:string, 1:string} [chemin réel, sous-chemin dans le partage]
+ * @return array{0:?string, 1:string} [real path, sub-path in the share]
  */
 function media_page_folder(string $resolvedPath, string $subPath, string $basePath): array {
     $subPath = trim($subPath, '/');
     if (!is_file($resolvedPath)) return [$resolvedPath, $subPath];
     // A symlinked book: list the folder of the link, the one the URLs are built on.
     $dir = realpath(dirname($basePath . '/' . $subPath));
-    return [is_path_within($dir, $basePath) ? $dir : dirname($resolvedPath), str_contains($subPath, '/') ? dirname($subPath) : ''];
+    if (!is_path_within($dir, $basePath)) $dir = dirname($resolvedPath);
+    return [is_path_within($dir, $basePath) ? $dir : null, str_contains($subPath, '/') ? dirname($subPath) : ''];
 }
 
 /**
