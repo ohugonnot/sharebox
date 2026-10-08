@@ -1483,6 +1483,8 @@ function serve_file(string $path, string $contentType, string $disposition): voi
         header('HTTP/1.1 206 Partial Content');
         header('Content-Range: bytes ' . $start . '-' . $end . '/' . $size);
         header('Content-Length: ' . $length);
+        // PHP runs the whole script for HEAD and only drops the body: stop before reading.
+        if (($_SERVER['REQUEST_METHOD'] ?? '') === 'HEAD') exit;
 
         $fh = fopen($path, 'rb');
         if ($fh === false) { http_response_code(500); exit; }
@@ -1498,6 +1500,7 @@ function serve_file(string $path, string $contentType, string $disposition): voi
         fclose($fh);
     } else {
         header('Content-Length: ' . $size);
+        if (($_SERVER['REQUEST_METHOD'] ?? '') === 'HEAD') exit;
         readfile($path);
     }
 

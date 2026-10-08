@@ -54,3 +54,18 @@ function reader_kind(string $name): ?string {
     $ext = media_ext($name);
     return in_array($ext, MEDIA_BOOK_EXTS, true) ? $ext : null;
 }
+
+/**
+ * Mime servi par ?inline=1 ; null = refusé (404)
+ */
+function inline_mime(string $name): ?string {
+    return match (media_ext($name)) {
+        'pdf' => 'application/pdf',
+        'epub' => 'application/epub+zip',
+        'jpg', 'jpeg' => 'image/jpeg',
+        'png' => 'image/png',
+        'webp' => 'image/webp',
+        'gif' => 'image/gif',
+        default => null,
+    };
+}
