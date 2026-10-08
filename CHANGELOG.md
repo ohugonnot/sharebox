@@ -19,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - A `HEAD` request on a download no longer reads the file: same headers as `GET` (Content-Length, Content-Range, Accept-Ranges), no body. This also covers the native audio/video stream (`?stream=1`, `handlers/stream_native.php`), which goes through the same `serve_file()`.
-- On a link to a single file, a plain `GET ?inline=1` now counts as a download (`download_count`, `download_logs`, `max_downloads` limit), like a direct download; `Range` and `HEAD` requests do not count. It used to serve the file without limit. Folder links are unchanged. With `max_downloads=1`, opening the book uses the only download, and the reader's next Range requests then get 410, like any request to a used-up link.
+- A link to a single file with a `max_downloads` limit gets no reader: `?inline=1` and `?play=1` on it stay a plain counted download (attachment, 410 at the limit). Unlimited file links and folder links keep the reader, and reading is not counted.
 - **SQLite backup moved out of the request hot path** — `get_db()` no longer triggers a full DB copy on web requests; backup now runs from a dedicated hourly cron (`cron/backup_db.php`).
 - ZIP folder download is now bounded by a concurrency slot + `timeout` (DoS hardening).
 - Lockfiles (`composer.lock`, `package-lock.json`) are committed; `composer.json` declares the runtime contract (`php >=8.1`, `ext-pdo_sqlite/curl/gd/mbstring/posix`) + MIT license; CI installs those extensions and uses `npm ci`.
