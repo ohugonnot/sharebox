@@ -65,6 +65,12 @@ class InlineServeHttpTest extends TestCase
         // Reached through the symlinked folder, but points back inside the share.
         symlink("$dir/book.pdf", self::$work . '/secret/back.pdf');
 
+        // A file link: its siblings, and a symlink out of the tree, are not shared.
+        mkdir(self::$work . '/d');
+        file_put_contents(self::$work . '/d/mine.pdf', self::$content);
+        file_put_contents(self::$work . '/d/secret-contract.pdf', '%PDF-1.4 secret');
+        symlink('/etc/passwd', self::$work . '/d/pw.pdf');
+
         $db = self::$work . '/db.sqlite';
         $download = realpath(__DIR__ . '/../download.php');
         $vars = var_export(['db' => $db, 'download' => $download], true);
@@ -80,7 +86,7 @@ class InlineServeHttpTest extends TestCase
         define('READER_EPUB_ENABLED', false);
         define('STREAM_REMUX_ENABLED', false);
         define('HIDDEN_DIRS', ['hidden.mp3']);
-        \$_GET['token'] = 'inlinetest';
+        \$_GET['token'] ??= 'inlinetest';
         require \$c['download'];
         PHP);
 
@@ -93,8 +99,9 @@ class InlineServeHttpTest extends TestCase
         fclose($probe);
 
         // zlib.output_compression on: PHP itself must not gzip what the reader fetches by Range.
-        $cmd = sprintf('exec %s -d zlib.output_compression=On -S 127.0.0.1:%d %s',
-            escapeshellarg(PHP_BINARY), $port, escapeshellarg(self::$work . '/router.php'));
+        // sys_temp_dir: the download counter's purge flag must not land in the live /tmp.
+        $cmd = sprintf('exec %s -d zlib.output_compression=On -d sys_temp_dir=%s -S 127.0.0.1:%d %s',
+            escapeshellarg(PHP_BINARY), escapeshellarg(self::$work), $port, escapeshellarg(self::$work . '/router.php'));
         self::$proc = proc_open($cmd, [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'a'], 2 => ['file', '/dev/null', 'a']], $pipes);
         self::$base = "http://127.0.0.1:$port/";
 
@@ -113,6 +120,8 @@ class InlineServeHttpTest extends TestCase
         $pdo = new PDO('sqlite:' . $db);
         $pdo->prepare("INSERT INTO links (token, path, type, name) VALUES ('inlinetest', ?, 'folder', 'Partage')")
             ->execute([self::$work . '/share']);
+        $pdo->prepare("INSERT INTO links (token, path, type, name) VALUES ('filelink', ?, 'file', 'mine.pdf')")
+            ->execute([self::$work . '/d/mine.pdf']);
     }
 
     public static function tearDownAfterClass(): void
@@ -339,6 +348,32 @@ class InlineServeHttpTest extends TestCase
     {
         $r = self::request('GET', 'p=out/back.pdf&play=1');
         $this->assertStringNotContainsString('secret', $r['body']);
+    }
+
+    /** @dataProvider fileLinkPageProvider */
+    public function testAFileLinkNeverShowsItsFolder(string $query): void
+    {
+        $r = self::request('GET', 'token=filelink&' . $query);
+        foreach (['secret-contract', 'pw.pdf', (string)filesize('/etc/passwd')] as $leak) {
+            $this->assertStringNotContainsString($leak, $r['body']);
+        }
+    }
+
+    public static function fileLinkPageProvider(): array
+    {
+        return ['play' => ['play=1'], 'read' => ['read=1'], 'listen' => ['listen=1']];
+    }
+
+    public function testPlayOnAFileLinkOpensTheSharedBook(): void
+    {
+        $r = self::request('GET', 'token=filelink&play=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertStringContainsString('"open":"mine.pdf"', $r['body']);
+        $books = self::pageJson($r['body'], 'sb-reader-data');
+        $this->assertSame(['mine.pdf'], array_column($books, 'name'));
+        $this->assertSame('/dl/filelink?inline=1', $books[0]['url']);
+        $this->assertSame(strlen(self::$content), $books[0]['size']);
+        $this->assertSame(206, self::request('GET', 'token=filelink&inline=1', ['Range: bytes=0-9'])['code']);
     }
 
     public function testListingKeepsNoCsp(): void
