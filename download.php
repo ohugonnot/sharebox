@@ -157,6 +157,33 @@ if (!is_path_within($resolvedPath, $basePath)) {
     exit;
 }
 
+// Liseuse et lecteur audio : fichiers en inline (liste blanche) et pages dédiées.
+// A file link with a download limit stays a plain counted download: the reader's Range requests would get 410.
+$readerAllowed = $subPath || $link['max_downloads'] === null;
+if ($readerAllowed && ($_GET['inline'] ?? '') === '1' && is_file($resolvedPath)) {
+    $inlineMime = inline_mime($resolvedPath);
+    if ($inlineMime === null) {
+        http_response_code(404);
+        afficher_erreur('Introuvable', 'Ce fichier ne peut pas être affiché ici.');
+        exit;
+    }
+    // A compressing proxy drops Content-Length, and pdf.js then fetches the whole file.
+    header('Cache-Control: no-transform');
+    header('X-Content-Type-Options: nosniff');
+    serve_file($resolvedPath, $inlineMime, 'inline; filename="' . addcslashes(preg_replace('/[\r\n\0]/', '', basename($resolvedPath)), '"\\') . '"');
+}
+$mediaPage = match (true) {
+    is_dir($resolvedPath) && ($_GET['read'] ?? '') === '1' => 'reader_page',
+    is_dir($resolvedPath) && ($_GET['listen'] ?? '') === '1' => 'audiobook_page',
+    // The play link of a book row opens the reader on that book.
+    $readerAllowed && is_file($resolvedPath) && ($_GET['play'] ?? '') === '1' && book_readable($resolvedPath) => 'reader_page',
+    default => null,
+};
+if ($mediaPage !== null) {
+    require __DIR__ . '/views/' . $mediaPage . '.php';
+    exit;
+}
+
 // Si c'est un fichier
 if (is_file($resolvedPath)) {
     // Mode lecture : page avec player video/audio
@@ -277,52 +304,37 @@ if (is_file($resolvedPath)) {
         require __DIR__ . '/handlers/stream_hls.php';
     }
 
-    // The play link of a book row opens the reader on that book.
-    if (($_GET['play'] ?? '') === '1' && book_readable($resolvedPath)) {
-        require __DIR__ . '/views/reader_page.php';
-        exit;
-    }
-    $inlineMime = null;
-    $fileName = basename($resolvedPath);
-    $safeFileName = preg_replace('/[\r\n\0]/', '', $fileName);
-    if (($_GET['inline'] ?? '') === '1') {
-        $inlineMime = inline_mime($resolvedPath);
-        if ($inlineMime === null) {
-            http_response_code(404);
-            afficher_erreur('Introuvable', 'Ce fichier ne peut pas être affiché ici.');
-            exit;
-        }
-        // A compressing proxy drops Content-Length, and pdf.js then fetches the whole file.
-        header('Cache-Control: no-transform');
-        header('X-Content-Type-Options: nosniff');
-        // pdf.js reads a book with one plain GET then Range requests: only a plain GET of a file link counts.
-        if ($subPath || isset($_SERVER['HTTP_RANGE']) || ($_SERVER['REQUEST_METHOD'] ?? '') === 'HEAD') {
-            serve_file($resolvedPath, $inlineMime, 'inline; filename="' . addcslashes($safeFileName, '"\\') . '"');
-        }
-    }
-
     // Téléchargement direct
     stream_log('DOWNLOAD | ' . basename($resolvedPath) . ' | size=' . format_taille(filesize($resolvedPath)));
-    if (!$subPath && !link_count_download($db, $link)) {
-        stream_log('ACCESS 410 | token=' . $token . ' | max_downloads reached (atomic)');
-        http_response_code(410);
-        afficher_erreur('Lien épuisé', 'Ce lien a atteint sa limite de téléchargements.');
-        exit;
+    if (!$subPath) {
+        $updated = $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id AND (max_downloads IS NULL OR max_downloads = 0 OR download_count < max_downloads)");
+        $updated->execute([':id' => $link['id']]);
+        if ($updated->rowCount() === 0 && (int)($link['max_downloads'] ?? 0) > 0) {
+            stream_log('ACCESS 410 | token=' . $token . ' | max_downloads reached (atomic)');
+            http_response_code(410);
+            afficher_erreur('Lien épuisé', 'Ce lien a atteint sa limite de téléchargements.');
+            exit;
+        }
+        $db->prepare("INSERT INTO download_logs (link_id, ip) VALUES (?, ?)")
+           ->execute([(int)$link['id'], $_SERVER['REMOTE_ADDR'] ?? '']);
+        $purgeFlag = sys_get_temp_dir() . '/sharebox_purge_dllogs';
+        if (!file_exists($purgeFlag) || (time() - filemtime($purgeFlag)) > 3600) {
+            $db->exec("DELETE FROM download_logs WHERE downloaded_at < datetime('now', '-30 days')");
+            @touch($purgeFlag);
+        }
     }
 
+    $fileName = basename($resolvedPath);
+    $safeFileName = preg_replace('/[\r\n\0]/', '', $fileName);
     serve_file(
         $resolvedPath,
-        $inlineMime ?? 'application/octet-stream',
-        ($inlineMime !== null ? 'inline' : 'attachment') . '; filename="' . addcslashes($safeFileName, '"\\') . '"'
+        'application/octet-stream',
+        'attachment; filename="' . addcslashes($safeFileName, '"\\') . '"'
     );
 }
 
 // Si c'est un dossier
 if (is_dir($resolvedPath)) {
-    if (($_GET['read'] ?? '') === '1' || ($_GET['listen'] ?? '') === '1') {
-        require __DIR__ . '/views/' . (($_GET['read'] ?? '') === '1' ? 'reader_page' : 'audiobook_page') . '.php';
-        exit;
-    }
     stream_log('BROWSE | token=' . $token . ' | ' . ($subPath ?: '(root)') . ' | ' . basename($resolvedPath));
 
     // TMDB poster endpoints (search, batch, set)

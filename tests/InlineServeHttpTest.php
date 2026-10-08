@@ -400,10 +400,10 @@ class InlineServeHttpTest extends TestCase
         return new PDO('sqlite:' . self::$work . '/db.sqlite');
     }
 
-    private static function addFileLink(string $token, int $max): void
+    private static function addLink(string $token, string $path, string $type, ?int $max): void
     {
-        self::pdo()->prepare("INSERT INTO links (token, path, type, name, max_downloads) VALUES (?, ?, 'file', 'mine.pdf', ?)")
-            ->execute([$token, self::$work . '/d/mine.pdf', $max]);
+        self::pdo()->prepare("INSERT INTO links (token, path, type, name, max_downloads) VALUES (?, ?, ?, 'mine.pdf', ?)")
+            ->execute([$token, $path, $type, $max]);
     }
 
     /** @return array{0:int, 1:int} [download_count, download_logs rows] */
@@ -418,24 +418,41 @@ class InlineServeHttpTest extends TestCase
         return [(int)$row['download_count'], (int)$logs->fetchColumn()];
     }
 
-    public function testInlineOnAFileLinkCountsAsADownload(): void
+    public function testALimitedFileLinkStaysAPlainCountedDownload(): void
     {
-        self::addFileLink('cnt-get', 1);
-        $r = self::request('GET', 'token=cnt-get&inline=1');
+        // The reader would spend the only download on its first GET, then get 410 on its Range requests.
+        self::addLink('lim-inline', self::$work . '/d/mine.pdf', 'file', 1);
+        $r = self::request('GET', 'token=lim-inline&inline=1');
         $this->assertSame(200, $r['code']);
-        $this->assertSame(self::$content, $r['body']);
-        $this->assertSame([1, 1], self::counted('cnt-get'));
-        $this->assertSame(410, self::request('GET', 'token=cnt-get&inline=1')['code']);
-        $this->assertSame([1, 1], self::counted('cnt-get'));
+        $this->assertStringStartsWith('attachment', $r['headers']['content-disposition'] ?? '');
+        $this->assertSame([1, 1], self::counted('lim-inline'));
+        $this->assertSame(410, self::request('GET', 'token=lim-inline&inline=1')['code']);
+
+        self::addLink('lim-play', self::$work . '/d/mine.pdf', 'file', 5);
+        $r = self::request('GET', 'token=lim-play&play=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertStringStartsWith('attachment', $r['headers']['content-disposition'] ?? '');
+        $this->assertStringNotContainsString('sb-reader-data', $r['body']);
     }
 
-    public function testRangeAndHeadOnAFileLinkAreNotCounted(): void
+    public function testReadingAnUnlimitedFileLinkIsNotCounted(): void
     {
-        // pdf.js reads a book by Range after one plain GET: only that GET is a download.
-        self::addFileLink('cnt-range', 5);
-        $this->assertSame(206, self::request('GET', 'token=cnt-range&inline=1', ['Range: bytes=0-99'])['code']);
-        $this->assertSame(200, self::request('HEAD', 'token=cnt-range&inline=1')['code']);
-        $this->assertSame([0, 0], self::counted('cnt-range'));
+        self::addLink('free-file', self::$work . '/d/mine.pdf', 'file', null);
+        $r = self::request('GET', 'token=free-file&inline=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertSame('inline; filename="mine.pdf"', $r['headers']['content-disposition'] ?? null);
+        $this->assertStringContainsString('"open":"mine.pdf"', self::request('GET', 'token=free-file&play=1')['body']);
+        $this->assertSame([0, 0], self::counted('free-file'));
+    }
+
+    public function testALimitedFolderLinkKeepsTheReader(): void
+    {
+        self::addLink('lim-dir', self::$work . '/share', 'folder', 1);
+        $this->assertSame(self::CSP, self::request('GET', 'token=lim-dir&p=Livres&read=1')['headers']['content-security-policy'] ?? null);
+        $r = self::request('GET', 'token=lim-dir&p=Livres/book.pdf&inline=1');
+        $this->assertSame('inline; filename="book.pdf"', $r['headers']['content-disposition'] ?? null);
+        $this->assertStringContainsString('sb-reader-data', self::request('GET', 'token=lim-dir&p=Livres/book.pdf&play=1')['body']);
+        $this->assertSame([0, 0], self::counted('lim-dir'));
     }
 
     public function testInlineInAFolderLinkIsNotCounted(): void
