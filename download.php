@@ -167,13 +167,14 @@ if (($_GET['inline'] ?? '') === '1' && is_file($resolvedPath)) {
     }
     // A compressing proxy drops Content-Length, and pdf.js then fetches the whole file.
     header('Cache-Control: no-transform');
+    header('X-Content-Type-Options: nosniff');
     serve_file($resolvedPath, $inlineMime, 'inline; filename="' . addcslashes(preg_replace('/[\r\n\0]/', '', basename($resolvedPath)), '"\\') . '"');
 }
 $mediaPage = match (true) {
     is_dir($resolvedPath) && ($_GET['read'] ?? '') === '1' => 'reader_page',
     is_dir($resolvedPath) && ($_GET['listen'] ?? '') === '1' => 'audiobook_page',
     // The play link of a book row opens the reader on that book.
-    is_file($resolvedPath) && ($_GET['play'] ?? '') === '1' && reader_kind($resolvedPath) !== null => 'reader_page',
+    is_file($resolvedPath) && ($_GET['play'] ?? '') === '1' && book_readable($resolvedPath) => 'reader_page',
     default => null,
 };
 if ($mediaPage !== null) {

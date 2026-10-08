@@ -9,6 +9,11 @@ use PHPUnit\Framework\TestCase;
  */
 class InlineServeHttpTest extends TestCase
 {
+    // A name cannot hold '/', but the sub-path can: it carries '</script>' into the page data.
+    private const HOSTILE_DIR = 'H"><img src=x onerror=alert(9)><' . '/script><script>alert(2)';
+    private const HOSTILE_BOOKS = ['"><script>alert(1).pdf', "l'été 100%.pdf", "\xff\xfe.pdf", 'a b é.pdf'];
+    private const HOSTILE_TRACKS = ['"><svg onload=alert(3)>.mp3', '<script>2.mp3'];
+
     /** @var resource|null */
     private static $proc = null;
     private static string $base = '';
@@ -34,6 +39,21 @@ class InlineServeHttpTest extends TestCase
         mkdir(self::$work . '/share/Films');
         foreach (['clip.mp4', 'manuel.pdf', 'notice.pdf'] as $f) file_put_contents(self::$work . "/share/Films/$f", 'x');
         file_put_contents("$dir/probe.pdf", self::$content);
+        file_put_contents("$dir/x.epub", 'PK fake epub');
+        file_put_contents("$dir/logo.svg", '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>');
+
+        // Hostile names: HTML/JSON breakouts, quotes, %, accents, invalid UTF-8.
+        $hostile = self::$work . '/share/' . self::HOSTILE_DIR;
+        mkdir($hostile, 0755, true);
+        foreach (self::HOSTILE_BOOKS as $f) file_put_contents("$hostile/$f", '%PDF-1.4');
+        foreach (self::HOSTILE_TRACKS as $f) file_put_contents("$hostile/$f", 'x');
+
+        // Outside the share, reached by a symlinked folder and a symlinked book.
+        mkdir(self::$work . '/secret');
+        file_put_contents(self::$work . '/secret/secret.pdf', '%PDF-1.4 secret');
+        symlink(self::$work . '/secret', self::$work . '/share/out');
+        mkdir(self::$work . '/share/Leak');
+        symlink(self::$work . '/secret/secret.pdf', self::$work . '/share/Leak/leak.pdf');
 
         $db = self::$work . '/db.sqlite';
         $download = realpath(__DIR__ . '/../download.php');
@@ -47,6 +67,8 @@ class InlineServeHttpTest extends TestCase
         define('XACCEL_PREFIX', '');
         define('STREAM_LOG', false);
         define('SHAREBOX_BROWSE_ENTRY', true);
+        define('READER_EPUB_ENABLED', false);
+        define('STREAM_REMUX_ENABLED', false);
         \$_GET['token'] = 'inlinetest';
         require \$c['download'];
         PHP);
@@ -135,6 +157,7 @@ class InlineServeHttpTest extends TestCase
         $this->assertSame('inline; filename="book.pdf"', $r['headers']['content-disposition'] ?? null);
         $this->assertSame('bytes', $r['headers']['accept-ranges'] ?? null);
         $this->assertStringContainsString('no-transform', $r['headers']['cache-control'] ?? '');
+        $this->assertSame('nosniff', $r['headers']['x-content-type-options'] ?? null);
         $this->assertSame((string)strlen(self::$content), $r['headers']['content-length'] ?? null);
         $this->assertSame(self::$content, $r['body']);
     }
@@ -166,7 +189,7 @@ class InlineServeHttpTest extends TestCase
 
     public static function refusedProvider(): array
     {
-        return ['html' => ['page.html'], 'audio' => ['song.mp3']];
+        return ['html' => ['page.html'], 'audio' => ['song.mp3'], 'svg' => ['logo.svg']];
     }
 
     public function testHeadSendsHeadersWithoutBody(): void
@@ -196,6 +219,35 @@ class InlineServeHttpTest extends TestCase
         if (fileatime($file) === 946684800) {
             $this->markTestSkipped('atime is not updated on this filesystem');
         }
+    }
+
+    /** @dataProvider rangeProvider */
+    public function testHeadOnADownloadSendsTheSameHeadersAsGet(array $range): void
+    {
+        $get = self::request('GET', 'p=Livres/book.pdf', $range);
+        $head = self::request('HEAD', 'p=Livres/book.pdf', $range);
+        $this->assertSame($get['code'], $head['code']);
+        foreach (['content-type', 'content-disposition', 'content-length', 'accept-ranges', 'content-range'] as $h) {
+            $this->assertSame($get['headers'][$h] ?? null, $head['headers'][$h] ?? null, $h);
+        }
+        $this->assertSame('', $head['body']);
+    }
+
+    public static function rangeProvider(): array
+    {
+        return ['whole file' => [[]], 'range' => [['Range: bytes=100-199']]];
+    }
+
+    public function testHeadOnADownloadDoesNotReadTheFile(): void
+    {
+        $file = self::$work . '/share/Livres/probe.pdf';
+        touch($file, time(), 946684800);
+        clearstatcache();
+        $head = self::request('HEAD', 'p=Livres/probe.pdf');
+        clearstatcache();
+        $this->assertSame(200, $head['code']);
+        $this->assertSame((string)strlen(self::$content), $head['headers']['content-length'] ?? null);
+        $this->assertSame(946684800, fileatime($file), 'HEAD must not read the file');
     }
 
     public function testNoCompressionEvenWhenGzipIsAccepted(): void
@@ -279,5 +331,103 @@ class InlineServeHttpTest extends TestCase
         $this->assertStringNotContainsString('listen=1', $r['body']);
         $this->assertStringNotContainsString('manuel.pdf&amp;play=1', $r['body']);
         $this->assertStringContainsString('clip.mp4&amp;play=1', $r['body']);
+    }
+
+    /**
+     * @return array{name:string, url:string}[]
+     */
+    private static function pageJson(string $body, string $id): array
+    {
+        if (!preg_match('#<script type="application/json" id="' . $id . '">(.*?)</script>#s', $body, $m)) return [];
+        $data = json_decode($m[1], true, 512, JSON_THROW_ON_ERROR);
+        return $data['books'] ?? $data;
+    }
+
+    public function testHostileNamesStayInertOnTheReaderPage(): void
+    {
+        $r = self::request('GET', 'p=' . rawurlencode(self::HOSTILE_DIR) . '&read=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertSame(self::CSP, $r['headers']['content-security-policy'] ?? null);
+        foreach (['<script>alert', '<img src=x', '<svg onload', '</script><script', "l'été"] as $raw) {
+            $this->assertStringNotContainsString($raw, $r['body']);
+        }
+        // Only our own external scripts: one per tag, no inline code.
+        $this->assertSame(2, preg_match_all('#<script src="/share/[a-z-]+\.js\?v=\d+"></script>#', $r['body']));
+        $this->assertSame(3, substr_count($r['body'], '<script'));
+
+        $books = self::pageJson($r['body'], 'sb-reader-data');
+        $names = array_column($books, 'name');
+        sort($names);
+        $expected = array_map(fn($n) => json_decode(json_encode($n, JSON_INVALID_UTF8_SUBSTITUTE)), self::HOSTILE_BOOKS);
+        sort($expected);
+        $this->assertSame($expected, $names);
+        foreach ($books as $b) {
+            $this->assertMatchesRegularExpression('#^/dl/inlinetest\?p=[A-Za-z0-9%._~-]+&inline=1$#', $b['url']);
+        }
+        // The raw bytes reach the file, even when the shown name had to be repaired.
+        $raw = self::request('GET', 'p=' . rawurlencode(self::HOSTILE_DIR . "/\xff\xfe.pdf") . '&inline=1');
+        $this->assertSame(200, $raw['code']);
+    }
+
+    public function testHostileNamesStayInertOnTheAudiobookPage(): void
+    {
+        $r = self::request('GET', 'p=' . rawurlencode(self::HOSTILE_DIR) . '&listen=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertSame(self::CSP, $r['headers']['content-security-policy'] ?? null);
+        foreach (['<script>alert', '<img src=x', '<svg onload', '</script><script'] as $raw) {
+            $this->assertStringNotContainsString($raw, $r['body']);
+        }
+        $this->assertSame(self::HOSTILE_TRACKS, array_column(self::pageJson($r['body'], 'asc-audiobook-data'), 'name'));
+    }
+
+    public function testPlayOnAVideoStillOpensTheVideoPlayer(): void
+    {
+        $r = self::request('GET', 'p=Films/clip.mp4&play=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertArrayNotHasKey('content-security-policy', $r['headers']);
+        $this->assertStringContainsString('<video id="player"', $r['body']);
+        $this->assertStringNotContainsString('sb-reader-data', $r['body']);
+    }
+
+    public function testPlayOnAudioStillOpensThePlayer(): void
+    {
+        $r = self::request('GET', 'p=Livres/song.mp3&play=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertArrayNotHasKey('content-security-policy', $r['headers']);
+        $this->assertStringContainsString('<audio id="player"', $r['body']);
+    }
+
+    /** @dataProvider notABookProvider */
+    public function testPlayOnOtherFilesIsAPlainDownload(string $file): void
+    {
+        $r = self::request('GET', 'p=Livres/' . $file . '&play=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertArrayNotHasKey('content-security-policy', $r['headers']);
+        $this->assertStringStartsWith('attachment', $r['headers']['content-disposition'] ?? '');
+    }
+
+    public static function notABookProvider(): array
+    {
+        return ['html' => ['page.html'], 'epub when disabled' => ['x.epub']];
+    }
+
+    /** @dataProvider escapeProvider */
+    public function testNothingOutsideTheShareIsReachable(string $query): void
+    {
+        $r = self::request('GET', $query);
+        $this->assertSame(403, $r['code']);
+        $this->assertStringNotContainsString('secret', $r['body']);
+    }
+
+    public static function escapeProvider(): array
+    {
+        return [
+            'dot-dot reader' => ['p=Livres/../../secret&read=1'],
+            'dot-dot play' => ['p=../secret/secret.pdf&play=1'],
+            'symlinked folder' => ['p=out&read=1'],
+            'symlinked folder audio' => ['p=out&listen=1'],
+            'symlinked book inline' => ['p=Leak/leak.pdf&inline=1'],
+            'symlinked book play' => ['p=Leak/leak.pdf&play=1'],
+        ];
     }
 }
