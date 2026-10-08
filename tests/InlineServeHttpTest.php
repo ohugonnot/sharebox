@@ -376,6 +376,56 @@ class InlineServeHttpTest extends TestCase
         $this->assertSame(206, self::request('GET', 'token=filelink&inline=1', ['Range: bytes=0-9'])['code']);
     }
 
+    private static function pdo(): PDO
+    {
+        return new PDO('sqlite:' . self::$work . '/db.sqlite');
+    }
+
+    private static function addFileLink(string $token, int $max): void
+    {
+        self::pdo()->prepare("INSERT INTO links (token, path, type, name, max_downloads) VALUES (?, ?, 'file', 'mine.pdf', ?)")
+            ->execute([$token, self::$work . '/d/mine.pdf', $max]);
+    }
+
+    /** @return array{0:int, 1:int} [download_count, download_logs rows] */
+    private static function counted(string $token): array
+    {
+        $pdo = self::pdo();
+        $st = $pdo->prepare('SELECT id, download_count FROM links WHERE token = ?');
+        $st->execute([$token]);
+        $row = $st->fetch(PDO::FETCH_ASSOC);
+        $logs = $pdo->prepare('SELECT COUNT(*) FROM download_logs WHERE link_id = ?');
+        $logs->execute([$row['id']]);
+        return [(int)$row['download_count'], (int)$logs->fetchColumn()];
+    }
+
+    public function testInlineOnAFileLinkCountsAsADownload(): void
+    {
+        self::addFileLink('cnt-get', 1);
+        $r = self::request('GET', 'token=cnt-get&inline=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertSame(self::$content, $r['body']);
+        $this->assertSame([1, 1], self::counted('cnt-get'));
+        $this->assertSame(410, self::request('GET', 'token=cnt-get&inline=1')['code']);
+        $this->assertSame([1, 1], self::counted('cnt-get'));
+    }
+
+    public function testRangeAndHeadOnAFileLinkAreNotCounted(): void
+    {
+        // pdf.js reads a book by Range after one plain GET: only that GET is a download.
+        self::addFileLink('cnt-range', 5);
+        $this->assertSame(206, self::request('GET', 'token=cnt-range&inline=1', ['Range: bytes=0-99'])['code']);
+        $this->assertSame(200, self::request('HEAD', 'token=cnt-range&inline=1')['code']);
+        $this->assertSame([0, 0], self::counted('cnt-range'));
+    }
+
+    public function testInlineInAFolderLinkIsNotCounted(): void
+    {
+        $before = self::counted('inlinetest');
+        $this->assertSame(200, self::request('GET', 'p=Livres/book.pdf&inline=1')['code']);
+        $this->assertSame($before, self::counted('inlinetest'));
+    }
+
     public function testListingKeepsNoCsp(): void
     {
         $r = self::request('GET', 'p=Livres');

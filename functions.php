@@ -1437,6 +1437,25 @@ function log_activity(string $event_type, ?string $username, ?string $ip, ?strin
 }
 
 /**
+ * Counts one download of a file link; false when the limit is already reached.
+ * The UPDATE is atomic: two parallel requests cannot both take the last download.
+ */
+function link_count_download(PDO $db, array $link): bool
+{
+    $updated = $db->prepare("UPDATE links SET download_count = download_count + 1 WHERE id = :id AND (max_downloads IS NULL OR max_downloads = 0 OR download_count < max_downloads)");
+    $updated->execute([':id' => $link['id']]);
+    if ($updated->rowCount() === 0 && (int)($link['max_downloads'] ?? 0) > 0) return false;
+    $db->prepare("INSERT INTO download_logs (link_id, ip) VALUES (?, ?)")
+       ->execute([(int)$link['id'], $_SERVER['REMOTE_ADDR'] ?? '']);
+    $purgeFlag = sys_get_temp_dir() . '/sharebox_purge_dllogs';
+    if (!file_exists($purgeFlag) || (time() - filemtime($purgeFlag)) > 3600) {
+        $db->exec("DELETE FROM download_logs WHERE downloaded_at < datetime('now', '-30 days')");
+        @touch($purgeFlag);
+    }
+    return true;
+}
+
+/**
  * Serve a file — nginx (X-Accel-Redirect) or PHP direct with Range support.
  * Auto-detects based on XACCEL_PREFIX: non-empty → nginx, empty → PHP.
  */
