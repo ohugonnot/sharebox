@@ -3,6 +3,8 @@
  * Fonctions pures réutilisables — extraites de download.php et ctrl.php
  */
 
+require_once __DIR__ . '/media_kinds.php';
+
 // ── Tuning constants ────────────────────────────────────────────────────────
 // Adjust these to match your hardware. See CLAUDE.md for rationale.
 
@@ -286,7 +288,7 @@ function get_stream_mime(string $ext): ?string {
         'mkv' => 'video/x-matroska',
         'avi' => 'video/x-msvideo',
         'mp3' => 'audio/mpeg',
-        'aac', 'm4a' => 'audio/mp4',
+        'aac', 'm4a', 'm4b' => 'audio/mp4',
         'ogg', 'oga', 'opus' => 'audio/ogg',
         'flac' => 'audio/flac',
         'wav' => 'audio/wav',
