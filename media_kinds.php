@@ -139,3 +139,24 @@ function page_json(mixed $data): string {
     $json = json_encode($data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE);
     return $json === false ? '[]' : $json;
 }
+
+function book_readable(string $name): bool {
+    $kind = reader_kind($name);
+    return $kind === 'pdf' || ($kind === 'epub' && READER_EPUB_ENABLED);
+}
+
+/**
+ * Boutons du listing : « Lire » sur les lignes de livres, et un raccourci de barre d'outils
+ *
+ * @return array{rowRead:bool, toolbar:?array{param:string, label:string}}
+ */
+function listing_actions(?string $kind, int $nBooks, int $nTracks): array {
+    $toolbar = null;
+    if ($kind === 'audiobook') {
+        $toolbar = ['param' => 'listen', 'label' => 'Écouter · ' . $nTracks . ' pistes'];
+    } elseif ($kind === 'library' && $nBooks >= 2) {
+        $toolbar = ['param' => 'read', 'label' => 'Bibliothèque · ' . $nBooks . ' livres'];
+    }
+    // A null kind with books means a video folder: the video player owns it.
+    return ['rowRead' => $kind !== null, 'toolbar' => $toolbar];
+}

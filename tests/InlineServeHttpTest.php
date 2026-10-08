@@ -31,6 +31,8 @@ class InlineServeHttpTest extends TestCase
         file_put_contents("$dir/song.mp3", 'ID3 fake');
         mkdir(self::$work . '/share/Audio');
         foreach (['02.mp3', '01.mp3', 'folder.jpg'] as $f) file_put_contents(self::$work . "/share/Audio/$f", 'x');
+        mkdir(self::$work . '/share/Films');
+        foreach (['clip.mp4', 'manuel.pdf', 'notice.pdf'] as $f) file_put_contents(self::$work . "/share/Films/$f", 'x');
         file_put_contents("$dir/probe.pdf", self::$content);
 
         $db = self::$work . '/db.sqlite';
@@ -252,5 +254,30 @@ class InlineServeHttpTest extends TestCase
         $r = self::request('GET', 'p=Livres');
         $this->assertSame(200, $r['code']);
         $this->assertArrayNotHasKey('content-security-policy', $r['headers']);
+    }
+
+    public function testLibraryListingOffersReaderButtons(): void
+    {
+        $r = self::request('GET', 'p=Livres');
+        $this->assertStringContainsString('href="/dl/inlinetest?p=Livres&amp;read=1"', $r['body']);
+        $this->assertStringContainsString('Bibliothèque · 2 livres', $r['body']);
+        $this->assertStringContainsString('data-play="/dl/inlinetest?p=Livres%2Fbook.pdf&amp;play=1"', $r['body']);
+        $this->assertStringNotContainsString('data-play="/dl/inlinetest?p=Livres%2Fpage.html', $r['body']);
+    }
+
+    public function testAudiobookListingOffersListen(): void
+    {
+        $r = self::request('GET', 'p=Audio');
+        $this->assertStringContainsString('href="/dl/inlinetest?p=Audio&amp;listen=1"', $r['body']);
+        $this->assertStringContainsString('Écouter · 2 pistes', $r['body']);
+    }
+
+    public function testVideoFolderGetsNoReaderButton(): void
+    {
+        $r = self::request('GET', 'p=Films');
+        $this->assertStringNotContainsString('read=1', $r['body']);
+        $this->assertStringNotContainsString('listen=1', $r['body']);
+        $this->assertStringNotContainsString('manuel.pdf&amp;play=1', $r['body']);
+        $this->assertStringContainsString('clip.mp4&amp;play=1', $r['body']);
     }
 }

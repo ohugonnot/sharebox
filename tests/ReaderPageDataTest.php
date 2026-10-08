@@ -95,4 +95,32 @@ class ReaderPageDataTest extends TestCase
     {
         $this->assertSame('[]', page_json([NAN]));
     }
+
+    /**
+     * @dataProvider listingActionsProvider
+     * @param array{param:string,label:string}|null $toolbar
+     */
+    public function testListingActions(?string $kind, int $books, int $tracks, bool $rowRead, ?array $toolbar): void
+    {
+        $this->assertSame(['rowRead' => $rowRead, 'toolbar' => $toolbar], listing_actions($kind, $books, $tracks));
+    }
+
+    public static function listingActionsProvider(): array
+    {
+        return [
+            'livre audio + livret' => ['audiobook', 1, 12, true, ['param' => 'listen', 'label' => 'Écouter · 12 pistes']],
+            'bibliothèque' => ['library', 3, 0, true, ['param' => 'read', 'label' => 'Bibliothèque · 3 livres']],
+            'un seul livre : pas de bibliothèque' => ['library', 1, 1, true, null],
+            'epub seuls, désactivés' => ['library', 0, 0, true, null],
+            'dossier vidéo' => [null, 2, 10, false, null],
+            'rien' => [null, 0, 1, false, null],
+        ];
+    }
+
+    public function testBookReadableFollowsTheEpubFlag(): void
+    {
+        $this->assertTrue(book_readable('a.PDF'));
+        $this->assertSame(READER_EPUB_ENABLED, book_readable('a.epub'));
+        $this->assertFalse(book_readable('a.mp3'));
+    }
 }
