@@ -14,7 +14,7 @@ function media_ext(string $name): string {
 }
 
 /**
- * 'audiobook', 'library' ou null pour les fichiers (non-dossiers) d'un dossier
+ * Expects file names only: the caller drops folders, even ones named like media.
  *
  * @param string[] $names
  */
@@ -52,8 +52,6 @@ function readable_book_names(array $names, bool $epub = READER_EPUB_ENABLED): ar
 }
 
 /**
- * Image de couverture : cover.*, folder.*, front.*, sinon la première image
- *
  * @param string[] $names
  */
 function folder_cover(array $names): ?string {
@@ -68,17 +66,11 @@ function folder_cover(array $names): ?string {
     return $images[0];
 }
 
-/**
- * 'pdf', 'epub' ou null selon l'extension
- */
 function reader_kind(string $name): ?string {
     $ext = media_ext($name);
     return in_array($ext, MEDIA_BOOK_EXTS, true) ? $ext : null;
 }
 
-/**
- * Mime servi par ?inline=1 ; null = refusé (404)
- */
 function inline_mime(string $name): ?string {
     return match (media_ext($name)) {
         'pdf' => 'application/pdf',
@@ -97,8 +89,6 @@ function share_entry_url(string $token, string $subPath, string $name, string $m
 }
 
 /**
- * Champs communs aux pages liseuse et lecteur audio d'un dossier
- *
  * @param string[] $names
  * @return array{cover:?string, backUrl:string, storageToken:string}
  */
@@ -113,8 +103,6 @@ function media_page_common(array $names, string $token, string $subPath): array 
 }
 
 /**
- * Données de la liseuse pour les fichiers d'un dossier
- *
  * @param array<int, array{name:string, size:int, mtime:int}> $files
  * @return array{books:list<array{name:string,url:string,kind:string,size:int,mtime:int}>, open:?string, libBase:string, cover:?string, backUrl:string, storageToken:string}
  */
@@ -138,8 +126,6 @@ function reader_page_data(array $files, string $token, string $subPath, ?string 
 }
 
 /**
- * Données du lecteur audio : pistes du dossier en tri naturel
- *
  * @param string[] $names
  * @return array{tracks:list<array{name:string,url:string}>, cover:?string, backUrl:string, storageToken:string}
  */
@@ -162,8 +148,6 @@ function book_readable(string $name, bool $epub = READER_EPUB_ENABLED): bool {
 }
 
 /**
- * Boutons du listing : « Lire » sur les lignes de livres, et un raccourci de barre d'outils
- *
  * @param string[] $names
  * @return array{rowRead:bool, toolbar:?array{param:string, label:string}}
  */
