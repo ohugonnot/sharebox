@@ -661,7 +661,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .gear-select { flex:1; padding:.28rem .5rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.04); color:var(--text-primary); font-family:var(--font-sans); font-size:.78rem; outline:none; cursor:pointer; -webkit-appearance:none; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right .4rem center; padding-right:1.4rem; }
 .gear-select:focus { border-color:var(--accent); }
 .gear-select option { background:#1a1d28; color:#e8eaf0; }
-@media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row{min-height:44px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem}}
+@media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row,.btn-media{min-height:44px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem}}
 @media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-box{flex:1;width:auto;min-width:80px}.toolbar-info{display:none}.gear-panel{right:-1rem;min-width:240px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}}
 /* ── Continue Watching ── */
 .cw-section{margin-bottom:1.5rem}
@@ -704,7 +704,7 @@ HTML;
             count(array_filter($fileNames, fn($n) => in_array(media_ext($n), MEDIA_AUDIO_EXTS, true))));
         if ($listingActions['toolbar'] !== null) {
             $mediaUrl = $baseUrl . '?' . ($subPath ? 'p=' . rawurlencode($subPath) . '&' : '') . $listingActions['toolbar']['param'] . '=1';
-            echo '<a class="btn-zip" style="background:transparent;border:1px solid var(--accent);color:var(--accent)" href="' . htmlspecialchars($mediaUrl) . '">' . $listingActions['toolbar']['label'] . '</a>';
+            echo '<a class="btn-zip btn-media" style="background:transparent;border:1px solid var(--accent);color:var(--accent)" href="' . htmlspecialchars($mediaUrl) . '">' . $listingActions['toolbar']['label'] . '</a>';
         }
 
         // Barre de tri (seulement si des fichiers à trier)
