@@ -345,3 +345,52 @@ test('formatSize: bad input does not throw', () => {
   for (const v of [NaN, undefined, null, -5]) assert.doesNotThrow(() => rd.formatSize(v));
   assert.equal(typeof rd.formatSize(NaN), 'string');
 });
+
+test('needsScriptSandbox: true only on pure WebKit', () => {
+  const U = {
+    iphoneSafari: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+    iphoneChrome: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/124.0.6367.111 Mobile/15E148 Safari/604.1',
+    iphoneFirefox: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/125.0 Mobile/15E148 Safari/605.1.15',
+    ipodSafari: 'Mozilla/5.0 (iPod touch; CPU iPhone OS 15_8 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.6 Mobile/15E148 Safari/604.1',
+    ipadSafari: 'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+    macSafari: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+    chromeWin: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    chromeMac: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    chromeLinux: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    chromiumLinux: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Ubuntu Chromium/124.0.0.0 Chrome/124.0.0.0 Safari/537.36',
+    chromeAndroid: 'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+    androidStock: 'Mozilla/5.0 (Linux; U; Android 4.4.2; en-us; SM-T530) AppleWebKit/534.30 (KHTML, like Gecko) Version/4.0 Safari/534.30',
+    edgeWin: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.2478.67',
+    firefoxWin: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+    firefoxLinux: 'Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0',
+    firefoxAndroid: 'Mozilla/5.0 (Android 14; Mobile; rv:125.0) Gecko/125.0 Firefox/125.0',
+  };
+  const cases = [
+    ['iphoneSafari', 'iPhone', 5, true], ['iphoneChrome', 'iPhone', 5, true], ['iphoneFirefox', 'iPhone', 5, true],
+    ['ipodSafari', 'iPhone', 5, true], ['ipadSafari', 'iPad', 5, true],
+    ['macSafari', 'MacIntel', 0, true],
+    ['chromeWin', 'Win32', 0, false], ['chromeMac', 'MacIntel', 0, false], ['chromeLinux', 'Linux x86_64', 0, false],
+    ['chromiumLinux', 'Linux x86_64', 0, false], ['chromeAndroid', 'Linux armv81', 5, false],
+    ['androidStock', 'Linux armv7l', 5, false],
+    ['edgeWin', 'Win32', 0, false], ['firefoxWin', 'Win32', 0, false], ['firefoxLinux', 'Linux x86_64', 0, false],
+    ['firefoxAndroid', 'Linux armv81', 5, false],
+  ];
+  assert.ok(cases.length >= 12);
+  for (const [k, platform, touch, want] of cases) {
+    assert.equal(rd.needsScriptSandbox(U[k], platform, touch), want, k);
+  }
+  // iPadOS 13+ in desktop mode: Mac UA, platform MacIntel, touch screen
+  assert.equal(rd.needsScriptSandbox(U.macSafari, 'MacIntel', 5), true, 'ipados desktop mode');
+  assert.equal(rd.needsScriptSandbox(U.macSafari, 'MacIntel', 1), true, 'mac safari, 1 touch point is still Safari');
+  assert.equal(rd.needsScriptSandbox(U.chromeMac, 'MacIntel', 5), true, 'iPadOS desktop-mode Chrome UA is Mac-like: MacIntel+touch rule');
+  assert.equal(rd.needsScriptSandbox(U.chromeMac, 'MacIntel', 0), false, 'mac chrome without touch');
+  assert.equal(rd.needsScriptSandbox(U.chromeMac, 'MacIntel', 1), false, 'maxTouchPoints must be > 1');
+  assert.equal(rd.needsScriptSandbox(U.chromeWin, 'MacIntel', 5), true, 'platform rule applies whatever the UA says');
+});
+
+test('needsScriptSandbox: missing or odd inputs never throw and stay fail-closed (false)', () => {
+  assert.equal(rd.needsScriptSandbox('', '', 0), false);
+  assert.equal(rd.needsScriptSandbox(undefined, undefined, undefined), false);
+  assert.equal(rd.needsScriptSandbox(null, null, null), false);
+  assert.equal(rd.needsScriptSandbox('Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/125.0', 'MacIntel', undefined), false);
+});

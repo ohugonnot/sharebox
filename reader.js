@@ -23,6 +23,7 @@
     var PULL_PX = 40;
     var ZONE_SIDE = 0.35;
     var CLICK_SLOP_PX = 10;
+    var EPUB_UNAVAILABLE = 'EPUB indisponible : le lecteur ne peut pas afficher ce livre ici.';
 
     // ─── Pure helpers ────────────────────────────────────────────────────────
 
@@ -214,6 +215,60 @@
             }
         }
         return null;
+    }
+
+    // True on WebKit, which needs allow-scripts in the chapter iframe for key and touch events
+    // (https://bugs.webkit.org/show_bug.cgi?id=218086). Not feature-detectable: every iOS browser is
+    // WebKit, iPadOS 13+ reports MacIntel with touch points, desktop Safari has no Chrome/Edge/Android token.
+    function needsScriptSandbox(userAgent, platform, maxTouchPoints) {
+        var ua = String(userAgent || '');
+        if (/iPhone|iPad|iPod/.test(ua)) return true;
+        if (platform === 'MacIntel' && maxTouchPoints > 1) return true;
+        return /AppleWebKit/.test(ua) && !/Chrome|Chromium|CriOS|Edg|Android/.test(ua);
+    }
+
+    function withoutScripts(value) {
+        return String(value).split(/\s+/).filter(function (t) {
+            return t && t.toLowerCase() !== 'allow-scripts';
+        }).join(' ');
+    }
+
+    // foliate sets sandbox="allow-same-origin allow-scripts" on detached iframes inside closed shadow roots,
+    // so the only hook is the prototype. Counted so nested holders share one patch.
+    var sandboxGuard = { depth: 0, proto: null, hadOwn: false, prev: null, hook: null };
+
+    function lockIframeSandbox(win) {
+        var g = sandboxGuard;
+        if (g.depth++ > 0) return;
+        var proto = win.HTMLIFrameElement.prototype;
+        var prev = proto.setAttribute;
+        var hook = function setAttribute(name, value) {
+            // Inert once released, in case another script wrapped it and kept it in its chain.
+            if (g.hook === hook && String(name).toLowerCase() === 'sandbox') value = withoutScripts(value);
+            return prev.call(this, name, value);
+        };
+        g.proto = proto;
+        g.hadOwn = Object.prototype.hasOwnProperty.call(proto, 'setAttribute');
+        g.prev = prev;
+        g.hook = hook;
+        proto.setAttribute = hook;
+    }
+
+    function unlockIframeSandbox() {
+        var g = sandboxGuard;
+        if (g.depth === 0 || --g.depth > 0) return;
+        if (g.proto.setAttribute === g.hook) {
+            if (g.hadOwn) g.proto.setAttribute = g.prev;
+            else delete g.proto.setAttribute;
+        }
+        g.proto = g.prev = g.hook = null;
+    }
+
+    function frameRunsScripts(frameDoc) {
+        var f = null;
+        try { f = frameDoc.defaultView.frameElement; } catch (e) { /* unreachable frame */ }
+        if (!f || !f.hasAttribute('sandbox')) return true;
+        return /(^|\s)allow-scripts(\s|$)/i.test(f.getAttribute('sandbox'));
     }
 
     // ─── DOM ─────────────────────────────────────────────────────────────────
@@ -669,13 +724,69 @@
             });
         }
 
-        var EPUB_CSP = '<meta http-equiv="Content-Security-Policy" content="script-src \'none\'; object-src \'none\'; frame-src \'none\'; base-uri \'none\'"/>';
+        var EPUB_POLICY = "script-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'";
+        var XHTML_NS = 'http://www.w3.org/1999/xhtml';
+        var BLANK_PAGE = '<html xmlns="' + XHTML_NS + '"><head><meta http-equiv="Content-Security-Policy" content="' +
+            EPUB_POLICY + '"/></head><body></body></html>';
 
-        function lockDocument(data) {
-            if (typeof data !== 'string') return data;
-            if (/<head(\s[^>]*)?>/i.test(data)) return data.replace(/<head(\s[^>]*)?>/i, function (m) { return m + EPUB_CSP; });
-            if (/<head(\s[^>]*)?\/>/i.test(data)) return data.replace(/<head((?:\s[^>]*?)?)\/>/i, function (m, a) { return '<head' + a + '>' + EPUB_CSP + '</head>'; });
-            return data.replace(/<html(\s[^>]*)?>/i, function (m) { return m + '<head>' + EPUB_CSP + '</head>'; });
+        // Re-parsed rather than patched as text: a regex can land in a comment, and XHTML allows
+        // a <script> before <head>. A meta CSP only counts inside head and for what follows it.
+        function lockDocument(data, type) {
+            if (typeof data !== 'string') return null;
+            var xml = /xhtml/i.test(type);
+            var d = new win.DOMParser().parseFromString(data, xml ? 'application/xhtml+xml' : 'text/html');
+            var html = d.documentElement;
+            if (!html || html.localName !== 'html' || (xml && d.getElementsByTagName('parsererror').length)) return null;
+            // An xml-stylesheet (XSLT) would build a new document without our meta.
+            Array.prototype.slice.call(d.childNodes).forEach(function (n) {
+                if (n.nodeType === 7) d.removeChild(n);
+            });
+            var head = d.head || d.createElementNS(XHTML_NS, 'head');
+            html.insertBefore(head, html.firstChild);
+            var meta = d.createElementNS(XHTML_NS, 'meta');
+            meta.setAttribute('http-equiv', 'Content-Security-Policy');
+            meta.setAttribute('content', EPUB_POLICY);
+            head.insertBefore(meta, head.firstChild);
+            return new win.XMLSerializer().serializeToString(d);
+        }
+
+        function svgSize(svg) {
+            var tag = (svg.match(/<svg\b[^>]*>/i) || [''])[0];
+            var num = /^\s*(\d+(?:\.\d+)?)(?:px)?\s*$/;
+            var vb = (tag.match(/\sviewBox\s*=\s*["']([^"']*)["']/i) || [])[1];
+            var p = vb ? vb.trim().split(/[\s,]+/) : [];
+            if (p.length === 4 && num.test(p[2]) && num.test(p[3])) return [p[2].match(num)[1], p[3].match(num)[1]];
+            var w = (tag.match(/\swidth\s*=\s*["']([^"']*)["']/i) || [])[1];
+            var h = (tag.match(/\sheight\s*=\s*["']([^"']*)["']/i) || [])[1];
+            if (w && h && num.test(w) && num.test(h)) return [w.match(num)[1], h.match(num)[1]];
+            return null;
+        }
+
+        // An SVG shown through <img> runs no script at all; as a frame document it would (no meta CSP in SVG).
+        // Limit: an image runs no fetch either, so raster images the SVG links to are not drawn.
+        function svgPage(svg) {
+            if (typeof svg !== 'string') return BLANK_PAGE;
+            var size = svgSize(svg);
+            return '<html xmlns="' + XHTML_NS + '"><head><meta http-equiv="Content-Security-Policy" content="' + EPUB_POLICY + '"/>' +
+                (size ? '<meta name="viewport" content="width=' + size[0] + ', height=' + size[1] + '"/>' : '') +
+                '<style>html,body{margin:0;height:100%}body{display:flex;align-items:center;justify-content:center}' +
+                'img{display:block;max-width:100%;max-height:100vh}</style></head><body><img alt="" src="data:image/svg+xml;charset=utf-8,' +
+                encodeURIComponent(svg) + '"/></body></html>';
+        }
+
+        // Chapters only: every (X)HTML document is locked; other spine types never reach a frame raw.
+        function guardResource(d, spine) {
+            var type = String(d.type);
+            if (/html/i.test(type)) {
+                d.data = Promise.resolve(d.data).then(function (data) {
+                    return lockDocument(data, type) || BLANK_PAGE;
+                });
+                return;
+            }
+            if (!spine[d.name]) return;
+            if (/^image\/(png|jpeg|gif|webp|avif)$/i.test(type)) return;
+            d.data = /^image\/svg\+xml$/i.test(type) ? Promise.resolve(d.data).then(svgPage) : BLANK_PAGE;
+            d.type = 'application/xhtml+xml';
         }
 
         async function openEpub(me, url) {
@@ -692,17 +803,23 @@
             view.className = 'rd-epub-view';
             epubHost.appendChild(view);
             me.view = view;
+            var nav = win.navigator || {};
+            var strict = !needsScriptSandbox(nav.userAgent, nav.platform, nav.maxTouchPoints);
+            // Held until closeBook: foliate creates a new iframe for each chapter it shows.
+            if (strict) {
+                lockIframeSandbox(win);
+                me.sandboxLocked = true;
+            }
             await view.open(file);
             if (cur !== me) return;
             // foliate keeps inline scripts and its iframes are same-origin: forbid script in every chapter.
             var transform = view.book && view.book.transformTarget;
-            if (transform) {
-                transform.addEventListener('data', function (ev) {
-                    var d = ev.detail;
-                    if (!d || !/html/i.test(String(d.type))) return;
-                    d.data = Promise.resolve(d.data).then(lockDocument);
-                });
-            }
+            if (!transform) throw new Error('no transform hook');
+            var spine = {};
+            (view.book.sections || []).forEach(function (s) { if (s && s.id) spine[s.id] = true; });
+            transform.addEventListener('data', function (ev) {
+                if (ev.detail) guardResource(ev.detail, spine);
+            });
             try {
                 var cs = win.getComputedStyle(rootEl);
                 var bg = cs.getPropertyValue('--as-surface') || '#fff';
@@ -724,8 +841,26 @@
                 if (f < 0.005 && !readState().files[me.name]) return;
                 persist({ cfi: d.cfi, fraction: f });
             });
+            // foliate's default is window.open(href) for any scheme, javascript: included, with opener access.
+            view.addEventListener('external-link', function (e) {
+                e.preventDefault();
+                var href = e.detail && e.detail.href;
+                if (/^(https?|mailto):/i.test(String(href))) win.open(href, '_blank', 'noopener');
+            });
             view.addEventListener('load', function (e) {
                 var d = e.detail && e.detail.doc;
+                // Fail closed if the sandbox patch was bypassed (another script, a foliate update).
+                if (d && strict && frameRunsScripts(d)) {
+                    // Deferred past foliate's own frame callbacks on this document; the timer covers hidden tabs (no rAF).
+                    var shut = function () {
+                        if (cur !== me) return;
+                        showLibrary();
+                        showError(EPUB_UNAVAILABLE);
+                    };
+                    win.requestAnimationFrame(function () { win.setTimeout(shut, 0); });
+                    win.setTimeout(shut, 250);
+                    return;
+                }
                 if (d) {
                     d.addEventListener('keydown', onKey);
                     attachReveal(d);
@@ -763,6 +898,10 @@
                 try { me.view.book.destroy(); } catch (e) { /* frees chapter blob URLs */ }
                 try { me.view.close(); } catch (e) { /* done */ }
                 me.view.remove();
+            }
+            if (me.sandboxLocked) {
+                me.sandboxLocked = false;
+                unlockIframeSandbox();
             }
             canvas.width = canvas.height = 0;
         }
@@ -822,7 +961,7 @@
                     ? 'Ce navigateur est trop ancien pour la liseuse PDF. Télécharger le fichier.'
                     : isPdf
                     ? 'PDF indisponible : le fichier n’a pas pu être chargé.'
-                    : 'EPUB indisponible : le lecteur ne peut pas afficher ce livre ici.');
+                    : EPUB_UNAVAILABLE);
                 return;
             }
             if (cur !== me) return;
@@ -1184,6 +1323,7 @@
         resumeTarget: resumeTarget,
         lastRead: lastRead,
         neighbor: neighbor,
+        needsScriptSandbox: needsScriptSandbox,
         init: init
     };
 }));
