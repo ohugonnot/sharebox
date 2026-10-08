@@ -76,15 +76,21 @@ function media_page_close(array $js): void {
  *
  * @return array{0:string, 1:string} [chemin réel, sous-chemin dans le partage]
  */
-function media_page_folder(string $resolvedPath, string $subPath): array {
+function media_page_folder(string $resolvedPath, string $subPath, string $basePath): array {
     $subPath = trim($subPath, '/');
     if (!is_file($resolvedPath)) return [$resolvedPath, $subPath];
-    return [dirname($resolvedPath), str_contains($subPath, '/') ? dirname($subPath) : ''];
+    // A symlinked book: list the folder of the link, the one the URLs are built on.
+    $dir = realpath(dirname($basePath . '/' . $subPath));
+    return [is_path_within($dir, $basePath) ? $dir : dirname($resolvedPath), str_contains($subPath, '/') ? dirname($subPath) : ''];
 }
 
 /**
+ * Same entries as the listing's files: no dot names, no HIDDEN_DIRS, no folders (symlinked or not)
+ *
  * @return string[]
  */
 function media_page_names(string $dir): array {
-    return array_values(array_filter(scandir($dir) ?: [], fn($n) => $n[0] !== '.'));
+    $hidden = defined('HIDDEN_DIRS') ? HIDDEN_DIRS : [];
+    return array_values(array_filter(scandir($dir) ?: [],
+        fn($n) => $n[0] !== '.' && !in_array($n, $hidden, true) && !is_dir($dir . '/' . $n)));
 }

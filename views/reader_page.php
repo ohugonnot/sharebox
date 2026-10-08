@@ -4,21 +4,22 @@ require_once __DIR__ . '/media_layout.php';
 
 /** @var string $resolvedPath */
 /** @var string $subPath */
+/** @var string $basePath */
 /** @var string $token */
 /** @var array{name:string} $link */
 
-[$rdDir, $rdSub] = media_page_folder($resolvedPath, $subPath);
+[$rdDir, $rdSub] = media_page_folder($resolvedPath, $subPath, $basePath);
 $rdFiles = [];
 foreach (media_page_names($rdDir) as $rdName) {
     $rdFull = $rdDir . '/' . $rdName;
-    // Only books are stat'ed: the folder may hold hundreds of other files on a busy disk.
+    // Only books pay filesize/filemtime: the folder may hold hundreds of other files on a busy disk.
     if (reader_kind($rdName) === null) {
         $rdFiles[] = ['name' => $rdName, 'size' => 0, 'mtime' => 0];
     } elseif (is_file($rdFull)) {
         $rdFiles[] = ['name' => $rdName, 'size' => (int)filesize($rdFull), 'mtime' => (int)filemtime($rdFull)];
     }
 }
-$rd = reader_page_data($rdFiles, $token, $rdSub, is_file($resolvedPath) ? basename($resolvedPath) : null, READER_EPUB_ENABLED);
+$rd = reader_page_data($rdFiles, $token, $rdSub, is_file($resolvedPath) ? basename($subPath) : null, READER_EPUB_ENABLED);
 $rdTitle = $rdSub !== '' ? basename($rdSub) : $link['name'];
 stream_log('READER open | ' . ($rdSub ?: '(root)') . ' | books=' . count($rd['books']));
 

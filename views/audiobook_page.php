@@ -4,10 +4,11 @@ require_once __DIR__ . '/media_layout.php';
 
 /** @var string $resolvedPath */
 /** @var string $subPath */
+/** @var string $basePath */
 /** @var string $token */
 /** @var array{name:string} $link */
 
-[$abDir, $abSub] = media_page_folder($resolvedPath, $subPath);
+[$abDir, $abSub] = media_page_folder($resolvedPath, $subPath, $basePath);
 $ab = audiobook_page_data(media_page_names($abDir), $token, $abSub);
 $abTitle = $abSub !== '' ? basename($abSub) : $link['name'];
 stream_log('AUDIOBOOK open | ' . ($abSub ?: '(root)') . ' | tracks=' . count($ab['tracks']));

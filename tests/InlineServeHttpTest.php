@@ -35,7 +35,15 @@ class InlineServeHttpTest extends TestCase
         file_put_contents("$dir/page.html", '<script>alert(1)</script>');
         file_put_contents("$dir/song.mp3", 'ID3 fake');
         mkdir(self::$work . '/share/Audio');
-        foreach (['02.mp3', '01.mp3', 'folder.jpg'] as $f) file_put_contents(self::$work . "/share/Audio/$f", 'x');
+        foreach (['02.mp3', '01.mp3', 'folder.jpg', 'hidden.mp3'] as $f) file_put_contents(self::$work . "/share/Audio/$f", 'x');
+        // Folders with media names, real or symlinked, and a HIDDEN_DIRS name: never tracks or books.
+        mkdir(self::$work . '/share/Audio/x.mp3');
+        symlink(self::$work . '/share/Audio/x.mp3', self::$work . '/share/Audio/z.mp3');
+        mkdir("$dir/y.pdf");
+        // A book symlinked from another folder of the share.
+        mkdir(self::$work . '/share/Liens');
+        file_put_contents(self::$work . '/share/Liens/own.pdf', '%PDF-1.4');
+        symlink("$dir/book.pdf", self::$work . '/share/Liens/link.pdf');
         mkdir(self::$work . '/share/Films');
         foreach (['clip.mp4', 'manuel.pdf', 'notice.pdf'] as $f) file_put_contents(self::$work . "/share/Films/$f", 'x');
         file_put_contents("$dir/probe.pdf", self::$content);
@@ -54,6 +62,8 @@ class InlineServeHttpTest extends TestCase
         symlink(self::$work . '/secret', self::$work . '/share/out');
         mkdir(self::$work . '/share/Leak');
         symlink(self::$work . '/secret/secret.pdf', self::$work . '/share/Leak/leak.pdf');
+        // Reached through the symlinked folder, but points back inside the share.
+        symlink("$dir/book.pdf", self::$work . '/secret/back.pdf');
 
         $db = self::$work . '/db.sqlite';
         $download = realpath(__DIR__ . '/../download.php');
@@ -69,6 +79,7 @@ class InlineServeHttpTest extends TestCase
         define('SHAREBOX_BROWSE_ENTRY', true);
         define('READER_EPUB_ENABLED', false);
         define('STREAM_REMUX_ENABLED', false);
+        define('HIDDEN_DIRS', ['hidden.mp3']);
         \$_GET['token'] = 'inlinetest';
         require \$c['download'];
         PHP);
@@ -299,6 +310,35 @@ class InlineServeHttpTest extends TestCase
         $this->assertMatchesRegularExpression('#01\.mp3.*02\.mp3#s', $r['body']);
         $this->assertStringContainsString('id="asc-audiobook-data"', $r['body']);
         $this->assertStringContainsString('class="ab-cover" src="/dl/inlinetest?p=Audio%2Ffolder.jpg&amp;inline=1"', $r['body']);
+    }
+
+    public function testFoldersAndHiddenNamesAreNeverTracks(): void
+    {
+        $r = self::request('GET', 'p=Audio&listen=1');
+        $this->assertSame(['01.mp3', '02.mp3'], array_column(self::pageJson($r['body'], 'asc-audiobook-data'), 'name'));
+    }
+
+    public function testFoldersAreNeverBooks(): void
+    {
+        $r = self::request('GET', 'p=Livres&read=1');
+        $names = array_column(self::pageJson($r['body'], 'sb-reader-data'), 'name');
+        $this->assertSame(['book.pdf', 'probe.pdf'], $names);
+    }
+
+    public function testPlayOnASymlinkedBookListsTheFolderOfTheLink(): void
+    {
+        $r = self::request('GET', 'p=Liens/link.pdf&play=1');
+        $this->assertSame(200, $r['code']);
+        $this->assertStringContainsString('"open":"link.pdf"', $r['body']);
+        $books = self::pageJson($r['body'], 'sb-reader-data');
+        $this->assertSame(['link.pdf', 'own.pdf'], array_column($books, 'name'));
+        $this->assertSame('/dl/inlinetest?p=Liens%2Flink.pdf&inline=1', $books[0]['url']);
+    }
+
+    public function testPlayThroughAnEscapingFolderListsNothingOutside(): void
+    {
+        $r = self::request('GET', 'p=out/back.pdf&play=1');
+        $this->assertStringNotContainsString('secret', $r['body']);
     }
 
     public function testListingKeepsNoCsp(): void
