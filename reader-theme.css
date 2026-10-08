@@ -1,0 +1,45 @@
+/* Maps the portal palette used by reader.css and audiobook.css onto the sharebox one (css_public()). */
+:root {
+    --as-bg: var(--bg-deep);
+    --as-surface: var(--bg-surface);
+    --as-raised: var(--bg-elevated);
+    --as-border: rgba(255,255,255,.12);
+    --as-muted: var(--text-secondary);
+    --as-text: var(--text-primary);
+    --as-bright: #fff;
+    --as-accent: var(--accent);
+    --as-danger: var(--red);
+    --as-online: var(--green);
+}
+
+/* Portal page classes the reader builds on. */
+.browser-search {
+    background: var(--as-bg);
+    border: 1px solid var(--as-border);
+    border-radius: var(--radius-sm);
+    color: var(--as-text);
+    padding: .3rem .6rem;
+    font: inherit;
+    font-size: .875rem;
+    width: 100%;
+    outline: none;
+}
+.browser-search:focus { border-color: var(--as-accent); }
+.browser-sortbar { display: flex; gap: .25rem; margin-bottom: .5rem; }
+.bsort {
+    background: none;
+    border: none;
+    color: var(--as-muted);
+    font: inherit;
+    font-size: .78rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    padding: .25rem .5rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.bsort:hover { color: var(--as-bright); }
+.bsort.active { color: var(--as-accent); }
+.sort-arrow { display: inline-block; width: 1em; text-align: center; opacity: .5; }
+.sort-arrow.active { opacity: 1; }
