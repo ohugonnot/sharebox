@@ -72,6 +72,10 @@ Open `http://localhost:8080/share` -- done. See [Installation](#installation) fo
 
 ![Player in action](https://github.com/ohugonnot/sharebox/releases/download/v1.0.0/sharebox-demo.gif)
 
+**Reader** -- PDF reader (pdf.js) for folders of books: library with filter and sort, page and zoom controls, reading position kept in the browser. A « Lire » button appears on book rows, and a « Bibliothèque » shortcut on folders with 2+ books. EPUB is off for now (`READER_EPUB_ENABLED`, needs foliate-js, not shipped yet).
+
+**Audiobook / album player** -- folders with 2+ audio tracks (mp3, m4a, m4b, flac, ogg, opus, aac, wav) get an « Écouter » button: one page with the track list in natural order, the cover (`cover.*`, `folder.*`, `front.*` or the first image), and resume per folder. Detection works on names already listed (no extra disk access); a folder with any video stays a video folder.
+
 **Sharing** -- human-readable URLs (`/dl/batman-begins-2005-x7k2`), optional password (bcrypt), expiration, folder browsing with ZIP download, QR codes, email sharing.
 
 **Admin** -- file browser, link management, system dashboard (CPU, RAM, disk, network, temperatures, torrent activity via rtorrent SCGI).
@@ -169,6 +173,8 @@ Copy `nginx.conf.example` and adapt paths. Key points:
 #### Apache
 
 The `.htaccess` handles rewriting. Enable `mod_rewrite`, set `AllowOverride All`, and set `XACCEL_PREFIX` to `''` in `config.php` (Apache doesn't support X-Accel-Redirect).
+
+For the PDF reader, do not compress `?inline=1` responses: mod_deflate (and mod_proxy_fcgi without `ap_trust_cgilike_cl`) drop `Content-Length`, and pdf.js then downloads the whole file before showing page 1. Inside the `/dl/` block: `<If "%{QUERY_STRING} =~ /(^|&)inline=1(&|$)/">SetEnv no-gzip 1` / `SetEnv ap_trust_cgilike_cl 1</If>`.
 
 </details>
 
