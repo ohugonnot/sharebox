@@ -184,6 +184,18 @@ class InlineServeHttpTest extends TestCase
         $this->assertSame(self::$content, $r['body']);
     }
 
+    // Regression: the session's no-cache headers made the browser download the whole book on each open.
+    public function testInlineBookIsCacheable(): void
+    {
+        $r = self::request('GET', 'p=Livres/book.pdf&inline=1', ['Range: bytes=0-99']);
+        $this->assertSame(206, $r['code']);
+        $this->assertStringContainsString('private', $r['headers']['cache-control'] ?? '');
+        $this->assertStringContainsString('max-age=86400', $r['headers']['cache-control'] ?? '');
+        $this->assertStringNotContainsString('no-cache', $r['headers']['cache-control'] ?? '');
+        $this->assertArrayNotHasKey('pragma', $r['headers']);
+        $this->assertNotEmpty($r['headers']['last-modified'] ?? '');
+    }
+
     public function testRangeReturnsPartialContent(): void
     {
         $r = self::request('GET', 'p=Livres/book.pdf&inline=1', ['Range: bytes=100-199']);
@@ -517,12 +529,13 @@ class InlineServeHttpTest extends TestCase
         $this->assertStringContainsString('Écouter · 2 pistes', $r['body']);
     }
 
-    public function testVideoFolderGetsNoReaderButton(): void
+    // A book in a video folder gets its own read arrow, but the folder gets no library button.
+    public function testVideoFolderGetsNoFolderButtonButBooksKeepTheirArrow(): void
     {
         $r = self::request('GET', 'p=Films');
         $this->assertStringNotContainsString('read=1', $r['body']);
         $this->assertStringNotContainsString('listen=1', $r['body']);
-        $this->assertStringNotContainsString('manuel.pdf&amp;play=1', $r['body']);
+        $this->assertStringContainsString('manuel.pdf&amp;play=1', $r['body']);
         $this->assertStringContainsString('clip.mp4&amp;play=1', $r['body']);
     }
 
