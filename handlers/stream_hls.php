@@ -55,6 +55,12 @@ if ($mime && str_starts_with($mime, 'video/')) {
         exit;
     }
 
+    // A HEAD would start a detached ffmpeg (and take the UHD slot) for a playlist nobody reads.
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
+        header('Content-Type: application/vnd.apple.mpegurl');
+        exit;
+    }
+
     // Lancer ffmpeg HLS si pas déjà actif
     // flock protège contre les requêtes concurrentes qui lanceraient deux ffmpeg
     if (!is_dir($hlsDir)) mkdir($hlsDir, 0755, true);
