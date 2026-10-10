@@ -1,13 +1,13 @@
-# Copied by tools/sync-reader.sh on 2026-10-08T13:51:09Z
+# Copied by tools/sync-reader.sh on 2026-10-10T21:25:24Z
 # Source: /var/www/html/projet-v2
 # Do not edit these files here. Verify with: sha256sum -c reader/UPSTREAM.txt
-f0b097fb9014021b00ecda529a80b4c145cc882bbb36c75a90a39212f94e1acf  reader.js
-85798a0325a9839ad18fe67757d0902ea274558670ac298b0d3a270e1e854e9e  reader.css
+1811cebb1a920375d14b1c6d159829ec01641e231b3231a22f3bf30d12efcd72  reader.js
+79c3f73b5da9e07df1e8797d356f2b237956f26df2dd54aae0ebf76cc7efc405  reader.css
 8657391761e19516b00c287a3a94c1d5980bc6009d01f1d9f15c0b1d633d76dd  audiobook.js
 f14094f781f55332119a6f9267620f81a68433694a648ba39b4fbabab6291710  audiobook.css
 57456c8e0c81e46be31174b499ef77f2b9f5ee46d04412ba627320a36755d4c2  reader/pdfjs/pdf.min.mjs
 9536359f1b8367850d485731ca1d5e45c159a7b7a0912325e539937aa21ceb18  reader/pdfjs/pdf.worker.min.mjs
 0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594  reader/pdfjs/LICENSE
 70d96d938600f1f09a26505bb522b08d86a64657b6d0265408e13380eedd35a6  reader/VERSIONS.txt
-efac761495f1b8388e8d39ed29e475ba887196c010865dff2f675cd80d8b4607  tests/unit/reader.test.js
+646e1484aabeb5c005a302e9a8d3d25c0768a251f3616bc4cf426f1082589aec  tests/unit/reader.test.js
 a24fc55ead3be38905361eecd3609eaa55b737a70da3d7d4a2fc72f4d97e8d3c  tests/unit/audiobook.test.js
