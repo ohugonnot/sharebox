@@ -5,8 +5,8 @@
 # Network speed recording (dashboard graph)
 * * * * * www-data php /var/www/sharebox/cron/record_netspeed.php
 
-# Passive SQLite backup to share.db.bak (hourly)
-0 * * * * www-data php /var/www/sharebox/cron/backup_db.php
+# Passive SQLite backup to share.db.bak (daily: hourly copies were ~540 MB/day of writes on the HDD)
+0 3 * * * www-data php /var/www/sharebox/cron/backup_db.php
 
 
 # Cleanup stale HLS temp directories (older than 2h)
