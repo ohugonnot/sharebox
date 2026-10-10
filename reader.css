@@ -151,6 +151,7 @@
 }
 .rd-stage.rd-zoomed { touch-action: auto; }
 .rd-canvas { display: inline-block; max-width: none; background: #fff; vertical-align: top; }
+.rd-comic-img { display: inline-block; max-width: none; vertical-align: top; }
 .rd-stage-epub { overflow: hidden; height: calc(100vh - 11rem); height: calc(100dvh - 11rem); text-align: left; }
 .rd-stage-epub { touch-action: auto; }
 .rd-epub-host, .rd-epub-view { display: block; width: 100%; height: 100%; }
@@ -233,9 +234,9 @@
 }
 .rd-fs .rd-stage { padding: 0; background: var(--as-bg); }
 .rd-fs .rd-stage:not(.rd-zoomed) { overflow-x: hidden; }
-.rd-fs .rd-stage:not(.rd-zoomed) .rd-canvas { max-width: 100%; height: auto !important; }
+.rd-fs .rd-stage:not(.rd-zoomed) .rd-canvas, .rd-fs .rd-comic-img { max-width: 100%; height: auto !important; }
 .rd-fs .rd-stage:not(.rd-stage-epub) { display: flex; }
-.rd-fs .rd-canvas { flex: none; margin: auto; }
+.rd-fs .rd-canvas, .rd-fs .rd-comic-img { flex: none; margin: auto; }
 
 .rd-btn:focus-visible, .rd-book:focus-visible, .rd-book-dl:focus-visible, .rd-page-input:focus-visible,
 .rd-reader .bsort:focus-visible, .rd-reader .browser-search:focus-visible {

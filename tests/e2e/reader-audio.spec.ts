@@ -9,7 +9,7 @@
 import { test as base, expect, Page, Locator } from '@playwright/test';
 import * as fs from 'node:fs';
 import {
-  createFixtures, removeFixtures, startServer, snapshotTmp, cleanTmp, TestServer, HOSTILE_PDFS, HOSTILE_MP3S,
+  createFixtures, removeFixtures, startServer, snapshotTmp, cleanTmp, TestServer, HOSTILE_PDFS, HOSTILE_MP3S, COMIC_COLORS,
 } from './reader-audio-fixtures';
 
 const SHOTS = '/home/folken/sharebox-screens';
@@ -242,6 +242,239 @@ test.describe('livres: liseuse PDF', () => {
     expect(await pageNo(page)).toBe(10);
     await inkReady(page);
     await shot(page, 'reader-rapid-clicks');
+  });
+});
+
+// ---------------------------------------------------------------- (1b) bd
+
+test.describe('bd: liseuse CBZ/CBR', () => {
+  const comicImg = (page: Page) => tid(page, 'rd-viewer').locator('img').first();
+  /** Centre pixel of the displayed page image, read through a canvas (same origin: not tainted). */
+  const imgColor = (page: Page) => comicImg(page).evaluate((el) => {
+    const i = el as HTMLImageElement;
+    const c = document.createElement('canvas');
+    c.width = 1; c.height = 1;
+    const g = c.getContext('2d')!;
+    g.drawImage(i, 0, 0, i.naturalWidth, i.naturalHeight, 0, 0, 1, 1);
+    return Array.from(g.getImageData(0, 0, 1, 1).data.slice(0, 3));
+  });
+  const expectColor = (page: Page, n: number) => expect.poll(async () => {
+    const got = await imgColor(page).catch(() => [-1, -1, -1]);
+    return got.every((v, k) => Math.abs(v - COMIC_COLORS[n - 1][k]) <= 12);
+  }, { timeout: 10000, message: `page ${n} shows its own colour` }).toBe(true);
+  const imgLoaded = (page: Page) => expect.poll(
+    () => comicImg(page).evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth > 0).catch(() => false), { timeout: 10000 }).toBe(true);
+
+  async function openComic(page: Page, folder: string, name: string) {
+    await page.goto(url(folder));
+    await playBtn(page, name).click();
+    await tid(page, 'rd-viewer').waitFor({ state: 'visible' });
+  }
+  async function tapViewer(page: Page, pct: number) {
+    const b = (await tid(page, 'rd-viewer').boundingBox())!;
+    const x = Math.round(b.x + b.width * pct), y = Math.round(b.y + b.height * 0.5);
+    if (isMobile()) await page.touchscreen.tap(x, y); else await page.mouse.click(x, y);
+  }
+  /** Every request that names a comic archive. */
+  function trackArchiveRequests(page: Page) {
+    const seen: { url: string; type: string; len: number }[] = [];
+    page.on('response', (r) => {
+      if (!/\.(cbz|cbr)/i.test(decodeURIComponent(r.url()))) return;
+      seen.push({ url: r.url(), type: r.headers()['content-type'] || '', len: +(r.headers()['content-length'] || 0) });
+    });
+    return seen;
+  }
+  const pageNumbers = (reqs: string[]) => reqs.map((u) => /[?&]page=(\d+)/.exec(u)?.[1]).filter(Boolean).map(Number);
+
+  test('listing: bibliothèque et bouton Lire sur les BD', async ({ page }) => {
+    await page.goto(url('bd'));
+    await expect(page.locator('.row[data-type="file"]')).toHaveCount(2);
+    for (const n of ['a-comic.cbz', 'b-comic.cbr']) await expect(playBtn(page, n)).toHaveAttribute('title', 'Lire');
+    await expect(toolbarLink(page, 'read')).toHaveText(/Bibliothèque · 2 livres/);
+    await expect(toolbarLink(page, 'listen')).toHaveCount(0);
+    await toolbarLink(page, 'read').click();
+    await expect(tid(page, 'rd-book')).toHaveCount(2);
+    await shot(page, 'bd-library');
+  });
+
+  test('bibliothèque: le lien Télécharger d\'une BD donne l\'archive, pas inline=1', async ({ page, request }) => {
+    await page.goto(url('bd', '&read=1'));
+    const row = tid(page, 'rd-book').filter({ hasText: 'a-comic' });
+    await expect(row).toBeVisible();
+    // The download link sits next to the book button, not inside it.
+    const dl = page.locator('a[download][aria-label="Télécharger a-comic.cbz"]');
+    await expect(dl).toBeAttached();
+    const href = await dl.getAttribute('href');
+    expect(href).toBeTruthy();
+    expect(href).not.toMatch(/[?&]inline=1/);
+    const r = await request.get(new URL(href!, page.url()).toString());
+    expect(r.status()).toBe(200);
+    expect((await r.body()).subarray(0, 2).toString('latin1')).toBe('PK');
+  });
+
+  test('cbz: page 1, compteur, navigation bouton / clavier / zone tactile, jamais l\'archive entière', async ({ page }) => {
+    const seen = trackArchiveRequests(page);
+    await openComic(page, 'bd', 'a-comic.cbz');
+    expect(page.url()).toContain('play=1');
+    await imgLoaded(page);
+    await expect(comicImg(page)).toBeVisible();
+    await expectColor(page, 1);
+    await expect(tid(page, 'rd-page-count')).toContainText('4');
+    expect(await pageNo(page)).toBe(1);
+    expect(await noHScroll(page)).toBe(true);
+    const vb = (await tid(page, 'rd-viewer').boundingBox())!, ib = (await comicImg(page).boundingBox())!, vp = page.viewportSize()!;
+    expect(vb.height).toBeGreaterThanOrEqual(vp.height * 0.8);
+    expect(ib.width).toBeLessThanOrEqual(vp.width + 1);
+    expect(ib.height).toBeLessThanOrEqual(vp.height + 1);
+    await shot(page, 'bd-page1');
+
+    await tid(page, 'rd-next').click();
+    await expectPage(page, 2);
+    await expectColor(page, 2);
+    await page.keyboard.press('ArrowRight');
+    await expectPage(page, 3);
+    await expectColor(page, 3);
+    await tapViewer(page, 0.88);
+    await expectPage(page, 4);
+    await expectColor(page, 4);
+    await tid(page, 'rd-prev').click();
+    await expectPage(page, 3);
+    await tapViewer(page, 0.12);
+    await expectPage(page, 2);
+    await expectColor(page, 2);
+    await page.keyboard.press('End');
+    await expectPage(page, 4);
+    await page.keyboard.press('Home');
+    await expectPage(page, 1);
+    await expectColor(page, 1);
+
+    // The server serves one page at a time: no archive body, and every inline URL carries page= or pages=.
+    expect(seen.length).toBeGreaterThan(0);
+    for (const r of seen) {
+      if (/[?&]inline=1/.test(r.url)) expect(r.url, 'inline URL without page/pages').toMatch(/[?&]pages?=\d+/);
+      expect(r.type, r.url).not.toMatch(/zip|rar|octet-stream/i);
+      expect(r.len, r.url).toBeLessThan(1_000_000);
+    }
+  });
+
+  test('préchargement: seule la page suivante est demandée à l\'avance', async ({ page }) => {
+    const reqs: string[] = [];
+    page.on('request', (r) => { if (/\.cbz/i.test(decodeURIComponent(r.url())) && /[?&]page=\d/.test(r.url())) reqs.push(r.url()); });
+    await openComic(page, 'bd', 'a-comic.cbz');
+    await imgLoaded(page);
+    await tid(page, 'rd-next').click();
+    await expectPage(page, 2);
+    await expectColor(page, 2);
+    await expect.poll(() => pageNumbers(reqs), { message: 'page 3 preloaded from page 2' }).toContain(3);
+    await page.waitForTimeout(800);
+    expect(pageNumbers(reqs), 'page 4 must not be fetched while on page 2').not.toContain(4);
+  });
+
+  test('reprise de lecture après rechargement', async ({ page }) => {
+    await openComic(page, 'bd', 'a-comic.cbz');
+    await imgLoaded(page);
+    await tid(page, 'rd-next').click();
+    await expectPage(page, 2);
+    await tid(page, 'rd-next').click();
+    await expectPage(page, 3);
+
+    await page.reload();
+    await tid(page, 'rd-resume-banner').waitFor({ state: 'visible' });
+    await shot(page, 'bd-resume-banner');
+    await tid(page, 'rd-resume-yes').click();
+    await expectPage(page, 3);
+    await expectColor(page, 3);
+    await expect(tid(page, 'rd-resume-banner')).toBeHidden();
+
+    await page.reload();
+    await tid(page, 'rd-resume-banner').waitFor({ state: 'visible' });
+    await tid(page, 'rd-resume-restart').click();
+    await expectPage(page, 1);
+    await expectColor(page, 1);
+  });
+
+  test('fermeture puis réouverture: bannière de reprise sur la bonne page', async ({ page }) => {
+    await openComic(page, 'bd', 'a-comic.cbz');
+    await imgLoaded(page);
+    await tid(page, 'rd-next').click();
+    await expectPage(page, 2);
+    await tid(page, 'rd-back').click();
+    await expect(tid(page, 'rd-library')).toBeVisible();
+    // Closing the book frees the page image.
+    await expect(tid(page, 'rd-viewer').locator('img:visible')).toHaveCount(0);
+
+    await tid(page, 'rd-book').filter({ hasText: 'a-comic' }).click();
+    await tid(page, 'rd-viewer').waitFor({ state: 'visible' });
+    await tid(page, 'rd-resume-banner').waitFor({ state: 'visible' });
+    await tid(page, 'rd-resume-yes').click();
+    await expectPage(page, 2);
+    await expectColor(page, 2);
+  });
+
+  test('plein écran pseudo, Escape pour sortir', async ({ page }) => {
+    await openComic(page, 'bd', 'a-comic.cbz');
+    await imgLoaded(page);
+    const fsBtn = tid(page, 'rd-fullscreen');
+    await fsBtn.click();
+    await expect(fsBtn).toHaveAttribute('aria-pressed', 'true');
+    const vp = page.viewportSize()!;
+    await expect.poll(async () => (await tid(page, 'rd-viewer').boundingBox())!.width).toBeGreaterThanOrEqual(vp.width - 1);
+    await expect(comicImg(page)).toBeVisible();
+    await shot(page, 'bd-fullscreen');
+    await page.keyboard.press('Escape');
+    await expect(fsBtn).toHaveAttribute('aria-pressed', 'false');
+    await expect(comicImg(page)).toBeVisible();
+  });
+
+  test('swipe CDP gauche/droite (mobile)', async ({ page }) => {
+    test.skip(!isMobile(), 'touch only');
+    await openComic(page, 'bd', 'a-comic.cbz');
+    await imgLoaded(page);
+    const sw = async (from: number, to: number) => {
+      const client = await page.context().newCDPSession(page);
+      const b = (await tid(page, 'rd-viewer').boundingBox())!;
+      const y = Math.round(b.y + b.height * 0.5);
+      const pt = (pct: number) => [{ x: Math.round(b.x + b.width * pct), y, id: 1 }];
+      await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: pt(from) });
+      for (let i = 1; i <= 8; i++) await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: pt(from + (to - from) * i / 8) });
+      await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await client.detach();
+    };
+    await sw(0.8, 0.2);
+    await expectPage(page, 2);
+    await page.waitForTimeout(600);
+    await sw(0.2, 0.8);
+    await expectPage(page, 1);
+    await expectColor(page, 1);
+  });
+
+  test('cbr: s\'ouvre, 2 pages dans l\'ordre', async ({ page }) => {
+    const seen = trackArchiveRequests(page);
+    await openComic(page, 'bd', 'b-comic.cbr');
+    await imgLoaded(page);
+    await expect(tid(page, 'rd-page-count')).toContainText('2');
+    await expectColor(page, 1);
+    await tid(page, 'rd-next').click();
+    await expectPage(page, 2);
+    await expectColor(page, 2);
+    await shot(page, 'bd-cbr-page2');
+    for (const r of seen) {
+      if (/[?&]inline=1/.test(r.url)) expect(r.url).toMatch(/[?&]pages?=\d+/);
+      expect(r.len, r.url).toBeLessThan(1_000_000);
+    }
+  });
+
+  test('cbz corrompu: message d\'erreur lisible, pas d\'image cassée', async ({ page }) => {
+    await openComic(page, 'bd-corrupt', 'broken.cbz');
+    // Wording is the implementation's choice: any readable French/English error cue will do.
+    await expect(page.locator('body')).toContainText(/erreur|impossible|illisible|corrompu|invalide|error|unreadable|corrupt/i);
+    const broken = await page.evaluate(() => Array.from(document.querySelectorAll('img')).filter((i) => i.offsetParent && !(i.complete && i.naturalWidth > 0)).length);
+    expect(broken).toBe(0);
+    expect(await noHScroll(page)).toBe(true);
+    await shot(page, 'bd-corrupt');
+    // The viewer stays usable: back returns to the library.
+    await tid(page, 'rd-back').click();
+    await expect(tid(page, 'rd-library')).toBeVisible();
   });
 });
 

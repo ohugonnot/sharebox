@@ -114,6 +114,13 @@ class MediaKindsTest extends TestCase
         return [
             'pdf' => ['a.pdf', 'pdf'],
             'epub en majuscules' => ['A.EPUB', 'epub'],
+            'cbz' => ['a.cbz', 'comic'],
+            'cbr en majuscules' => ['X.CBR', 'comic'],
+            'cbz mixed case' => ['Tome 1.CbZ', 'comic'],
+            'cb7 non géré' => ['a.cb7', null],
+            'cbt non géré' => ['a.cbt', null],
+            'double extension cbz' => ['a.cbz.txt', null],
+            'nom cbz sans extension' => ['cbz', null],
             'audio' => ['a.mp3', null],
             'double extension' => ['a.pdf.txt', null],
             'nom pdf sans extension' => ['pdf', null],
@@ -138,12 +145,22 @@ class MediaKindsTest extends TestCase
             'png' => ['a.png', 'image/png'],
             'webp' => ['a.webp', 'image/webp'],
             'gif' => ['a.gif', 'image/gif'],
+            // ?inline=1 alone must never hand out the whole archive.
+            'cbz' => ['a.cbz', null],
+            'cbr' => ['a.CBR', null],
             'html' => ['a.html', null],
             'svg' => ['a.svg', null],
             'mp3' => ['a.mp3', null],
             'double extension' => ['a.pdf.php', null],
             'no extension' => ['pdf', null],
         ];
+    }
+
+    public function testComicsMakeALibraryWhateverTheEpubFlag(): void
+    {
+        $this->assertSame('library', folder_media_kind(['a.cbz', 'b.cbr'], false));
+        $this->assertSame('library', folder_media_kind(['a.cbz'], true));
+        $this->assertSame('library', folder_media_kind(['01.cbz', 'cover.jpg'], false));
     }
 
     public function testMediaPageNamesSkipFolders(): void

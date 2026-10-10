@@ -142,4 +142,29 @@ class ReaderPageDataTest extends TestCase
         $this->assertTrue(book_readable('a.pdf', false));
         $this->assertFalse(book_readable('a.mp3', true));
     }
+
+    public function testComicsAreBooksWithTheSameInlineUrl(): void
+    {
+        $d = reader_page_data(self::files('Tome 2.CBR', 'Tome 10.cbz', 'Tome 1.cbz'), 'tok', 'BD', null);
+        $this->assertSame(['Tome 1.cbz', 'Tome 2.CBR', 'Tome 10.cbz'], array_column($d['books'], 'name'));
+        $this->assertSame(['comic', 'comic', 'comic'], array_column($d['books'], 'kind'));
+        $this->assertSame('/dl/tok?p=BD%2FTome%201.cbz&inline=1', $d['books'][0]['url']);
+        $this->assertSame('Tome 2.CBR', reader_page_data(self::files('Tome 2.CBR'), 'tok', 'BD', 'Tome 2.CBR')['open']);
+    }
+
+    public function testComicIsReadableWhateverTheEpubFlag(): void
+    {
+        $this->assertTrue(book_readable('a.cbz', false));
+        $this->assertTrue(book_readable('a.CBR', false));
+        $this->assertTrue(book_readable('a.cbz', true));
+        $this->assertFalse(book_readable('a.cb7', true));
+    }
+
+    public function testComicFolderGetsTheLibraryAction(): void
+    {
+        $a = listing_actions(['a.cbz', 'b.cbr'], false);
+        $this->assertTrue($a['rowRead']);
+        $this->assertNotNull($a['toolbar']);
+        $this->assertSame('read', $a['toolbar']['param']);
+    }
 }

@@ -22,7 +22,7 @@ test('module import touches no window/document and exposes the API', () => {
   assert.equal(typeof globalThis.window, 'undefined');
   assert.equal(typeof globalThis.document, 'undefined');
   for (const fn of ['storageKey', 'bookKind', 'sortBooks', 'clampPage', 'fractionOf', 'bookStatus', 'percent',
-    'loadState', 'saveProgress', 'shouldSave', 'resumeTarget', 'lastRead', 'neighbor', 'sortBooksBy', 'filterBooks', 'formatSize']) {
+    'loadState', 'saveProgress', 'shouldSave', 'resumeTarget', 'lastRead', 'neighbor', 'sortBooksBy', 'filterBooks', 'formatSize', 'comicPageUrl', 'comicCountUrl']) {
     assert.equal(typeof rd[fn], 'function', fn);
   }
 });
@@ -393,4 +393,27 @@ test('needsScriptSandbox: missing or odd inputs never throw and stay fail-closed
   assert.equal(rd.needsScriptSandbox(undefined, undefined, undefined), false);
   assert.equal(rd.needsScriptSandbox(null, null, null), false);
   assert.equal(rd.needsScriptSandbox('Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/125.0', 'MacIntel', undefined), false);
+});
+
+test('bookKind: cbz/cbr are comics, case-insensitive; other comic formats and pdf/epub unchanged', () => {
+  assert.equal(rd.bookKind('x.cbz'), 'comic');
+  assert.equal(rd.bookKind('X.CBR'), 'comic');
+  assert.equal(rd.bookKind('Tome 1.CbZ'), 'comic');
+  assert.equal(rd.bookKind('a.cbz.txt'), null);
+  assert.equal(rd.bookKind('a.cb7'), null);
+  assert.equal(rd.bookKind('cbz'), null);
+  assert.equal(rd.bookKind('a.pdf'), 'pdf');
+  assert.equal(rd.bookKind('a.EPUB'), 'epub');
+});
+
+test('comicPageUrl / comicCountUrl: query separator and numeric page', () => {
+  assert.equal(rd.comicPageUrl('/dl/tok?p=BD%2Fa.cbz&inline=1', 3), '/dl/tok?p=BD%2Fa.cbz&inline=1&page=3');
+  assert.equal(rd.comicPageUrl('/dl/tok', 1), '/dl/tok?page=1');
+  assert.equal(rd.comicPageUrl('/dl/tok?inline=1', '12'), '/dl/tok?inline=1&page=12');
+  assert.equal(rd.comicCountUrl('/dl/tok?p=BD%2Fa.cbz&inline=1'), '/dl/tok?p=BD%2Fa.cbz&inline=1&pages=1');
+  assert.equal(rd.comicCountUrl('/dl/tok'), '/dl/tok?pages=1');
+});
+
+test('comicPageUrl: never emits a URL without page=, whatever n is', () => {
+  for (const n of [1, 10, 250]) assert.match(rd.comicPageUrl('/dl/t?inline=1', n), /[?&]page=\d+$/);
 });

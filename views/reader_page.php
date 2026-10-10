@@ -23,6 +23,7 @@ $rd = reader_page_data($rdFiles, $token, $rdSub, $rdBook, READER_EPUB_ENABLED);
 if ($rdDir === null && $rd['books']) {
     // A file link only answers on its own URL: no ?p=.
     $rd['books'][0]['url'] = '/dl/' . $token . '?inline=1';
+    if (isset($rd['books'][0]['download'])) $rd['books'][0]['download'] = '/dl/' . $token;
 }
 $rdTitle = $rdSub !== '' ? basename($rdSub) : $link['name'];
 stream_log('READER open | ' . ($rdSub ?: '(root)') . ' | books=' . count($rd['books']));

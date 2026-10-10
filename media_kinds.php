@@ -3,6 +3,7 @@
 
 const MEDIA_AUDIO_EXTS = ['mp3', 'm4a', 'm4b', 'flac', 'ogg', 'oga', 'opus', 'aac', 'wav'];
 const MEDIA_BOOK_EXTS  = ['pdf', 'epub'];
+const MEDIA_COMIC_EXTS = ['cbz', 'cbr'];
 const MEDIA_VIDEO_EXTS = ['mkv', 'mp4', 'avi', 'mov', 'webm', 'm4v', 'ts', 'wmv', 'mpg', 'mpeg', 'flv', '3gp', 'm2ts'];
 const MEDIA_IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
 
@@ -68,6 +69,7 @@ function folder_cover(array $names): ?string {
 
 function reader_kind(string $name): ?string {
     $ext = media_ext($name);
+    if (in_array($ext, MEDIA_COMIC_EXTS, true)) return 'comic';
     return in_array($ext, MEDIA_BOOK_EXTS, true) ? $ext : null;
 }
 
@@ -104,20 +106,25 @@ function media_page_common(array $names, string $token, string $subPath): array 
 
 /**
  * @param array<int, array{name:string, size:int, mtime:int}> $files
- * @return array{books:list<array{name:string,url:string,kind:string,size:int,mtime:int}>, open:?string, libBase:string, cover:?string, backUrl:string, storageToken:string}
+ * @return array{books:list<array{name:string,url:string,kind:string,size:int,mtime:int,download?:string}>, open:?string, libBase:string, cover:?string, backUrl:string, storageToken:string}
  */
 function reader_page_data(array $files, string $token, string $subPath, ?string $book, bool $epub = false): array {
     $books = [];
     foreach ($files as $f) {
         // Same rule as readable_book_names(), which the listing counts with.
         if (!book_readable($f['name'], $epub)) continue;
-        $books[] = [
+        $entry = [
             'name' => $f['name'],
             'url' => share_entry_url($token, $subPath, $f['name'], 'inline'),
             'kind' => (string)reader_kind($f['name']),
             'size' => max(0, (int)$f['size']),
             'mtime' => (int)$f['mtime'],
         ];
+        // A comic's inline URL only answers page requests: the Download link needs the plain one.
+        if ($entry['kind'] === 'comic') {
+            $entry['download'] = '/dl/' . $token . '?p=' . rawurlencode($subPath !== '' ? $subPath . '/' . $f['name'] : $f['name']);
+        }
+        $books[] = $entry;
     }
     usort($books, fn($a, $b) => strnatcasecmp($a['name'], $b['name']));
     $open = $book !== null && in_array($book, array_column($books, 'name'), true) ? $book : null;
@@ -144,7 +151,7 @@ function page_json(mixed $data): string {
 
 function book_readable(string $name, bool $epub = READER_EPUB_ENABLED): bool {
     $kind = reader_kind($name);
-    return $kind === 'pdf' || ($kind === 'epub' && $epub);
+    return $kind === 'pdf' || $kind === 'comic' || ($kind === 'epub' && $epub);
 }
 
 /**
