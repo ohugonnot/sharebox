@@ -9,6 +9,7 @@
 
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/comic.php';
 require_once __DIR__ . '/auth.php';  // is_admin() for gating TMDB write endpoints
 
 /**
@@ -161,6 +162,46 @@ if (!is_path_within($resolvedPath, $basePath)) {
 // A file link with a download limit stays a plain counted download: the reader's Range requests would get 410.
 $readerAllowed = $subPath || $link['max_downloads'] === null;
 if ($readerAllowed && ($_GET['inline'] ?? '') === '1' && is_file($resolvedPath)) {
+    // Comics are served one page at a time: the archive itself never goes out inline.
+    if (reader_kind($resolvedPath) === 'comic' && (($_GET['pages'] ?? '') === '1' || isset($_GET['page']))) {
+        // HEAD never opens the archive: on a busy disk a probe must not cost a listing.
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
+            if (isset($_GET['page'])) {
+                if (comic_page_index($_GET['page'], PHP_INT_MAX) === null) http_response_code(404);
+            } else {
+                header('Content-Type: application/json');
+            }
+            exit;
+        }
+        $comicPages = comic_page_entries($resolvedPath);
+        if ($comicPages === null) {
+            http_response_code(422);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'unreadable archive']);
+            exit;
+        }
+        if (!isset($_GET['page'])) {
+            header('Content-Type: application/json');
+            echo json_encode(['pages' => count($comicPages)]);
+            exit;
+        }
+        $comicIndex = comic_page_index($_GET['page'], count($comicPages));
+        if ($comicIndex === null) {
+            http_response_code(404);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'no such page']);
+            exit;
+        }
+        // Drop output buffers (zlib included): an image must not be gzipped.
+        while (ob_get_level()) ob_end_clean();
+        if (!comic_send_page($resolvedPath, $comicPages[$comicIndex])) {
+            stream_log('READER comic 422 | ' . basename($resolvedPath) . ' | page=' . ($comicIndex + 1));
+            http_response_code(422);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'unreadable page']);
+        }
+        exit;
+    }
     $inlineMime = inline_mime($resolvedPath);
     if ($inlineMime === null) {
         http_response_code(404);
@@ -904,7 +945,7 @@ HTML;
         } elseif (in_array($ext, ['jpg','jpeg','png','gif','webp','bmp','svg','tiff','heic','avif','raw','cr2','nef'])) {
             $iconClass = 'img';
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#26c6da"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
-        } elseif (in_array($ext, ['zip','rar','7z','tar','gz','bz2','xz','tgz','iso','cbz','cbr'])) {
+        } elseif (in_array($ext, ['zip','rar','7z','tar','gz','bz2','xz','tgz','iso'])) {
             $iconClass = 'arc';
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#ef5350"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>';
         } else {

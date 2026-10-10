@@ -24,6 +24,8 @@
     var ZONE_SIDE = 0.35;
     var CLICK_SLOP_PX = 10;
     var EPUB_UNAVAILABLE = 'EPUB indisponible : le lecteur ne peut pas afficher ce livre ici.';
+    var COMIC_UNREADABLE = 'BD illisible : l’archive est corrompue ou n’a pas pu être lue.';
+    var COMIC_EMPTY = 'BD illisible : aucune image dans cette archive.';
 
     // ─── Pure helpers ────────────────────────────────────────────────────────
 
@@ -34,7 +36,21 @@
     function bookKind(name) {
         var m = /\.([A-Za-z0-9]+)$/.exec(String(name));
         var ext = m ? m[1].toLowerCase() : '';
+        if (ext === 'cbz' || ext === 'cbr') return 'comic';
         return ext === 'pdf' || ext === 'epub' ? ext : null;
+    }
+
+    function withParam(url, param) {
+        var u = String(url);
+        return u + (u.indexOf('?') === -1 ? '?' : '&') + param;
+    }
+
+    function comicPageUrl(url, n) {
+        return withParam(url, 'page=' + n);
+    }
+
+    function comicCountUrl(url) {
+        return withParam(url, 'pages=1');
     }
 
     function nameOf(b) {
@@ -424,11 +440,14 @@
         var stage = el(doc, 'div', 'rd-stage');
         var canvas = tid(el(doc, 'canvas', 'rd-canvas', { role: 'img', 'aria-label': 'Page du document' }), 'rd-canvas');
         var epubHost = tid(el(doc, 'div', 'rd-epub-host'), 'rd-epub-host');
+        var comicImg = tid(el(doc, 'img', 'rd-comic-img', { alt: 'Page de la BD' }), 'rd-comic-img');
+        comicImg.hidden = true;
         var loadingEl = tid(el(doc, 'div', 'rd-loading', { role: 'status', 'aria-live': 'polite' }), 'rd-loading');
         loadingEl.hidden = true;
         loadingEl.appendChild(el(doc, 'span', 'rd-spinner', { 'aria-hidden': 'true' }));
         var loadingText = loadingEl.appendChild(el(doc, 'span', 'rd-loading-text'));
         stage.appendChild(canvas);
+        stage.appendChild(comicImg);
         stage.appendChild(epubHost);
         stage.appendChild(loadingEl);
 
@@ -512,7 +531,7 @@
                 open.appendChild(dateEl);
                 open.appendChild(statusEl);
                 open.addEventListener('click', function () { openBook(b.name); });
-                var dl = el(doc, 'a', 'rd-book-dl', { href: b.url, download: '', 'aria-label': 'Télécharger ' + b.name });
+                var dl = el(doc, 'a', 'rd-book-dl', { href: b.download || b.url, download: '', 'aria-label': 'Télécharger ' + b.name });
                 dl.textContent = '↓';
                 li.appendChild(open);
                 li.appendChild(dl);
@@ -643,8 +662,13 @@
             if (me.pre === slot) me.pre = null;
         }
 
+        // PDF and comics share paging, saved state and controls; only the page drawing differs.
+        function pagedReady() {
+            return !!cur && ((cur.kind === 'pdf' && !!cur.doc) || (cur.kind === 'comic' && cur.pages > 0));
+        }
+
         function goPdf(n, fromUser) {
-            if (!cur || cur.kind !== 'pdf' || !cur.doc) return;
+            if (!pagedReady()) return;
             if (fromUser) dismissBanner();
             cur.page = clampPage(n, cur.pages);
             if (cur.pre && cur.pre.n !== cur.page) cur.pre.dropped = true;
@@ -655,7 +679,70 @@
             lastScrollTop = 0;
             // Opening at page 1 without moving must not create a "reading" entry.
             if (cur.page > 1 || readState().files[cur.name]) persist({ page: cur.page, pages: cur.pages, fraction: f });
-            renderPdf();
+            if (cur.kind === 'comic') renderComic();
+            else renderPdf();
+        }
+
+        // ── Comic (CBZ/CBR): the server sends one page image at a time.
+        function fitComic() {
+            var w = comicImg.naturalWidth;
+            var h = comicImg.naturalHeight;
+            if (!w || !h) return;
+            var availH = fitHeight();
+            var scale = Math.min(Math.max(200, stage.clientWidth - stagePad()) / w, availH / h);
+            cur.fitW = stage.clientWidth;
+            cur.fitH = availH;
+            comicImg.style.width = Math.floor(w * scale) + 'px';
+            comicImg.style.height = Math.floor(h * scale) + 'px';
+            placeHandle();
+        }
+
+        function renderComic() {
+            var me = cur;
+            var ticket = ++me.renderId;
+            var n = me.page;
+            showLoading('Chargement…');
+            comicImg.onload = function () {
+                if (cur !== me || ticket !== me.renderId) return;
+                comicImg.hidden = false;
+                fitComic();
+                hideLoading();
+                prefetchComic(me, n + 1);
+            };
+            comicImg.onerror = function () {
+                if (cur !== me || ticket !== me.renderId) return;
+                comicImg.hidden = true;
+                hideLoading();
+                showError('Impossible d’afficher cette page.');
+            };
+            clearError();
+            comicImg.src = comicPageUrl(me.url, n);
+        }
+
+        // One page ahead only: a new prefetch replaces (and cancels) the previous one.
+        function prefetchComic(me, n) {
+            if (me.next) { me.next.removeAttribute('src'); me.next = null; }
+            if (n > me.pages) return;
+            me.next = new win.Image();
+            me.next.src = comicPageUrl(me.url, n);
+        }
+
+        async function openComic(me) {
+            showLoading('Chargement…');
+            var res = await win.fetch(comicCountUrl(me.url), { credentials: 'same-origin' });
+            var data = res.ok ? await res.json() : null;
+            if (cur !== me) return;
+            var pages = data && Math.floor(Number(data.pages));
+            if (!pages || pages < 1) {
+                var err = new Error('comic unreadable');
+                err.comicMessage = data && Number(data.pages) === 0 ? COMIC_EMPTY : COMIC_UNREADABLE;
+                throw err;
+            }
+            me.pages = pages;
+            me.page = 1;
+            pdfPageLabel();
+            setProgressText(fractionOf(1, me.pages));
+            renderComic();
         }
 
         async function openPdf(me, url) {
@@ -904,6 +991,10 @@
                 unlockIframeSandbox();
             }
             canvas.width = canvas.height = 0;
+            if (me.next) me.next.removeAttribute('src');
+            comicImg.onload = comicImg.onerror = null;
+            comicImg.removeAttribute('src');
+            comicImg.hidden = true;
         }
 
         function showLibrary() {
@@ -929,7 +1020,7 @@
             clearError();
             var me = {
                 name: name, kind: b.kind, url: b.url, hold: false,
-                renderId: 0, page: 1, pages: 0, zoom: 1, task: null, doc: null, view: null
+                renderId: 0, page: 1, pages: 0, zoom: 1, task: null, doc: null, view: null, next: null
             };
             cur = me;
             var mySeq = ++seq;
@@ -941,10 +1032,13 @@
             me.hold = !!target;
             titleEl.textContent = name.replace(/\.[A-Za-z0-9]+$/, '');
             var isPdf = b.kind === 'pdf';
+            var isComic = b.kind === 'comic';
+            var isPaged = isPdf || isComic;
             canvas.hidden = true;
-            epubHost.hidden = isPdf;
-            stage.classList.toggle('rd-stage-epub', !isPdf);
-            pageBox.hidden = !isPdf;
+            comicImg.hidden = true;
+            epubHost.hidden = isPaged;
+            stage.classList.toggle('rd-stage-epub', !isPaged);
+            pageBox.hidden = !isPaged;
             zoomBox.hidden = !isPdf;
             progressEl.textContent = '';
             library.hidden = true;
@@ -953,9 +1047,16 @@
 
             try {
                 if (isPdf) await openPdf(me, b.url);
+                else if (isComic) await openComic(me);
                 else await openEpub(me, b.url);
             } catch (e) {
                 if (cur !== me || seq !== mySeq) return;
+                if (isComic) {
+                    // Stay in the viewer: the message sits above it and Back still works.
+                    hideLoading();
+                    showError((e && e.comicMessage) || COMIC_UNREADABLE);
+                    return;
+                }
                 showLibrary();
                 showError(e && e.oldBrowser
                     ? 'Ce navigateur est trop ancien pour la liseuse PDF. Télécharger le fichier.'
@@ -972,7 +1073,7 @@
                 banner.hidden = false;
                 resumeYes.onclick = function () {
                     dismissBanner();
-                    if (isPdf) goPdf(target.page || 1, false);
+                    if (isPaged) goPdf(target.page || 1, false);
                     else if (target.cfi && me.view) me.view.goTo(target.cfi).catch(function () { /* stale location */ });
                 };
                 resumeNo.onclick = function () {
@@ -981,7 +1082,7 @@
                     pending = null;
                     clearProgress(store, token, name);
                     renderLibrary();
-                    if (isPdf) goPdf(1, false);
+                    if (isPaged) goPdf(1, false);
                 };
             }
         }
@@ -989,8 +1090,8 @@
         // ── Controls
         function step(dir) {
             if (!cur) return;
-            if (cur.kind === 'pdf') {
-                if (cur.doc && clampPage(cur.page + dir, cur.pages) !== cur.page) goPdf(cur.page + dir, true);
+            if (cur.kind === 'pdf' || cur.kind === 'comic') {
+                if (pagedReady() && clampPage(cur.page + dir, cur.pages) !== cur.page) goPdf(cur.page + dir, true);
             }
             else if (cur.view) {
                 dismissBanner();
@@ -1041,8 +1142,8 @@
 
         function jumpEnd(last) {
             if (!cur) return;
-            if (cur.kind === 'pdf') {
-                if (cur.doc && cur.page !== (last ? cur.pages : 1)) goPdf(last ? cur.pages : 1, true);
+            if (cur.kind === 'pdf' || cur.kind === 'comic') {
+                if (pagedReady() && cur.page !== (last ? cur.pages : 1)) goPdf(last ? cur.pages : 1, true);
             } else if (cur.view) {
                 dismissBanner();
                 try { cur.view.goToFraction(last ? 1 : 0).catch(function () { /* edge */ }); } catch (e) { /* no api */ }
@@ -1131,8 +1232,9 @@
             var vr = viewer.getBoundingClientRect();
             var top = 0;
             var left = 0;
-            if (cur && cur.kind === 'pdf' && !canvas.hidden) {
-                var cr = canvas.getBoundingClientRect();
+            var pageEl = cur && cur.kind === 'comic' ? comicImg : canvas;
+            if (cur && (cur.kind === 'pdf' || cur.kind === 'comic') && !pageEl.hidden) {
+                var cr = pageEl.getBoundingClientRect();
                 top = cr.top - sr.top;
                 left = cr.left - sr.left;
             }
@@ -1200,7 +1302,7 @@
             var f = (e.clientX - r.left) / Math.max(1, r.width);
             return f < ZONE_SIDE ? -1 : (f > 1 - ZONE_SIDE ? 1 : 0);
         }
-        function zoneActive() { return !!cur && cur.kind === 'pdf' && !!cur.doc && cur.zoom <= 1; }
+        function zoneActive() { return pagedReady() && cur.zoom <= 1; }
         stage.addEventListener('pointerdown', function (e) { downAt = { x: e.clientX, y: e.clientY }; });
         stage.addEventListener('pointermove', function (e) {
             if (e.pointerType !== 'mouse') return;
@@ -1232,7 +1334,7 @@
             var s = swipe;
             if (e.touches.length > 0) { if (s) s.dead = true; return; }
             swipe = null;
-            if (!s || s.dead || !cur || cur.kind !== 'pdf' || !cur.doc || cur.zoom > 1) return;
+            if (!s || s.dead || !pagedReady() || cur.zoom > 1) return;
             if (stage.scrollWidth - stage.clientWidth > 1) return;
             var t = e.changedTouches[0];
             var dx = t.clientX - s.x;
@@ -1247,7 +1349,7 @@
         zoomOut.addEventListener('click', function () { zoom(-1); });
         backBtn.addEventListener('click', showLibrary);
         pageInput.addEventListener('change', function () {
-            if (cur && cur.kind === 'pdf') goPdf(pageInput.value, true);
+            if (cur && (cur.kind === 'pdf' || cur.kind === 'comic')) goPdf(pageInput.value, true);
         });
         doc.addEventListener('keydown', onKey);
         win.addEventListener('pagehide', flush);
@@ -1259,6 +1361,10 @@
         var resizeTimer = null;
         function refitPdf() {
             var me = cur;
+            if (me && me.kind === 'comic' && !comicImg.hidden) {
+                if (stage.clientWidth !== me.fitW || fitHeight() !== me.fitH) fitComic();
+                return;
+            }
             if (!me || me.kind !== 'pdf' || !me.doc) return;
             var w = stage.clientWidth;
             if (!w || me.fitW === undefined || (w === me.fitW && fitHeight() === me.fitH && (win.devicePixelRatio || 1) === me.fitDpr)) return;
@@ -1308,6 +1414,8 @@
     return {
         storageKey: storageKey,
         bookKind: bookKind,
+        comicPageUrl: comicPageUrl,
+        comicCountUrl: comicCountUrl,
         sortBooks: sortBooks,
         sortBooksBy: sortBooksBy,
         filterBooks: filterBooks,

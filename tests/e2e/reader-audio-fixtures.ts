@@ -10,6 +10,8 @@ export const HOSTILE_PDFS = [
   "l'apostrophe d'été.pdf",
   'été à Noël & co.pdf',
 ];
+/** Page colours of bd/a-comic.cbz (4 pages) and bd/b-comic.cbr (first 2). */
+export const COMIC_COLORS: [number, number, number][] = [[220, 30, 30], [30, 200, 30], [30, 30, 220], [230, 220, 20]];
 export const HOSTILE_MP3S = ['"><script>.mp3', "it's <b>bold.mp3"];
 
 /** Minimal valid PDF, one text per page. */
@@ -71,6 +73,15 @@ export function createFixtures(): string {
     HOSTILE_PDFS.forEach((n, i) => fs.writeFileSync(path.join(hostile, n), makePdf([`HOSTILE ${i}`])));
     const hostileAudio = mk('hostile-audio');
     HOSTILE_MP3S.forEach((n, i) => ffmpeg('-f', 'lavfi', '-i', `sine=frequency=${400 + i * 50}:duration=1`, path.join(hostileAudio, n)));
+
+    const src = mk('.comic-src');
+    const hex = (c: number[]) => '0x' + c.map((v) => v.toString(16).padStart(2, '0')).join('');
+    COMIC_COLORS.forEach((c, i) => ffmpeg('-f', 'lavfi', '-i', `color=c=${hex(c)}:s=240x340`, '-frames:v', '1', '-pix_fmt', 'rgb24', path.join(src, `0${i + 1}.png`)));
+    const bd = mk('bd');
+    execFileSync('zip', ['-q', '-j', path.join(bd, 'a-comic.cbz'), ...[1, 2, 3, 4].map((n) => path.join(src, `0${n}.png`))]);
+    execFileSync('rar', ['a', '-inul', '-ep', path.join(bd, 'b-comic.cbr'), '01.png', '02.png'], { cwd: src });
+    fs.writeFileSync(path.join(mk('bd-corrupt'), 'broken.cbz'), Buffer.concat([Buffer.from('PK\x03\x04', 'latin1'), crypto.randomBytes(400)]));
+    fs.rmSync(src, { recursive: true, force: true });
 
     fs.writeFileSync(path.join(mk('divers'), 'note.txt'), 'texte\n');
     execFileSync('chown', ['-R', 'www-data:www-data', dir]);
