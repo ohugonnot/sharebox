@@ -20,6 +20,13 @@ if (isset($_GET['slotcheck'])) {
     exit;
 }
 
+// On HEAD, PHP drops the body without any failed write: the client leaving is never seen
+// and ffmpeg would run until the end of the film. Must stay before acquireUHDSlot().
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
+    header('Content-Type: video/mp4');
+    exit;
+}
+
 // Un seul spectateur en UHD à la fois : deux transcodes 2160p concurrents
 // tombent tous les deux sous le temps réel. Refus immédiat plutôt que file
 // d'attente — le player propose le téléchargement à la place.

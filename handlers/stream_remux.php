@@ -13,6 +13,8 @@ header('Content-Disposition: inline');
 header('X-Accel-Buffering: no');
 header('Cache-Control: no-cache');
 header('Accept-Ranges: none');
+// On HEAD, PHP drops the body without any failed write: ffmpeg would run until the end of the film.
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') exit;
 $logFile = ffmpeg_log_path();
 $hasAudio = hasAudioTrack($db, $resolvedPath);
 stream_log('REMUX start | audio=' . $audioTrack . ' hasAudio=' . ($hasAudio ? 'yes' : 'no') . ' start=' . $startSec . ' | ' . basename($resolvedPath));
