@@ -45,13 +45,14 @@ function media_page_open(string $title, string $backUrl, ?string $cover, array $
     .mp-cover { width: 44px; height: 44px; object-fit: cover; border-radius: var(--radius-sm); flex-shrink: 0; }
     .mp-title { flex: 1; min-width: 0; font-size: 1rem; font-weight: 600; overflow-wrap: anywhere; }
     .mp-fallback a { color: var(--accent); }
+    @media (max-width: 600px) { html.rd-reading .mp-page { padding: .5rem .25rem 1rem; } }
     .ab-cover { display: block; width: min(220px, 60vw); aspect-ratio: 1; object-fit: cover; border-radius: var(--radius-md); margin: 0 auto 1rem; }
     </style>
     {$links}
 </head>
 <body>
 <div class="mp-page">
-    <div class="mp-bar">
+    <div class="mp-bar" data-rd-chrome>
         <a class="mp-back" href="{$backHtml}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Retour</a>
         {$coverHtml}
         <h1 class="mp-title">{$titleHtml}</h1>
