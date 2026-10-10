@@ -6,6 +6,8 @@
 }
 .rd-reader *, .rd-reader *::before, .rd-reader *::after { box-sizing: border-box; }
 .rd-reader [hidden] { display: none !important; }
+/* Host headers marked data-rd-chrome give their room to the open book. */
+html.rd-reading [data-rd-chrome] { display: none !important; }
 
 .rd-error {
     margin-bottom: .75rem;
@@ -138,6 +140,7 @@
 .rd-banner-text { flex: 1 1 auto; min-width: 0; }
 
 .rd-stage {
+    position: relative;
     overflow: auto;
     max-height: calc(100vh - 11rem);
     max-height: calc(100dvh - 11rem);
@@ -151,19 +154,51 @@
 }
 .rd-stage.rd-zoomed { touch-action: auto; }
 .rd-canvas { display: inline-block; max-width: none; background: #fff; vertical-align: top; }
-.rd-comic-img { display: inline-block; max-width: none; vertical-align: top; }
+.rd-comic { display: inline-flex; vertical-align: top; }
+.rd-comic-img { display: block; flex: none; max-width: none; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }
+.rd-comic.rd-sharp .rd-comic-img, .rd-canvas.rd-sharp { filter: url(#rd-sharp-filter); }
+.rd-sharp-btn.rd-sharp-off { color: var(--as-muted); text-decoration: line-through; }
+.rd-bar { position: relative; }
+.rd-sharp-panel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    margin-top: .35rem;
+    padding: .6rem .8rem;
+    background: var(--as-raised);
+    border: 1px solid var(--as-border);
+    border-radius: 10px;
+    color: var(--as-text, inherit);
+}
+.rd-sharp-panel[hidden] { display: none; }
+.rd-sharp-range { width: min(14rem, 50vw); min-height: 44px; accent-color: var(--as-accent, currentColor); }
+.rd-sharp-value { min-width: 2.2rem; text-align: right; font-variant-numeric: tabular-nums; color: var(--as-muted); }
+.rd-stage-comic.rd-zoomed { touch-action: pan-x pan-y; }
 .rd-stage-epub { overflow: hidden; height: calc(100vh - 11rem); height: calc(100dvh - 11rem); text-align: left; }
 .rd-stage-epub { touch-action: auto; }
 .rd-epub-host, .rd-epub-view { display: block; width: 100%; height: 100%; }
+/* Floats over the page so the page never moves while the next one loads. */
 .rd-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    z-index: 1;
+    transform: translate(-50%, -50%);
     display: flex;
     align-items: center;
-    justify-content: center;
     gap: .6rem;
-    margin: auto;
-    padding: 6rem 1rem;
+    padding: .5rem .9rem;
+    background: var(--as-raised);
+    border: 1px solid var(--as-border);
+    border-radius: 999px;
     color: var(--as-muted);
     font-size: .9rem;
+    white-space: nowrap;
+    pointer-events: none;
 }
 .rd-spinner { display: none; }
 .rd-fs-btn svg { display: block; }
@@ -234,9 +269,9 @@
 }
 .rd-fs .rd-stage { padding: 0; background: var(--as-bg); }
 .rd-fs .rd-stage:not(.rd-zoomed) { overflow-x: hidden; }
-.rd-fs .rd-stage:not(.rd-zoomed) .rd-canvas, .rd-fs .rd-comic-img { max-width: 100%; height: auto !important; }
+.rd-fs .rd-stage:not(.rd-zoomed) .rd-canvas { max-width: 100%; height: auto !important; }
 .rd-fs .rd-stage:not(.rd-stage-epub) { display: flex; }
-.rd-fs .rd-canvas, .rd-fs .rd-comic-img { flex: none; margin: auto; }
+.rd-fs .rd-canvas, .rd-fs .rd-comic { flex: none; margin: auto; }
 
 .rd-btn:focus-visible, .rd-book:focus-visible, .rd-book-dl:focus-visible, .rd-page-input:focus-visible,
 .rd-reader .bsort:focus-visible, .rd-reader .browser-search:focus-visible {
@@ -244,24 +279,33 @@
     outline-offset: 2px;
 }
 
-@media (max-width: 480px) {
-    .rd-bar { gap: .35rem; }
+/* Phones: one bar line (back, title, counter, prev/next, fullscreen); the zoom pair of a paged book wraps below. */
+@media (max-width: 600px) {
+    .rd-bar { flex-wrap: nowrap; gap: .25rem; }
+    .rd-viewer[data-kind="pdf"] .rd-bar, .rd-viewer[data-kind="comic"] .rd-bar { flex-wrap: wrap; }
     .rd-btn { padding: 0 .5rem; }
     .rd-btn-label { display: none; }
-    .rd-bar > .rd-back-btn { order: -3; }
-    .rd-bar > .rd-fs-btn { order: -1; }
-    .rd-title {
-        flex: 1 1 calc(100% - 88px - .7rem);
-        min-width: 0;
-        order: -2;
+    .rd-bar > .rd-back-btn { order: -6; }
+    .rd-bar > .rd-title {
+        flex: 1 1 0;
+        min-width: 3rem;
+        order: -5;
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
     }
-    .rd-page-input { width: 3.5rem; }
+    .rd-bar > .rd-pages { order: -4; }
+    .rd-bar > [data-testid="rd-prev"] { order: -3; }
+    .rd-bar > [data-testid="rd-next"] { order: -2; }
+    .rd-bar > .rd-fs-btn { order: -1; }
+    .rd-bar > .rd-zoom { order: 1; margin-left: auto; }
+    /* Double tap and pinch zoom a comic on a phone: the buttons would push the bar onto a second line. */
+    .rd-viewer[data-kind="comic"] .rd-bar > .rd-zoom { display: none; }
+    .rd-viewer:not([data-kind="epub"]) .rd-progress { display: none; }
+    .rd-page-input { width: 3rem; }
     .rd-pages, .rd-zoom { gap: .25rem; }
     .rd-stage, .rd-stage-epub { max-height: none; }
-    .rd-stage-epub { height: calc(100dvh - 13rem); }
+    .rd-stage-epub { height: calc(100dvh - 6rem); }
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -277,3 +321,4 @@
     }
     @keyframes rd-spin { to { transform: rotate(360deg); } }
 }
+.rd-stage:focus { outline: none; }

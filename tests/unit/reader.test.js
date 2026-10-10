@@ -22,7 +22,7 @@ test('module import touches no window/document and exposes the API', () => {
   assert.equal(typeof globalThis.window, 'undefined');
   assert.equal(typeof globalThis.document, 'undefined');
   for (const fn of ['storageKey', 'bookKind', 'sortBooks', 'clampPage', 'fractionOf', 'bookStatus', 'percent',
-    'loadState', 'saveProgress', 'shouldSave', 'resumeTarget', 'lastRead', 'neighbor', 'sortBooksBy', 'filterBooks', 'formatSize', 'comicPageUrl', 'comicCountUrl']) {
+    'loadState', 'saveProgress', 'shouldSave', 'resumeTarget', 'lastRead', 'neighbor', 'sortBooksBy', 'filterBooks', 'formatSize', 'comicPageUrl', 'comicCountUrl', 'spreadFor', 'stepSpread', 'keyAction', 'sharpLevel', 'sharpKernel']) {
     assert.equal(typeof rd[fn], 'function', fn);
   }
 });
@@ -416,4 +416,129 @@ test('comicPageUrl / comicCountUrl: query separator and numeric page', () => {
 
 test('comicPageUrl: never emits a URL without page=, whatever n is', () => {
   for (const n of [1, 10, 250]) assert.match(rd.comicPageUrl('/dl/t?inline=1', n), /[?&]page=\d+$/);
+});
+
+test('spreadFor: cover alone, then (2,3), (4,5)...', () => {
+  assert.deepEqual(rd.spreadFor(1, 7), [1, null]);
+  assert.deepEqual(rd.spreadFor(2, 7), [2, 3]);
+  assert.deepEqual(rd.spreadFor(3, 7), [2, 3]);
+  assert.deepEqual(rd.spreadFor(4, 7), [4, 5]);
+  assert.deepEqual(rd.spreadFor(5, 7), [4, 5]);
+  assert.deepEqual(rd.spreadFor(6, 7), [6, 7]);
+  assert.deepEqual(rd.spreadFor(7, 7), [6, 7]);
+});
+
+test('spreadFor: last page stays alone when the total is even', () => {
+  assert.deepEqual(rd.spreadFor(6, 6), [6, null]);
+  assert.deepEqual(rd.spreadFor(5, 6), [4, 5]);
+  assert.deepEqual(rd.spreadFor(4, 6), [4, 5]);
+});
+
+test('spreadFor: tiny books', () => {
+  assert.deepEqual(rd.spreadFor(1, 1), [1, null]);
+  assert.deepEqual(rd.spreadFor(1, 2), [1, null]);
+  assert.deepEqual(rd.spreadFor(2, 2), [2, null]);
+  assert.deepEqual(rd.spreadFor(2, 3), [2, 3]);
+});
+
+test('stepSpread: forward from cover and from pairs, stops at the end', () => {
+  assert.equal(rd.stepSpread(1, 7, 1), 2);
+  assert.equal(rd.stepSpread(2, 7, 1), 4);
+  assert.equal(rd.stepSpread(3, 7, 1), 4);
+  assert.equal(rd.stepSpread(4, 7, 1), 6);
+  assert.equal(rd.stepSpread(6, 7, 1), 6);
+  assert.equal(rd.stepSpread(7, 7, 1), 6);
+  assert.equal(rd.stepSpread(4, 6, 1), 6);
+  assert.equal(rd.stepSpread(6, 6, 1), 6);
+});
+
+test('stepSpread: backward lands on the smallest page of the previous spread, stops at the cover', () => {
+  assert.equal(rd.stepSpread(6, 7, -1), 4);
+  assert.equal(rd.stepSpread(7, 7, -1), 4);
+  assert.equal(rd.stepSpread(4, 7, -1), 2);
+  assert.equal(rd.stepSpread(3, 7, -1), 1);
+  assert.equal(rd.stepSpread(2, 7, -1), 1);
+  assert.equal(rd.stepSpread(1, 7, -1), 1);
+  assert.equal(rd.stepSpread(6, 6, -1), 4);
+});
+
+const EDGES_NONE = { top: false, bottom: false, left: false, right: false };
+const EDGES_ALL = { top: true, bottom: true, left: true, right: true };
+
+test('keyAction: not zoomed', () => {
+  const k = (key, shift) => rd.keyAction(key, !!shift, false, EDGES_NONE);
+  assert.equal(k('ArrowRight'), 'next');
+  assert.equal(k('ArrowLeft'), 'prev');
+  assert.equal(k('ArrowUp'), null);
+  assert.equal(k('ArrowDown'), null);
+  assert.equal(k(' '), 'next');
+  assert.equal(k(' ', true), 'prev');
+  assert.equal(k('PageDown'), 'next');
+  assert.equal(k('PageUp'), 'prev');
+  assert.equal(k('x'), null);
+});
+
+test('keyAction: zoomed, up/down always scroll', () => {
+  for (const edges of [EDGES_NONE, EDGES_ALL]) {
+    assert.equal(rd.keyAction('ArrowUp', false, true, edges), 'scroll-up');
+    assert.equal(rd.keyAction('ArrowDown', false, true, edges), 'scroll-down');
+  }
+});
+
+test('keyAction: zoomed, left/right scroll until the matching edge, then turn', () => {
+  assert.equal(rd.keyAction('ArrowRight', false, true, EDGES_NONE), 'scroll-right');
+  assert.equal(rd.keyAction('ArrowLeft', false, true, EDGES_NONE), 'scroll-left');
+  assert.equal(rd.keyAction('ArrowRight', false, true, { ...EDGES_NONE, right: true }), 'next');
+  assert.equal(rd.keyAction('ArrowLeft', false, true, { ...EDGES_NONE, left: true }), 'prev');
+  assert.equal(rd.keyAction('ArrowRight', false, true, { ...EDGES_NONE, left: true }), 'scroll-right');
+  assert.equal(rd.keyAction('ArrowLeft', false, true, { ...EDGES_NONE, right: true }), 'scroll-left');
+  assert.equal(rd.keyAction('ArrowRight', false, true, EDGES_ALL), 'next');
+  assert.equal(rd.keyAction('ArrowLeft', false, true, EDGES_ALL), 'prev');
+});
+
+test('keyAction: zoomed, Space scrolls down until the bottom, Shift+Space reverses', () => {
+  assert.equal(rd.keyAction(' ', false, true, EDGES_NONE), 'scroll-down');
+  assert.equal(rd.keyAction(' ', false, true, { ...EDGES_NONE, bottom: true }), 'next');
+  assert.equal(rd.keyAction(' ', false, true, { ...EDGES_NONE, top: true }), 'scroll-down');
+  assert.equal(rd.keyAction(' ', true, true, EDGES_NONE), 'scroll-up');
+  assert.equal(rd.keyAction(' ', true, true, { ...EDGES_NONE, top: true }), 'prev');
+  assert.equal(rd.keyAction(' ', true, true, { ...EDGES_NONE, bottom: true }), 'scroll-up');
+});
+
+test('keyAction: PageUp/PageDown turn the page whatever the zoom or edges', () => {
+  for (const zoomed of [false, true]) {
+    for (const edges of [EDGES_NONE, EDGES_ALL]) {
+      assert.equal(rd.keyAction('PageDown', false, zoomed, edges), 'next');
+      assert.equal(rd.keyAction('PageUp', false, zoomed, edges), 'prev');
+    }
+  }
+});
+
+test('keyAction: + = - 0 drive the zoom, zoomed or not', () => {
+  for (const zoomed of [false, true]) {
+    assert.equal(rd.keyAction('+', false, zoomed, EDGES_NONE), 'zoom-in');
+    assert.equal(rd.keyAction('=', false, zoomed, EDGES_NONE), 'zoom-in');
+    assert.equal(rd.keyAction('-', false, zoomed, EDGES_NONE), 'zoom-out');
+    assert.equal(rd.keyAction('0', false, zoomed, EDGES_NONE), 'zoom-reset');
+  }
+});
+
+test('sharpLevel: stored value to 0..100, old on/off values kept', () => {
+    assert.strictEqual(rd.sharpLevel(null), 50);
+    assert.strictEqual(rd.sharpLevel('1'), 50);
+    assert.strictEqual(rd.sharpLevel('0'), 0);
+    assert.strictEqual(rd.sharpLevel('75'), 75);
+    assert.strictEqual(rd.sharpLevel('250'), 100);
+    assert.strictEqual(rd.sharpLevel('-3'), 0);
+    assert.strictEqual(rd.sharpLevel('abc'), 50);
+});
+
+test('sharpKernel: weights sum to 1, level 0 is the identity', () => {
+    for (const level of [0, 25, 50, 100]) {
+        const w = rd.sharpKernel(level).split(' ').map(Number);
+        assert.strictEqual(w.length, 9);
+        assert.ok(Math.abs(w.reduce((a, b) => a + b, 0) - 1) < 1e-9, String(level));
+    }
+    assert.strictEqual(rd.sharpKernel(0), '0 0 0 0 1 0 0 0 0');
+    assert.ok(Number(rd.sharpKernel(100).split(' ')[4]) > Number(rd.sharpKernel(50).split(' ')[4]));
 });
