@@ -69,6 +69,18 @@ $stmt = $db->prepare("SELECT * FROM links WHERE token = :token");
 $stmt->execute([':token' => $token]);
 $link = $stmt->fetch();
 
+// Un lien dont le chemin n'est pas STRICTEMENT sous /home/<user>/ est un lien
+// interne (ex. le jeton 'home', qui pointe sur /home entier). Il n'est servi
+// que via browse.php, protege par Digest. Sinon ce point d'entree public
+// exposait tous les homes.
+if ($link && !defined('SHAREBOX_BROWSE_ENTRY')
+    && !preg_match('#^/home/[^/]+/#', rtrim($link['path'], '/') . '/')) {
+    stream_log('ACCESS 403 | token=' . $token . ' | lien interne hors browse.php');
+    http_response_code(403);
+    afficher_erreur('Accès interdit', 'Ce lien nécessite une authentification.');
+    exit;
+}
+
 if (!$link) {
     stream_log('ACCESS 404 | token=' . $token . ' | not found');
     http_response_code(404);
