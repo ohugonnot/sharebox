@@ -30,6 +30,8 @@ define('DL_BASE_URL', '/dl/');
 define('STREAM_MAX_CONCURRENT', ${MAX_CONCURRENT});
 define('STREAM_REMUX_ENABLED', ${REMUX_ENABLED});
 define('STREAM_LOG', '/data/stream.log');
+define('PROBE_SLOT_DIR', '/data');
+define('UHD_LOCK_PATH', '/data/stream_uhd.lock');
 define('BANDWIDTH_QUOTA_TB', ${QUOTA_TB});
 PHPEOF
 
