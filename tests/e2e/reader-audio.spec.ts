@@ -177,11 +177,9 @@ test.describe('livres: liseuse PDF', () => {
     await inkReady(page);
     await expect(tid(page, 'rd-resume-banner')).toBeHidden();
 
-    // Back: viewer closes into the library, whose Retour link returns to the listing.
+    // Opened from its row: one Back returns to the listing, not to the reader's library.
+    await expect(tid(page, 'rd-back')).toContainText('Dossier');
     await tid(page, 'rd-back').click();
-    await expect(tid(page, 'rd-library')).toBeVisible();
-    await shot(page, 'reader-library');
-    await page.locator('.mp-back').click();
     await expect(page.locator('.row[data-type="file"]')).toHaveCount(2);
     expect(page.url()).not.toContain('play=1');
     expect(page.url()).not.toContain('read=1');
@@ -196,6 +194,10 @@ test.describe('livres: liseuse PDF', () => {
     await tid(page, 'rd-book').filter({ hasText: 'a-book' }).click();
     await tid(page, 'rd-viewer').waitFor({ state: 'visible' });
     await inkReady(page);
+    // Opened from the library: Back keeps the library.
+    await expect(tid(page, 'rd-back')).toContainText('Bibliothèque');
+    await tid(page, 'rd-back').click();
+    await expect(tid(page, 'rd-library')).toBeVisible();
   });
 
   test('swipe CDP gauche/droite (mobile)', async ({ page }) => {
@@ -398,12 +400,10 @@ test.describe('bd: liseuse CBZ/CBR', () => {
     await imgLoaded(page);
     await tid(page, 'rd-next').click();
     await expectPage(page, 2);
+    // Back leaves for the listing; reopening the same book offers to resume.
     await tid(page, 'rd-back').click();
-    await expect(tid(page, 'rd-library')).toBeVisible();
-    // Closing the book frees the page image.
-    await expect(tid(page, 'rd-viewer').locator('img:visible')).toHaveCount(0);
-
-    await tid(page, 'rd-book').filter({ hasText: 'a-comic' }).click();
+    await expect(page.locator('.row[data-type="file"]').first()).toBeVisible();
+    await playBtn(page, 'a-comic.cbz').click();
     await tid(page, 'rd-viewer').waitFor({ state: 'visible' });
     await tid(page, 'rd-resume-banner').waitFor({ state: 'visible' });
     await tid(page, 'rd-resume-yes').click();
@@ -472,9 +472,9 @@ test.describe('bd: liseuse CBZ/CBR', () => {
     expect(broken).toBe(0);
     expect(await noHScroll(page)).toBe(true);
     await shot(page, 'bd-corrupt');
-    // The viewer stays usable: back returns to the library.
+    // The viewer stays usable: back returns to the listing.
     await tid(page, 'rd-back').click();
-    await expect(tid(page, 'rd-library')).toBeVisible();
+    await expect(page.locator('.row[data-type="file"]').first()).toBeVisible();
   });
 });
 
