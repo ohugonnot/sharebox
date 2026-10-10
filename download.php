@@ -219,7 +219,11 @@ if ($readerAllowed && ($_GET['inline'] ?? '') === '1' && is_file($resolvedPath))
         exit;
     }
     // A compressing proxy drops Content-Length, and pdf.js then fetches the whole file.
-    header('Cache-Control: no-transform');
+    // The session's no-cache headers would make the browser fetch the whole book again on each open.
+    header_remove('Pragma');
+    header_remove('Expires');
+    header('Cache-Control: private, max-age=86400, no-transform');
+    header('Last-Modified: ' . gmdate('D, d M Y H:i:s', (int)filemtime($resolvedPath)) . ' GMT');
     header('X-Content-Type-Options: nosniff');
     serve_file($resolvedPath, $inlineMime, 'inline; filename="' . addcslashes(preg_replace('/[\r\n\0]/', '', basename($resolvedPath)), '"\\') . '"');
 }
@@ -963,7 +967,8 @@ HTML;
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
         }
         // data-play stocke l'URL play pour le JS de clic configurable ; ?play=1 sur un livre ouvre la liseuse
-        $canPlay = $mediaType || (($listingActions['rowRead'] ?? false) && book_readable($file['name']));
+        // Books get a read arrow like videos, whatever else the folder holds.
+        $canPlay = $mediaType || book_readable($file['name']);
         $dataPlay = $canPlay ? ' data-play="' . htmlspecialchars($playUrl, ENT_QUOTES) . '"' : '';
         echo '<a class="row" href="' . $fileUrl . '" title="' . $fileHtml . '" data-type="file" data-name="' . $fileHtml . '" data-size="' . $file['size'] . '"' . $dataPlay . '>';
         echo '<div class="row-icon ' . $iconClass . '">' . $iconSvg . '</div>';

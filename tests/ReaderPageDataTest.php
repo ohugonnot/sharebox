@@ -101,22 +101,22 @@ class ReaderPageDataTest extends TestCase
      * @param string[] $names
      * @param array{param:string,label:string}|null $toolbar
      */
-    public function testListingActions(array $names, bool $rowRead, ?array $toolbar): void
+    public function testListingActions(array $names, ?array $toolbar): void
     {
-        $this->assertSame(['rowRead' => $rowRead, 'toolbar' => $toolbar], listing_actions($names, false));
+        $this->assertSame(['toolbar' => $toolbar], listing_actions($names, false));
     }
 
     public static function listingActionsProvider(): array
     {
         $tracks = array_map(fn($i) => sprintf('%02d.mp3', $i), range(1, 12));
         return [
-            'livre audio + livret' => [array_merge($tracks, ['livret.pdf']), true, ['param' => 'listen', 'label' => 'Écouter · 12 pistes']],
-            'bibliothèque' => [['a.pdf', 'b.pdf', 'c.pdf', 'x.nfo'], true, ['param' => 'read', 'label' => 'Bibliothèque · 3 livres']],
-            'un seul livre : pas de bibliothèque' => [['a.pdf', 'a.mp3'], true, null],
-            'epub seuls, désactivés' => [['a.epub', 'b.epub'], false, null],
-            'epub désactivés ne cachent pas les pistes' => [['a.mp3', 'b.mp3', 'x.epub', 'y.epub', 'z.epub'], true, ['param' => 'listen', 'label' => 'Écouter · 2 pistes']],
-            'dossier vidéo' => [['a.pdf', 'b.pdf', 'clip.mkv'], false, null],
-            'rien' => [['a.mp3'], false, null],
+            'livre audio + livret' => [array_merge($tracks, ['livret.pdf']), ['param' => 'listen', 'label' => 'Écouter · 12 pistes']],
+            'bibliothèque' => [['a.pdf', 'b.pdf', 'c.pdf', 'x.nfo'], ['param' => 'read', 'label' => 'Bibliothèque · 3 livres']],
+            'un seul livre : pas de bibliothèque' => [['a.pdf', 'a.mp3'], null],
+            'epub seuls, désactivés' => [['a.epub', 'b.epub'], null],
+            'epub désactivés ne cachent pas les pistes' => [['a.mp3', 'b.mp3', 'x.epub', 'y.epub', 'z.epub'], ['param' => 'listen', 'label' => 'Écouter · 2 pistes']],
+            'dossier vidéo' => [['a.pdf', 'b.pdf', 'clip.mkv'], null],
+            'rien' => [['a.mp3'], null],
         ];
     }
 
@@ -163,7 +163,6 @@ class ReaderPageDataTest extends TestCase
     public function testComicFolderGetsTheLibraryAction(): void
     {
         $a = listing_actions(['a.cbz', 'b.cbr'], false);
-        $this->assertTrue($a['rowRead']);
         $this->assertNotNull($a['toolbar']);
         $this->assertSame('read', $a['toolbar']['param']);
     }
