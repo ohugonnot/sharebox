@@ -159,7 +159,7 @@ class FfmpegHelpersTest extends TestCase
     {
         $result = buildFfmpegInputArgs('/path/to/video.mkv');
         $this->assertStringContainsString('ffmpeg', $result);
-        $this->assertStringContainsString('timeout 3600', $result);
+        $this->assertStringContainsString('timeout 14400', $result);
         $this->assertStringContainsString('ionice', $result);
         $this->assertStringContainsString('nice -n 5', $result);
         $this->assertStringContainsString('-nostdin', $result);

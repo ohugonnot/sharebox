@@ -56,3 +56,7 @@ define('MAX_ZIP_SIZE', 10 * 1024 * 1024 * 1024);
 // define('FFMPEG_HW_ACCEL', 'auto');
 // Intel VAAPI: path to the DRI render node (default /dev/dri/renderD128).
 // define('FFMPEG_VAAPI_DEVICE', '/dev/dri/renderD128');
+
+// ── Reader ───────────────────────────────────────────────────────────────────
+// EPUB books in the reader (needs foliate-js, not shipped yet). PDF always works.
+// define('READER_EPUB_ENABLED', false);

@@ -9,6 +9,7 @@
 
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/comic.php';
 require_once __DIR__ . '/auth.php';  // is_admin() for gating TMDB write endpoints
 
 /**
@@ -67,6 +68,16 @@ $db = get_db();
 $stmt = $db->prepare("SELECT * FROM links WHERE token = :token");
 $stmt->execute([':token' => $token]);
 $link = $stmt->fetch();
+
+// Le jeton 'home' pointe sur BASE_PATH entier : il n'est servi que via browse.php,
+// protege par Digest. Sinon ce point d'entree public exposait tous les homes.
+// Le chemin ne suffit pas a le reconnaitre : la demo Docker partage BASE_PATH en public.
+if ($link && $token === 'home' && !defined('SHAREBOX_BROWSE_ENTRY')) {
+    stream_log('ACCESS 403 | token=' . $token . ' | lien interne hors browse.php');
+    http_response_code(403);
+    afficher_erreur('Accès interdit', 'Ce lien nécessite une authentification.');
+    exit;
+}
 
 if (!$link) {
     stream_log('ACCESS 404 | token=' . $token . ' | not found');
@@ -154,6 +165,73 @@ if (!is_path_within($resolvedPath, $basePath)) {
     stream_log('ACCESS 403 | token=' . $token . ' | path traversal: ' . ($subPath ?: '(root)'));
     http_response_code(403);
     afficher_erreur('Accès interdit', 'Ce chemin n\'est pas autorisé.');
+    exit;
+}
+
+// Liseuse et lecteur audio : fichiers en inline (liste blanche) et pages dédiées.
+// A file link with a download limit stays a plain counted download: the reader's Range requests would get 410.
+$readerAllowed = $subPath || $link['max_downloads'] === null;
+if ($readerAllowed && ($_GET['inline'] ?? '') === '1' && is_file($resolvedPath)) {
+    // Comics are served one page at a time: the archive itself never goes out inline.
+    if (reader_kind($resolvedPath) === 'comic' && (($_GET['pages'] ?? '') === '1' || isset($_GET['page']))) {
+        // HEAD never opens the archive: on a busy disk a probe must not cost a listing.
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
+            if (isset($_GET['page'])) {
+                if (comic_page_index($_GET['page'], PHP_INT_MAX) === null) http_response_code(404);
+            } else {
+                header('Content-Type: application/json');
+            }
+            exit;
+        }
+        $comicPages = comic_page_entries($resolvedPath);
+        if ($comicPages === null) {
+            http_response_code(422);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'unreadable archive']);
+            exit;
+        }
+        if (!isset($_GET['page'])) {
+            header('Content-Type: application/json');
+            echo json_encode(['pages' => count($comicPages)]);
+            exit;
+        }
+        $comicIndex = comic_page_index($_GET['page'], count($comicPages));
+        if ($comicIndex === null) {
+            http_response_code(404);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'no such page']);
+            exit;
+        }
+        // Drop output buffers (zlib included): an image must not be gzipped.
+        while (ob_get_level()) ob_end_clean();
+        if (!comic_send_page($resolvedPath, $comicPages[$comicIndex])) {
+            stream_log('READER comic 422 | ' . basename($resolvedPath) . ' | page=' . ($comicIndex + 1));
+            http_response_code(422);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'unreadable page']);
+        }
+        exit;
+    }
+    $inlineMime = inline_mime($resolvedPath);
+    if ($inlineMime === null) {
+        http_response_code(404);
+        afficher_erreur('Introuvable', 'Ce fichier ne peut pas être affiché ici.');
+        exit;
+    }
+    // A compressing proxy drops Content-Length, and pdf.js then fetches the whole file.
+    header('Cache-Control: no-transform');
+    header('X-Content-Type-Options: nosniff');
+    serve_file($resolvedPath, $inlineMime, 'inline; filename="' . addcslashes(preg_replace('/[\r\n\0]/', '', basename($resolvedPath)), '"\\') . '"');
+}
+$mediaPage = match (true) {
+    is_dir($resolvedPath) && ($_GET['read'] ?? '') === '1' => 'reader_page',
+    is_dir($resolvedPath) && ($_GET['listen'] ?? '') === '1' => 'audiobook_page',
+    // The play link of a book row opens the reader on that book.
+    $readerAllowed && is_file($resolvedPath) && ($_GET['play'] ?? '') === '1' && book_readable($resolvedPath) => 'reader_page',
+    default => null,
+};
+if ($mediaPage !== null) {
+    require __DIR__ . '/views/' . $mediaPage . '.php';
     exit;
 }
 
@@ -636,7 +714,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .gear-select { flex:1; padding:.28rem .5rem; border:1px solid var(--border); border-radius:var(--radius-sm); background:rgba(255,255,255,.04); color:var(--text-primary); font-family:var(--font-sans); font-size:.78rem; outline:none; cursor:pointer; -webkit-appearance:none; appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' fill='%238b90a0' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right .4rem center; padding-right:1.4rem; }
 .gear-select:focus { border-color:var(--accent); }
 .gear-select option { background:#1a1d28; color:#e8eaf0; }
-@media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row{min-height:44px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem}}
+@media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row,.btn-media{min-height:44px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem}}
 @media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-box{flex:1;width:auto;min-width:80px}.toolbar-info{display:none}.gear-panel{right:-1rem;min-width:240px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}}
 /* ── Continue Watching ── */
 .cw-section{margin-bottom:1.5rem}
@@ -671,6 +749,13 @@ HTML;
         $itemsLabel = $totalItems . ' élément' . ($totalItems > 1 ? 's' : '');
         echo '<div class="toolbar">';
         echo '<span class="toolbar-info">' . $itemsLabel . '</span>';
+
+        // Liseuse / lecteur audio : déduits des noms déjà listés, sans I/O de plus
+        $listingActions = listing_actions(array_column($files, 'name'));
+        if ($listingActions['toolbar'] !== null) {
+            $mediaUrl = $baseUrl . '?' . ($subPath ? 'p=' . rawurlencode($subPath) . '&' : '') . $listingActions['toolbar']['param'] . '=1';
+            echo '<a class="btn-zip btn-media" style="background:transparent;border:1px solid var(--accent);color:var(--accent)" href="' . htmlspecialchars($mediaUrl) . '">' . $listingActions['toolbar']['label'] . '</a>';
+        }
 
         // Barre de tri (seulement si des fichiers à trier)
         if ($totalFiles > 1) {
@@ -870,21 +955,22 @@ HTML;
         } elseif (in_array($ext, ['jpg','jpeg','png','gif','webp','bmp','svg','tiff','heic','avif','raw','cr2','nef'])) {
             $iconClass = 'img';
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#26c6da"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
-        } elseif (in_array($ext, ['zip','rar','7z','tar','gz','bz2','xz','tgz','iso','cbz','cbr'])) {
+        } elseif (in_array($ext, ['zip','rar','7z','tar','gz','bz2','xz','tgz','iso'])) {
             $iconClass = 'arc';
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#ef5350"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>';
         } else {
             $iconClass = 'file';
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
         }
-        // data-play stocke l'URL play pour le JS de clic configurable
-        $dataPlay = $mediaType ? ' data-play="' . htmlspecialchars($playUrl, ENT_QUOTES) . '"' : '';
+        // data-play stocke l'URL play pour le JS de clic configurable ; ?play=1 sur un livre ouvre la liseuse
+        $canPlay = $mediaType || (($listingActions['rowRead'] ?? false) && book_readable($file['name']));
+        $dataPlay = $canPlay ? ' data-play="' . htmlspecialchars($playUrl, ENT_QUOTES) . '"' : '';
         echo '<a class="row" href="' . $fileUrl . '" title="' . $fileHtml . '" data-type="file" data-name="' . $fileHtml . '" data-size="' . $file['size'] . '"' . $dataPlay . '>';
         echo '<div class="row-icon ' . $iconClass . '">' . $iconSvg . '</div>';
         echo '<span class="row-name">' . $fileHtml . '</span>';
         if ($ext) echo '<span class="row-ext">' . htmlspecialchars($ext) . '</span>';
         echo '<span class="row-meta">' . $size . '</span>';
-        if ($mediaType) {
+        if ($canPlay) {
             echo '<span class="btn-play" onclick="event.preventDefault();event.stopPropagation();location.href=\'' . htmlspecialchars($playUrl, ENT_QUOTES) . '\'" title="Lire"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>';
         }
         echo '</a>';
@@ -1940,9 +2026,15 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     $prevFile = null;
     $nextFile = null;
     if ($subPath && $basePath && $mediaType === 'video') {
-        $nav = computeEpisodeNav($subPath, $basePath, $baseUrl);
-        $prevFile = $nav['prev'];
-        $nextFile = $nav['next'];
+        $parentSub = dirname($subPath);
+        $parentDir = ($parentSub === '.') ? $basePath : $basePath . '/' . $parentSub;
+        // Un dossier "films" n'a pas d'épisode suivant, même s'il contient plusieurs vidéos.
+        $navFolderType = get_folder_type(get_db(), realpath($parentDir) ?: $parentDir);
+        if ($navFolderType !== 'movies') {
+            $nav = computeEpisodeNav($subPath, $basePath, $baseUrl);
+            $prevFile = $nav['prev'];
+            $nextFile = $nav['next'];
+        }
     }
     $episodeNavJson = json_encode(['prev' => $prevFile, 'next' => $nextFile], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG);
     if ($prevFile || $nextFile) {
@@ -1972,6 +2064,17 @@ function afficher_player(string $token, string $shareName, string $subPath, stri
     $watchCsrf = $watchUser ? ($_SESSION['csrf_token'] ?? null) : null;
     $watchPathJs = $watchPath ? json_encode($watchPath) : 'null';
     $watchCsrfJs = $watchCsrf ? json_encode($watchCsrf) : 'null';
+
+    // Hauteur source : sert au player à prévenir avant un transcode UHD.
+    // La clé du cache ffprobe est le realpath (cf. $resolvedPath dans le routeur).
+    $sourceHeight = 0;
+    if ($mediaType === 'video' && $basePath) {
+        $probePath = $subPath ? $basePath . '/' . $subPath : $basePath;
+        $probe = probe_cache_data(get_db(), realpath($probePath) ?: $probePath);
+        $sourceHeight = (int)($probe['videoHeight'] ?? 0);
+    }
+    $uhdMinHeight = STREAM_UHD_MIN_HEIGHT;
+    $dlUrlJs = json_encode($dlUrl, JSON_HEX_TAG | JSON_HEX_APOS);
 
     $remuxEnabled = STREAM_REMUX_ENABLED ? 'true' : 'false';
     $jsMtime = filemtime(__DIR__ . '/player.js');
@@ -2058,7 +2161,10 @@ var PLAYER_CONFIG = {
     pp: {$pParamJsEnc},
     episodeNav: {$episodeNavJson},
     watchPath: {$watchPathJs},
-    watchCsrf: {$watchCsrfJs}
+    watchCsrf: {$watchCsrfJs},
+    sourceHeight: {$sourceHeight},
+    uhdMinHeight: {$uhdMinHeight},
+    dlUrl: {$dlUrlJs}
 };
 </script>
 <script src="/share/player.js?v={$jsMtime}"></script>

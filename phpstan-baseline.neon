@@ -81,13 +81,13 @@ parameters:
 		-
 			message: '#^Variable \$db might not be defined\.$#'
 			identifier: variable.undefined
-			count: 2
+			count: 3
 			path: handlers/stream_hls.php
 
 		-
 			message: '#^Variable \$resolvedPath might not be defined\.$#'
 			identifier: variable.undefined
-			count: 12
+			count: 14
 			path: handlers/stream_hls.php
 
 		-
@@ -183,13 +183,13 @@ parameters:
 		-
 			message: '#^Variable \$db might not be defined\.$#'
 			identifier: variable.undefined
-			count: 3
+			count: 5
 			path: handlers/stream_transcode.php
 
 		-
 			message: '#^Variable \$resolvedPath might not be defined\.$#'
 			identifier: variable.undefined
-			count: 10
+			count: 13
 			path: handlers/stream_transcode.php
 
 		-

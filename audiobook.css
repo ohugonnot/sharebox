@@ -1,0 +1,232 @@
+.ab-player {
+    max-width: 720px;
+    margin: 0 auto;
+    padding-bottom: calc(var(--ab-dock-h, 220px) + 8px);
+    color: var(--as-text);
+    -webkit-tap-highlight-color: transparent;
+}
+.ab-player *, .ab-player *::before, .ab-player *::after { box-sizing: border-box; }
+.ab-banner[hidden], .ab-error[hidden] { display: none; }
+
+.ab-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: .5rem;
+    margin-bottom: .75rem;
+    padding: .6rem .75rem;
+    background: var(--as-raised);
+    border: 1px solid var(--as-border);
+    border-radius: 8px;
+    font-size: .9rem;
+}
+.ab-banner-text { min-width: 0; overflow-wrap: anywhere; }
+.ab-banner-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+
+/* Chapter list */
+.ab-track-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--as-border);
+    border-radius: 8px;
+    background: var(--as-surface);
+}
+.ab-track {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid var(--as-border);
+    border-left: 3px solid transparent;
+    scroll-margin-bottom: var(--ab-dock-h, 220px);
+}
+.ab-track:last-child { border-bottom: 0; }
+.ab-track-pick {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 48px;
+    padding: .5rem .75rem;
+    background: transparent;
+    border: 0;
+    color: var(--as-text);
+    font: inherit;
+    text-align: left;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+.ab-track-label {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.ab-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+.ab-track-pick:hover { color: var(--as-bright); }
+.ab-check {
+    display: none;
+    align-items: center;
+    padding: 0 .25rem;
+    color: var(--as-accent);
+}
+.ab-check svg { width: 20px; height: 20px; }
+.ab-track-dl {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    min-height: 44px;
+    align-self: center;
+    color: var(--as-muted);
+}
+.ab-track-dl svg { width: 20px; height: 20px; }
+.ab-track-dl:hover { color: var(--as-accent); text-decoration: none; }
+.ab-track.is-listened .ab-track-pick { color: var(--as-muted); }
+.ab-track.is-listened .ab-check { display: flex; }
+.ab-track.is-current { border-left-color: var(--as-accent); }
+.ab-track.is-current .ab-track-pick { color: var(--as-bright); }
+
+/* Playback dock */
+.ab-dock {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1030;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 6px 12px calc(10px + env(safe-area-inset-bottom));
+    background: var(--as-surface);
+    border-top: 1px solid var(--as-border);
+}
+@media (min-width: 740px) {
+    .ab-dock { border: 1px solid var(--as-border); border-bottom: 0; border-radius: 12px 12px 0 0; }
+}
+.ab-title {
+    margin: 0;
+    font-size: .95rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--as-bright);
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    min-width: 0;
+}
+.ab-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: .75rem;
+}
+.ab-count {
+    flex: 0 0 auto;
+    color: var(--as-muted);
+    font-size: .85rem;
+    font-variant-numeric: tabular-nums;
+}
+.ab-error {
+    margin-bottom: .4rem;
+    padding: .4rem .6rem;
+    border: 1px solid var(--as-danger);
+    border-radius: 8px;
+    color: var(--as-danger);
+    font-size: .85rem;
+}
+.ab-seekrow { display: flex; align-items: center; gap: .5rem; }
+.ab-seek {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 44px;
+    margin: 0;
+    background: transparent;
+    accent-color: var(--as-accent);
+    touch-action: manipulation;
+}
+.ab-seek::-webkit-slider-thumb { width: 24px; height: 24px; }
+.ab-seek::-moz-range-thumb { width: 24px; height: 24px; }
+.ab-time {
+    flex: 0 0 auto;
+    text-align: right;
+    color: var(--as-muted);
+    font-variant-numeric: tabular-nums;
+    font-size: .85rem;
+}
+
+.ab-transport, .ab-options {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: .5rem;
+    margin-top: 4px;
+}
+.ab-transport { justify-content: space-between; max-width: 420px; margin-inline: auto; }
+.ab-options { flex-wrap: wrap; justify-content: space-between; gap: .5rem; }
+.ab-rate-group { display: flex; align-items: center; gap: .25rem; }
+
+.ab-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: .4rem;
+    min-width: 48px;
+    min-height: 48px;
+    padding: 0 .6rem;
+    background: transparent;
+    color: var(--as-text);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font: inherit;
+    line-height: 1.2;
+    cursor: pointer;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+}
+.ab-btn svg { width: 24px; height: 24px; flex: 0 0 auto; }
+.ab-btn:hover:not(:disabled) { border-color: var(--as-border); color: var(--as-bright); }
+.ab-btn:disabled, .ab-btn[aria-disabled="true"] { opacity: .35; cursor: default; }
+.ab-btn-accent { border-color: var(--as-accent); color: var(--as-accent); }
+.ab-play {
+    min-width: 64px;
+    min-height: 64px;
+    border-radius: 50%;
+    background: var(--as-accent);
+    border-color: var(--as-accent);
+    color: var(--as-bg);
+}
+.ab-play:hover:not(:disabled) { border-color: var(--as-bright); color: var(--as-bg); }
+.ab-play svg { width: 30px; height: 30px; }
+.ab-small { min-height: 44px; padding-block: 0; min-width: 44px; font-size: .9rem; font-variant-numeric: tabular-nums; }
+.ab-small svg { width: 18px; height: 18px; }
+.ab-rate { min-width: 64px; }
+.ab-sleep { border-color: var(--as-border); }
+
+.ab-btn:focus-visible, .ab-track-pick:focus-visible, .ab-track-dl:focus-visible, .ab-seek:focus-visible {
+    outline: 2px solid var(--as-accent);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+    .ab-btn, .ab-track-pick, .ab-track-dl { transition: border-color .15s, color .15s; }
+}
+
+/* Bootstrap smooth scrolling makes jumps through a long list slow. */
+html:has(.ab-player) { scroll-behavior: auto; }
