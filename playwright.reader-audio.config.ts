@@ -17,7 +17,9 @@ export default defineConfig({
   reporter: [['list']],
   use: { launchOptions },
   projects: [
-    { name: 'desktop', use: { browserName: 'chromium', viewport: { width: 1280, height: 800 } } },
-    { name: 'mobile', use: { ...devices['Pixel 7'], browserName: 'chromium', viewport: { width: 375, height: 667 } } },
+    { name: 'desktop', grepInvert: /@landscape/, use: { browserName: 'chromium', viewport: { width: 1280, height: 800 } } },
+    { name: 'mobile', grepInvert: /@landscape/, use: { ...devices['Pixel 7'], browserName: 'chromium', viewport: { width: 375, height: 667 } } },
+    // Phone held sideways: only the double-page / manga scenarios.
+    { name: 'landscape', grep: /@landscape/, use: { ...devices['Pixel 7'], browserName: 'chromium', viewport: { width: 740, height: 360 }, hasTouch: true } },
   ],
 });

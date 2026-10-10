@@ -9,7 +9,7 @@
 import { test as base, expect, Page, Locator } from '@playwright/test';
 import * as fs from 'node:fs';
 import {
-  createFixtures, removeFixtures, startServer, snapshotTmp, cleanTmp, TestServer, HOSTILE_PDFS, HOSTILE_MP3S, COMIC_COLORS,
+  createFixtures, removeFixtures, startServer, snapshotTmp, cleanTmp, TestServer, HOSTILE_PDFS, HOSTILE_MP3S, COMIC_COLORS, LONG_COMIC_COLORS,
 } from './reader-audio-fixtures';
 
 const SHOTS = '/home/folken/sharebox-screens';
@@ -785,5 +785,410 @@ test.describe('mobile portrait', () => {
     await fits(page, tid(page, 'ab-seek'));
     for (const t of await tid(page, 'ab-track').all()) await big(t.locator('.ab-track-pick'), 'track row');
     await shot(page, 'audio-dock-mobile');
+  });
+});
+
+// ---------------------------------------------------------------- BD ergonomics (spec-ergo)
+test.describe('bd: ergonomie', () => {
+  const isTouch = () => prof() !== 'desktop';
+  const viewer = (page: Page) => tid(page, 'rd-viewer');
+  const pageImg = (page: Page, n: number) => viewer(page).locator(`img[data-page="${n}"]`);
+  const shownPages = (page: Page) => viewer(page).locator('img[data-page]').evaluateAll(
+    (els) => els.map((e) => +(e.getAttribute('data-page') || 0)).sort((a, b) => a - b));
+  const expectShown = (page: Page, pages: number[]) => expect.poll(() => shownPages(page), { timeout: 10000 }).toEqual(pages);
+  /** Page field plus count text: the spec leaves open whether "2-3" lives in the input or beside it. */
+  const counterText = async (page: Page) => (await tid(page, 'rd-page-input').inputValue()) + ' | ' + (await tid(page, 'rd-page-count').innerText());
+  const expectCounter = (page: Page, re: RegExp) => expect.poll(() => counterText(page), { timeout: 10000 }).toMatch(re);
+  const colorOf = (page: Page, n: number) => pageImg(page, n).evaluate((el) => {
+    const i = el as HTMLImageElement;
+    const c = document.createElement('canvas');
+    c.width = 1; c.height = 1;
+    const g = c.getContext('2d')!;
+    g.drawImage(i, 0, 0, i.naturalWidth, i.naturalHeight, 0, 0, 1, 1);
+    return Array.from(g.getImageData(0, 0, 1, 1).data.slice(0, 3));
+  });
+  const expectLongColor = (page: Page, n: number) => expect.poll(async () => {
+    const got = await colorOf(page, n).catch(() => [-1, -1, -1]);
+    return got.every((v, k) => Math.abs(v - LONG_COMIC_COLORS[n - 1][k]) <= 12);
+  }, { timeout: 10000, message: `page ${n} shows its own colour` }).toBe(true);
+
+  async function open(page: Page, folder: string, name: string) {
+    await page.goto(url(folder));
+    await playBtn(page, name).click();
+    await viewer(page).waitFor({ state: 'visible' });
+    await pageImg(page, 1).waitFor({ state: 'visible' });
+  }
+  async function tapAt(page: Page, pct: number) {
+    const b = (await viewer(page).boundingBox())!;
+    const x = Math.round(b.x + b.width * pct), y = Math.round(b.y + b.height * 0.5);
+    if (isTouch()) await page.touchscreen.tap(x, y); else await page.mouse.click(x, y);
+  }
+  async function doubleTapAt(page: Page, pct: number) {
+    const b = (await viewer(page).boundingBox())!;
+    const x = Math.round(b.x + b.width * pct), y = Math.round(b.y + b.height * 0.5);
+    if (isTouch()) { await page.touchscreen.tap(x, y); await page.waitForTimeout(80); await page.touchscreen.tap(x, y); } else await page.mouse.dblclick(x, y);
+  }
+  const box = async (loc: Locator) => (await loc.boundingBox())!;
+  const reload = async (page: Page) => {
+    await page.reload();
+    await viewer(page).waitFor({ state: 'visible' });
+  };
+
+  test('double page @landscape: one page by default, toggle on, cover alone, then pairs, remembered', async ({ page }) => {
+    await open(page, 'bd-long', 'long-comic.cbz');
+    await expectShown(page, [1]);
+    await expectLongColor(page, 1);
+    await tid(page, 'rd-next').click();
+    await expectShown(page, [2]);
+    await tid(page, 'rd-prev').click();
+    await expectShown(page, [1]);
+
+    // Turned on by the reader: the cover stays alone.
+    await expect(tid(page, 'rd-spread-toggle')).toBeVisible();
+    await tid(page, 'rd-spread-toggle').click();
+    await expectShown(page, [1]);
+    await tid(page, 'rd-next').click();
+    await expectShown(page, [2, 3]);
+    await expectCounter(page, /2\s*[-–]\s*3/);
+    await expectLongColor(page, 2);
+    await expectLongColor(page, 3);
+
+    await tid(page, 'rd-next').click();
+    await expectShown(page, [4, 5]);
+    await expectCounter(page, /4\s*[-–]\s*5/);
+    await tid(page, 'rd-prev').click();
+    await expectShown(page, [2, 3]);
+
+    const a = await box(pageImg(page, 2)), b = await box(pageImg(page, 3)), v = await box(viewer(page));
+    expect(Math.abs(a.y - b.y), 'same top').toBeLessThanOrEqual(2);
+    expect(a.x, 'lower page is on the left').toBeLessThan(b.x);
+    expect(Math.abs(a.x + a.width - b.x), 'no gap between pages').toBeLessThanOrEqual(2);
+    expect(a.x).toBeGreaterThanOrEqual(v.x - 1);
+    expect(b.x + b.width).toBeLessThanOrEqual(v.x + v.width + 1);
+    expect(Math.max(a.y + a.height, b.y + b.height)).toBeLessThanOrEqual(v.y + v.height + 1);
+
+    // After a reload the book may reopen on the cover (alone anyway): judge on the toggle and the next pages.
+    await reload(page);
+    await expect(tid(page, 'rd-spread-toggle'), 'spread remembered').toHaveAttribute('aria-pressed', 'true');
+    await tid(page, 'rd-spread-toggle').click();
+    await expect(tid(page, 'rd-spread-toggle')).toHaveAttribute('aria-pressed', 'false');
+    await reload(page);
+    await expect(tid(page, 'rd-spread-toggle'), 'single page remembered').toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('double page @landscape: last page alone when it has no partner', async ({ page }) => {
+    await open(page, 'bd', 'a-comic.cbz');
+    await tid(page, 'rd-spread-toggle').click();
+    await tid(page, 'rd-next').click();
+    await expectShown(page, [2, 3]);
+    await tid(page, 'rd-next').click();
+    await expectShown(page, [4]);
+  });
+
+  test('portrait phone: chrome hidden, big page, one-line bar, class removed on close', async ({ page }) => {
+    test.skip(!isMobile(), 'mobile project only');
+    await open(page, 'bd', 'a-comic.cbz');
+    await expect(page.locator('html')).toHaveClass(/(^|\s)rd-reading(\s|$)/);
+    await expect(page.locator('.mp-bar')).toBeHidden();
+    const vp = page.viewportSize()!;
+    expect((await box(pageImg(page, 1))).height).toBeGreaterThanOrEqual(vp.height * 0.75);
+
+    const ids = ['rd-back', 'rd-prev', 'rd-next', 'rd-fullscreen', 'rd-page-input'];
+    const tops: number[] = [];
+    for (const id of ids) {
+      const el = tid(page, id);
+      await expect(el, id).toBeVisible();
+      const bb = await box(el);
+      tops.push(bb.y);
+      if (id !== 'rd-page-input') {
+        expect.soft(bb.height, `${id} height`).toBeGreaterThanOrEqual(44);
+        expect.soft(bb.width, `${id} width`).toBeGreaterThanOrEqual(44);
+      }
+    }
+    expect(Math.max(...tops) - Math.min(...tops), 'toolbar on one line').toBeLessThanOrEqual(4);
+    expect(await noHScroll(page)).toBe(true);
+
+    await tid(page, 'rd-back').click();
+    await expect(viewer(page)).toBeHidden();
+    await expect(page.locator('html')).not.toHaveClass(/rd-reading/);
+    // Opened from its row: Back returns to the folder listing.
+    await expect(page.locator('.row[data-type="file"]').first()).toBeVisible();
+  });
+
+  test.describe('zoom', () => {
+    const size = async (page: Page) => { const b = await box(pageImg(page, 1)); return { w: b.width, h: b.height }; };
+    const expectZoomed = async (page: Page, base: { w: number; h: number }) => {
+      await expect.poll(async () => (await size(page)).w / base.w, { timeout: 5000 }).toBeGreaterThan(1.8);
+      await expect.poll(async () => (await size(page)).h / base.h, { timeout: 5000 }).toBeGreaterThan(1.8);
+    };
+    const expectFit = (page: Page, base: { w: number; h: number }) =>
+      expect.poll(async () => (await size(page)).w / base.w, { timeout: 5000 }).toBeLessThanOrEqual(1.05);
+
+    test('double tap zooms, zones are locked while zoomed, second double tap restores', async ({ page }) => {
+      await open(page, 'bd', 'a-comic.cbz');
+      const base = await size(page);
+      await doubleTapAt(page, 0.5);
+      await expectZoomed(page, base);
+      await expectPage(page, 1);
+
+      await tapAt(page, 0.95);
+      await page.waitForTimeout(400);
+      await expectPage(page, 1);
+
+      await doubleTapAt(page, 0.5);
+      await expectFit(page, base);
+      await expectPage(page, 1);
+    });
+
+    test('zoom buttons work for a comic and the zoom survives a page change, top of page shown', async ({ page }) => {
+      test.skip(prof() === 'mobile', 'zoom buttons are hidden on phones for comics, double-tap zooms');
+      await open(page, 'bd', 'a-comic.cbz');
+      const base = await size(page);
+      await expect(tid(page, 'rd-zoom-in')).toBeVisible();
+      await expect(tid(page, 'rd-zoom-out')).toBeVisible();
+      await tid(page, 'rd-zoom-in').click();
+      await expect.poll(async () => (await size(page)).w / base.w, { timeout: 5000 }).toBeGreaterThan(1.2);
+      await tid(page, 'rd-zoom-out').click();
+      await expectFit(page, base);
+
+      await tid(page, 'rd-zoom-in').click();
+      await tid(page, 'rd-zoom-in').click();
+      await expect.poll(async () => (await size(page)).w / base.w, { timeout: 5000 }).toBeGreaterThan(1.8);
+      await tid(page, 'rd-next').click();
+      await expectPage(page, 2);
+      const b2 = await box(pageImg(page, 2));
+      expect(b2.width / base.w, 'zoom kept on page change').toBeGreaterThan(1.8);
+      // The new page starts at its top-left corner.
+      expect(await tid(page, 'rd-stage').evaluate((n) => [n.scrollTop, n.scrollLeft])).toEqual([0, 0]);
+    });
+  });
+
+  const scrollTop = (page: Page) => tid(page, 'rd-stage').evaluate((el) => el.scrollTop);
+  async function zoomUntilOverflow(page: Page) {
+    for (let k = 0; k < 4; k++) {
+      if (await tid(page, 'rd-stage').evaluate((el) => el.scrollHeight > el.clientHeight + 20)) return;
+      await tid(page, 'rd-zoom-in').click();
+    }
+    await expect.poll(() => tid(page, 'rd-stage').evaluate((el) => el.scrollHeight > el.clientHeight + 20)).toBe(true);
+  }
+  async function expectArrowScroll(page: Page) {
+    await zoomUntilOverflow(page);
+    await tid(page, 'rd-stage').evaluate((el) => { el.scrollTop = 0; });
+    const p0 = await pageNo(page);
+    await page.keyboard.press('ArrowDown');
+    await expect.poll(() => scrollTop(page), { timeout: 5000 }).toBeGreaterThan(0);
+    const down = await scrollTop(page);
+    expect(await pageNo(page), 'ArrowDown keeps the page').toBe(p0);
+    await page.keyboard.press('ArrowUp');
+    await expect.poll(() => scrollTop(page), { timeout: 5000 }).toBeLessThan(down);
+    expect(await pageNo(page), 'ArrowUp keeps the page').toBe(p0);
+  }
+
+  test('zoomed comic: ArrowDown/ArrowUp scroll the page and never turn it', async ({ page }) => {
+    test.skip(prof() !== 'desktop', 'desktop project only');
+    await open(page, 'bd', 'a-comic.cbz');
+    await expectArrowScroll(page);
+  });
+
+  test('zoomed pdf: ArrowDown/ArrowUp scroll the page and never turn it', async ({ page }) => {
+    test.skip(prof() !== 'desktop', 'desktop project only');
+    await openBookFromListing(page, 'livres', 'a-book.pdf');
+    await expectArrowScroll(page);
+  });
+
+  test('zoomed comic: ArrowRight scrolls until the right edge, then turns the page', async ({ page }) => {
+    test.skip(prof() !== 'desktop', 'desktop project only');
+    await open(page, 'bd', 'a-comic.cbz');
+    // Up to the top step: the button disables itself there.
+    while (await tid(page, 'rd-zoom-in').isEnabled()) await tid(page, 'rd-zoom-in').click();
+    const stage = tid(page, 'rd-stage');
+    await expect.poll(() => stage.evaluate((el) => el.scrollWidth > el.clientWidth + 20)).toBe(true);
+    await stage.evaluate((el) => { el.scrollLeft = 0; });
+    const left = () => stage.evaluate((el) => el.scrollLeft);
+
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(left, { timeout: 5000 }).toBeGreaterThan(0);
+    await expectPage(page, 1);
+
+    // Press until the right edge: the press that reaches it scrolls, it never turns the page.
+    const maxLeft = await stage.evaluate((el) => el.scrollWidth - el.clientWidth);
+    for (let k = 0; k < 80 && (await left()) < maxLeft - 1; k++) {
+      await page.keyboard.press('ArrowRight');
+      await page.waitForTimeout(60);
+    }
+    expect(await left()).toBeGreaterThanOrEqual(maxLeft - 1);
+    await expectPage(page, 1);
+
+    await page.keyboard.press('ArrowRight');
+    await expectPage(page, 2);
+  });
+
+  test('zoomed comic: Space scrolls down, at the bottom it turns the page', async ({ page }) => {
+    test.skip(prof() !== 'desktop', 'desktop project only');
+    await open(page, 'bd', 'a-comic.cbz');
+    await zoomUntilOverflow(page);
+    await tid(page, 'rd-stage').evaluate((el) => { el.scrollTop = 0; });
+    await page.keyboard.press('Space');
+    await expect.poll(() => scrollTop(page), { timeout: 5000 }).toBeGreaterThan(0);
+    await expectPage(page, 1);
+    await tid(page, 'rd-stage').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await page.keyboard.press('Space');
+    await expectPage(page, 2);
+  });
+
+  test('zoomed comic: PageDown turns the page at once', async ({ page }) => {
+    test.skip(prof() !== 'desktop', 'desktop project only');
+    await open(page, 'bd', 'a-comic.cbz');
+    await zoomUntilOverflow(page);
+    await tid(page, 'rd-stage').evaluate((el) => { el.scrollTop = 0; });
+    await page.keyboard.press('PageDown');
+    await expectPage(page, 2);
+    await page.keyboard.press('PageUp');
+    await expectPage(page, 1);
+  });
+
+  test('sharpness slider: default on, 0 turns it off, value remembered, also on a PDF', async ({ page }) => {
+    await open(page, 'bd', 'a-comic.cbz');
+    const filt = () => pageImg(page, 1).evaluate((n) => getComputedStyle(n).filter);
+    const setRange = (v: string) => tid(page, 'rd-sharp-range').evaluate((n: HTMLInputElement, val) => {
+      n.value = val; n.dispatchEvent(new Event('input', { bubbles: true })); n.dispatchEvent(new Event('change', { bubbles: true }));
+    }, v);
+    expect(await filt()).toContain('rd-sharp-filter');
+    await expect(tid(page, 'rd-sharp-panel')).toBeHidden();
+    await tid(page, 'rd-sharp-toggle').click();
+    await expect(tid(page, 'rd-sharp-panel')).toBeVisible();
+    await expect(tid(page, 'rd-sharp-range')).toHaveValue('50');
+    await setRange('0');
+    expect(await filt()).toBe('none');
+    await setRange('80');
+    expect(await filt()).toContain('rd-sharp-filter');
+    // Escape closes the panel without leaving the book.
+    await tid(page, 'rd-sharp-range').press('Escape');
+    await expect(tid(page, 'rd-sharp-panel')).toBeHidden();
+    await expect(viewer(page)).toBeVisible();
+    await page.reload();
+    await viewer(page).waitFor({ state: 'visible' });
+    await pageImg(page, 1).waitFor();
+    await tid(page, 'rd-sharp-toggle').click();
+    await expect(tid(page, 'rd-sharp-range')).toHaveValue('80');
+    await page.goto(url('livres'));
+    await playBtn(page, 'a-book.pdf').click();
+    await viewer(page).waitFor({ state: 'visible' });
+    await inkReady(page);
+    // Comic PDFs are scans too: same slider, same remembered value.
+    await expect(tid(page, 'rd-sharp-toggle')).toBeVisible();
+    expect(await tid(page, 'rd-canvas').evaluate((n) => getComputedStyle(n).filter)).toContain('rd-sharp-filter');
+  });
+
+  test('fullscreen: only the handle brings the bar back', async ({ page }) => {
+    test.skip(isMobile(), 'desktop pointer and keyboard');
+    await open(page, 'bd', 'a-comic.cbz');
+    await tid(page, 'rd-fullscreen').click();
+    const v = viewer(page);
+    await expect(v).toHaveClass(/rd-bar-hidden/, { timeout: 6000 });
+    const b = (await tid(page, 'rd-stage').boundingBox())!;
+    // Middle tap, wheel up, ArrowUp and a page change must all leave it hidden.
+    await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
+    await page.waitForTimeout(500);
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.wheel(0, -300);
+    await page.keyboard.press('0');
+    await page.keyboard.press('ArrowUp');
+    await page.keyboard.press('ArrowRight');
+    await expectPage(page, 2);
+    await page.waitForTimeout(300);
+    await expect(v).toHaveClass(/rd-bar-hidden/);
+    await tid(page, 'rd-bar-handle').click();
+    await expect(v).not.toHaveClass(/rd-bar-hidden/);
+  });
+
+  test('wheel zooms a PDF', async ({ page }) => {
+    test.skip(isMobile(), 'desktop wheel');
+    await page.goto(url('livres'));
+    await playBtn(page, 'a-book.pdf').click();
+    await tid(page, 'rd-viewer').waitFor({ state: 'visible' });
+    await inkReady(page);
+    const canvas = page.locator('[data-testid="rd-viewer"] canvas').first();
+    const w0 = (await canvas.boundingBox())!.width;
+    const b = (await tid(page, 'rd-stage').boundingBox())!;
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await page.mouse.wheel(0, -300);
+    await expect.poll(async () => (await canvas.boundingBox())!.width / w0, { timeout: 5000 }).toBeGreaterThan(1.1);
+    await page.mouse.wheel(0, 300);
+    await expect.poll(async () => (await canvas.boundingBox())!.width / w0, { timeout: 5000 }).toBeLessThanOrEqual(1.05);
+  });
+
+  test.describe('keyboard zoom', () => {
+    test.skip(() => prof() !== 'desktop', 'desktop project only');
+    const width = async (page: Page) => (await box(pageImg(page, 1))).width;
+
+    test('+ zooms in, 0 restores the fit, - at the fit stays fitted', async ({ page }) => {
+      await open(page, 'bd', 'a-comic.cbz');
+      const base = await width(page);
+      await page.keyboard.press('-');
+      await page.waitForTimeout(300);
+      expect(await width(page) / base, '- from the fit').toBeLessThanOrEqual(1.05);
+
+      await page.keyboard.press('+');
+      await expect.poll(async () => (await width(page)) / base, { timeout: 5000 }).toBeGreaterThan(1.2);
+      await page.keyboard.press('0');
+      await expect.poll(async () => (await width(page)) / base, { timeout: 5000 }).toBeLessThanOrEqual(1.05);
+
+      await page.keyboard.press('=');
+      await expect.poll(async () => (await width(page)) / base, { timeout: 5000 }).toBeGreaterThan(1.2);
+      await page.keyboard.press('-');
+      await expect.poll(async () => (await width(page)) / base, { timeout: 5000 }).toBeLessThanOrEqual(1.05);
+    });
+
+    test('Control++ is left to the browser: the reader does not zoom', async ({ page }) => {
+      await open(page, 'bd', 'a-comic.cbz');
+      const base = await width(page);
+      await page.keyboard.press('Control+=');
+      await page.keyboard.press('Control+0');
+      await page.waitForTimeout(300);
+      expect(await width(page) / base).toBeLessThanOrEqual(1.05);
+    });
+
+    test('typing 0 in the page field does not reset the zoom', async ({ page }) => {
+      await open(page, 'bd', 'a-comic.cbz');
+      const base = await width(page);
+      await tid(page, 'rd-zoom-in').click();
+      await expect.poll(async () => (await width(page)) / base, { timeout: 5000 }).toBeGreaterThan(1.2);
+      await tid(page, 'rd-page-input').click();
+      await page.keyboard.type('0');
+      await page.waitForTimeout(300);
+      expect(await width(page) / base).toBeGreaterThan(1.2);
+    });
+  });
+
+  test('not zoomed: Space and ArrowRight turn the page', async ({ page }) => {
+    test.skip(prof() !== 'desktop', 'desktop project only');
+    await open(page, 'bd', 'a-comic.cbz');
+    await page.keyboard.press('Space');
+    await expectPage(page, 2);
+    await page.keyboard.press('ArrowRight');
+    await expectPage(page, 3);
+  });
+
+  test('not zoomed: ArrowDown/ArrowUp do not change page', async ({ page }) => {
+    test.skip(prof() !== 'desktop', 'desktop project only');
+    await open(page, 'bd', 'a-comic.cbz');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('ArrowUp');
+    await page.waitForTimeout(300);
+    await expectPage(page, 1);
+  });
+
+  test('pdf: forward by zone, key and button; no spread switch', async ({ page }) => {
+    await openBookFromListing(page, 'livres', 'a-book.pdf');
+    await expect(tid(page, 'rd-spread-toggle')).toBeHidden();
+    await tid(page, 'rd-next').click();
+    await expectPage(page, 2);
+    await page.keyboard.press('ArrowRight');
+    await expectPage(page, 3);
+    await page.keyboard.press('ArrowLeft');
+    await expectPage(page, 2);
+    await tapStage(page, 0.9);
+    await expectPage(page, 3);
   });
 });

@@ -20,9 +20,17 @@
     var REFIT_MS = 150;
     var HANDLE_SIZE = 44;
     var HANDLE_FREE_PX = 48;
-    var PULL_PX = 40;
     var ZONE_SIDE = 0.35;
     var CLICK_SLOP_PX = 10;
+    var COMIC_ZOOMS = [1, 1.5, 2.5, 4];
+    var COMIC_TAP_ZOOM = 2.5;
+    var DOUBLE_TAP_MS = 250;
+    var KEY_SCROLL = 0.12;
+    var WHEEL_STEP_PX = 100;
+    var SPREAD_KEY = 'asc-rd-pref:spread';
+    var SHARP_KEY = 'asc-rd-pref:sharp';
+    // 50 = the tested default: crisper lettering on soft scans without turning screentones into grain.
+    var SHARP_DEFAULT = 50;
     var EPUB_UNAVAILABLE = 'EPUB indisponible : le lecteur ne peut pas afficher ce livre ici.';
     var COMIC_UNREADABLE = 'BD illisible : l’archive est corrompue ou n’a pas pu être lue.';
     var COMIC_EMPTY = 'BD illisible : aucune image dans cette archive.';
@@ -222,6 +230,86 @@
         return null;
     }
 
+    // Comic double page: the cover stands alone, then (2,3), (4,5)... and a last page without partner stays alone.
+    function spreadFor(page, pages) {
+        var t = clampPage(pages, pages);
+        var p = clampPage(page, t);
+        if (p === 1) return [1, null];
+        var a = p % 2 === 0 ? p : p - 1;
+        return [a, a + 1 <= t ? a + 1 : null];
+    }
+
+    // Lower page of the spread one step away; the same page at either end of the book.
+    function stepSpread(page, pages, dir) {
+        var s = spreadFor(page, pages);
+        if (dir < 0) return s[0] === 1 ? 1 : spreadFor(s[0] - 1, pages)[0];
+        var n = (s[1] || s[0]) + 1;
+        return n > clampPage(pages, pages) ? s[0] : n;
+    }
+
+    // Pages side by side at one shared height, the row fitting in availW x availH, then scaled by zoom.
+    function fitSpread(dims, availW, availH, zoom) {
+        var ratio = 0;
+        for (var i = 0; i < dims.length; i++) {
+            if (!(dims[i][0] > 0 && dims[i][1] > 0)) return null;
+            ratio += dims[i][0] / dims[i][1];
+        }
+        if (!ratio) return null;
+        var h = Math.min(availH, availW / ratio) * (zoom > 0 ? zoom : 1);
+        return dims.map(function (d) {
+            return { width: Math.floor(d[0] / d[1] * h), height: Math.floor(h) };
+        });
+    }
+
+    function comicZoomStep(zoom, dir) {
+        var z = Number(zoom) || 1;
+        var i;
+        if (dir > 0) {
+            for (i = 0; i < COMIC_ZOOMS.length; i++) if (COMIC_ZOOMS[i] > z + 1e-9) return COMIC_ZOOMS[i];
+            return COMIC_ZOOMS[COMIC_ZOOMS.length - 1];
+        }
+        for (i = COMIC_ZOOMS.length - 1; i >= 0; i--) if (COMIC_ZOOMS[i] < z - 1e-9) return COMIC_ZOOMS[i];
+        return COMIC_ZOOMS[0];
+    }
+
+    // Reader shortcut for a key. Zoomed, arrows and Space pan first and only turn the page from an edge
+    // the view was already at (one press of resistance). edges = {top, bottom, left, right}: true when at that edge.
+    /** Stored sharpness 0..100; the old on/off values '1' and '0' map to the default and to off. */
+    function sharpLevel(raw) {
+        if (raw === null || raw === undefined || raw === '' || raw === '1') return SHARP_DEFAULT;
+        var n = Math.round(Number(raw));
+        return isFinite(n) ? Math.min(100, Math.max(0, n)) : SHARP_DEFAULT;
+    }
+
+    /** 3x3 unsharp kernel for feConvolveMatrix; its weights sum to 1, so flat areas keep their tone. */
+    function sharpKernel(level) {
+        var a = Math.round(sharpLevel(level) * 0.012 * 1000) / 1000;
+        return ['0', -a, '0', -a, 1 + 4 * a, -a, '0', -a, '0'].join(' ');
+    }
+
+    function keyAction(key, shift, zoomed, edges) {
+        var at = edges || {};
+        if (key === '+' || key === '=') return 'zoom-in';
+        if (key === '-') return 'zoom-out';
+        if (key === '0') return 'zoom-reset';
+        if (key === ' ' || key === 'Spacebar') {
+            if (shift) return zoomed && !at.top ? 'scroll-up' : 'prev';
+            return zoomed && !at.bottom ? 'scroll-down' : 'next';
+        }
+        if (shift) return null;
+        switch (key) {
+            case 'PageUp': return 'prev';
+            case 'PageDown': return 'next';
+            case 'Home': return 'first';
+            case 'End': return 'last';
+            case 'ArrowUp': return zoomed ? 'scroll-up' : null;
+            case 'ArrowDown': return zoomed ? 'scroll-down' : null;
+            case 'ArrowLeft': return zoomed && !at.left ? 'scroll-left' : 'prev';
+            case 'ArrowRight': return zoomed && !at.right ? 'scroll-right' : 'next';
+        }
+        return null;
+    }
+
     function neighbor(books, name, dir) {
         var sorted = sortBooks(books);
         for (var i = 0; i < sorted.length; i++) {
@@ -352,6 +440,11 @@
             setItem: function (k, v) { mem[k] = v; }
         };
         function readState() { return storage ? loadState(storage, token) : emptyState(); }
+        // One page by default: the reader turns the spread on when it helps, and the choice is kept.
+        var spreadPref = false;
+        try { spreadPref = store.getItem(SPREAD_KEY) === '1'; } catch (e) { /* default: one page */ }
+        var sharpPref = SHARP_DEFAULT;
+        try { sharpPref = sharpLevel(store.getItem(SHARP_KEY)); } catch (e) { /* default level */ }
 
         rootEl.textContent = '';
         rootEl.classList.add('rd-reader');
@@ -415,6 +508,24 @@
         var zoomBox = el(doc, 'span', 'rd-zoom');
         zoomBox.appendChild(zoomOut);
         zoomBox.appendChild(zoomIn);
+        var spreadBtn = tid(el(doc, 'button', 'rd-btn rd-spread-btn', {
+            type: 'button', 'aria-label': 'Double page', 'aria-pressed': 'true'
+        }), 'rd-spread-toggle');
+        spreadBtn.hidden = true;
+        var sharpBtn = tid(el(doc, 'button', 'rd-btn rd-sharp-btn', {
+            type: 'button', 'aria-label': 'Réglage de la netteté', 'aria-expanded': 'false', 'aria-controls': 'rd-sharp-panel'
+        }), 'rd-sharp-toggle');
+        sharpBtn.textContent = 'Net';
+        sharpBtn.hidden = true;
+        var sharpPanel = tid(el(doc, 'div', 'rd-sharp-panel', { id: 'rd-sharp-panel' }), 'rd-sharp-panel');
+        sharpPanel.hidden = true;
+        var sharpLabel = sharpPanel.appendChild(el(doc, 'label', 'rd-sharp-label', { 'for': 'rd-sharp-range' }));
+        sharpLabel.textContent = 'Netteté';
+        var sharpRange = tid(el(doc, 'input', 'rd-sharp-range', {
+            id: 'rd-sharp-range', type: 'range', min: '0', max: '100', step: '5'
+        }), 'rd-sharp-range');
+        sharpPanel.appendChild(sharpRange);
+        var sharpValue = sharpPanel.appendChild(el(doc, 'output', 'rd-sharp-value', { 'for': 'rd-sharp-range' }));
         var fsBtn = tid(el(doc, 'button', 'rd-btn rd-fs-btn', {
             type: 'button', 'aria-label': 'Plein écran', 'aria-pressed': 'false'
         }), 'rd-fullscreen');
@@ -428,7 +539,7 @@
         fsIcon.appendChild(fsPath);
         fsBtn.appendChild(fsIcon);
         var progressEl = tid(el(doc, 'span', 'rd-progress', { 'aria-live': 'polite' }), 'rd-progress');
-        [backBtn, titleEl, prevBtn, pageBox, nextBtn, zoomBox, fsBtn, progressEl].forEach(function (n) { bar.appendChild(n); });
+        [backBtn, titleEl, prevBtn, pageBox, nextBtn, zoomBox, spreadBtn, sharpBtn, fsBtn, progressEl, sharpPanel].forEach(function (n) { bar.appendChild(n); });
 
         var banner = tid(el(doc, 'div', 'rd-banner', { role: 'status', 'aria-label': 'Reprise de lecture' }), 'rd-resume-banner');
         banner.hidden = true;
@@ -439,17 +550,24 @@
         banner.appendChild(resumeYes);
         banner.appendChild(resumeNo);
 
-        var stage = el(doc, 'div', 'rd-stage');
+        var stage = tid(el(doc, 'div', 'rd-stage'), 'rd-stage');
+        stage.tabIndex = -1;
         var canvas = tid(el(doc, 'canvas', 'rd-canvas', { role: 'img', 'aria-label': 'Page du document' }), 'rd-canvas');
         var epubHost = tid(el(doc, 'div', 'rd-epub-host'), 'rd-epub-host');
-        var comicImg = tid(el(doc, 'img', 'rd-comic-img', { alt: 'Page de la BD' }), 'rd-comic-img');
-        comicImg.hidden = true;
+        // The lower page is always the left one in a double page.
+        var comicBox = el(doc, 'div', 'rd-comic');
+        comicBox.hidden = true;
+        var comicImg = tid(el(doc, 'img', 'rd-comic-img', { alt: 'Page de la BD', draggable: 'false' }), 'rd-comic-img');
+        var comicImg2 = tid(el(doc, 'img', 'rd-comic-img', { alt: 'Page de la BD', draggable: 'false' }), 'rd-comic-img-2');
+        comicImg2.hidden = true;
+        comicBox.appendChild(comicImg);
+        comicBox.appendChild(comicImg2);
         var loadingEl = tid(el(doc, 'div', 'rd-loading', { role: 'status', 'aria-live': 'polite' }), 'rd-loading');
         loadingEl.hidden = true;
         loadingEl.appendChild(el(doc, 'span', 'rd-spinner', { 'aria-hidden': 'true' }));
         var loadingText = loadingEl.appendChild(el(doc, 'span', 'rd-loading-text'));
         stage.appendChild(canvas);
-        stage.appendChild(comicImg);
+        stage.appendChild(comicBox);
         stage.appendChild(epubHost);
         stage.appendChild(loadingEl);
 
@@ -472,6 +590,19 @@
         rootEl.appendChild(errorBox);
         rootEl.appendChild(library);
         rootEl.appendChild(viewer);
+        // Kept out of display:none subtrees: some browsers drop filters referenced from there.
+        var sharpSvg = rootEl.appendChild(doc.createElementNS(SVG_NS, 'svg'));
+        sharpSvg.setAttribute('width', '0');
+        sharpSvg.setAttribute('height', '0');
+        sharpSvg.setAttribute('aria-hidden', 'true');
+        sharpSvg.style.position = 'absolute';
+        var sharpFilter = sharpSvg.appendChild(doc.createElementNS(SVG_NS, 'filter'));
+        sharpFilter.setAttribute('id', 'rd-sharp-filter');
+        sharpFilter.setAttribute('color-interpolation-filters', 'sRGB');
+        var sharpMatrix = sharpFilter.appendChild(doc.createElementNS(SVG_NS, 'feConvolveMatrix'));
+        sharpMatrix.setAttribute('order', '3');
+        sharpMatrix.setAttribute('kernelMatrix', sharpKernel(sharpPref));
+        sharpMatrix.setAttribute('preserveAlpha', 'true');
 
         // ── Reading session (one book at a time)
         var cur = null;
@@ -576,13 +707,15 @@
 
         // ── PDF
         function pdfPageLabel() {
+            var comic = cur.kind === 'comic';
+            var last = comic && cur.spread ? (spreadFor(cur.page, cur.pages)[1] || cur.page) : cur.page;
             pageInput.value = String(cur.page);
             pageInput.max = String(cur.pages);
-            pageCount.textContent = '/ ' + cur.pages;
+            pageCount.textContent = (last !== cur.page ? cur.page + '-' + last + ' ' : '') + '/ ' + cur.pages;
             prevBtn.disabled = cur.page <= 1;
-            nextBtn.disabled = cur.page >= cur.pages;
-            zoomOut.disabled = cur.zoom <= ZOOM_MIN;
-            zoomIn.disabled = cur.zoom >= ZOOM_MAX;
+            nextBtn.disabled = last >= cur.pages;
+            zoomOut.disabled = cur.zoom <= (comic ? COMIC_ZOOMS[0] : ZOOM_MIN);
+            zoomIn.disabled = cur.zoom >= (comic ? COMIC_ZOOMS[COMIC_ZOOMS.length - 1] : ZOOM_MAX);
             stage.classList.toggle('rd-zoomed', cur.zoom > 1);
         }
 
@@ -596,16 +729,21 @@
         }
 
         // Height the whole page must fit in: the stage itself in fullscreen, else the CSS cap (100dvh - 11rem).
+        // On a phone only the one-line bar sits above the stage (the host hides its header), so measure it.
         function stagePad() { return viewer.classList.contains('rd-fs') ? 0 : 2; }
 
         function fitHeight() {
             if (viewer.classList.contains('rd-fs')) return Math.max(200, stage.clientHeight);
             var rem = parseFloat(win.getComputedStyle(doc.documentElement).fontSize) || 16;
-            return Math.max(300, win.innerHeight - 11 * rem - 2);
+            // Reserve what really sits above the page, so it fits short screens too (a phone in landscape).
+            var top = bar.getBoundingClientRect().bottom + (win.pageYOffset || 0) + 0.5 * rem;
+            var reserve = Math.min(11 * rem, top);
+            return Math.max(160, win.innerHeight - reserve - 2);
         }
 
         async function renderPdf() {
             var me = cur;
+            syncSpreadUi();
             var ticket = ++me.renderId;
             await stopRender();
             if (cur !== me || ticket !== me.renderId) return;
@@ -673,12 +811,26 @@
             if (!pagedReady()) return;
             if (fromUser) dismissBanner();
             cur.page = clampPage(n, cur.pages);
+            var last = cur.page;
+            if (cur.kind === 'comic') {
+                // The zoom stays from page to page; the new page starts at its top-left corner (below).
+                cur.spread = spreadWanted();
+                if (cur.spread) {
+                    var pair = spreadFor(cur.page, cur.pages);
+                    cur.page = pair[0];
+                    last = pair[1] || pair[0];
+                }
+            }
             if (cur.pre && cur.pre.n !== cur.page) cur.pre.dropped = true;
             pdfPageLabel();
-            var f = fractionOf(cur.page, cur.pages);
+            // The saved page is the lower one; the fraction counts the last page seen, so the book can reach "done".
+            var f = fractionOf(last, cur.pages);
             setProgressText(f);
             stage.scrollTop = 0;
-            lastScrollTop = 0;
+            stage.scrollLeft = 0;
+            // A page taller than the screen scrolls the document (phones): the new page starts at its top too.
+            var top = stage.getBoundingClientRect().top;
+            if (top < 0) win.scrollBy(0, top);
             // Opening at page 1 without moving must not create a "reading" entry.
             if (cur.page > 1 || readState().files[cur.name]) persist({ page: cur.page, pages: cur.pages, fraction: f });
             if (cur.kind === 'comic') renderComic();
@@ -686,48 +838,117 @@
         }
 
         // ── Comic (CBZ/CBR): the server sends one page image at a time.
+        // Orientation comes from the reading area, not the screen: a landscape phone and a wide desktop both qualify.
+        function landscape() { return stage.clientWidth > fitHeight(); }
+
+        function spreadWanted() { return !!cur && cur.kind === 'comic' && spreadPref && landscape(); }
+
+        function syncSpreadUi() {
+            var comic = !!cur && cur.kind === 'comic' && cur.pages > 0;
+            // Comic PDFs are scans too: the same sharpening applies to the PDF canvas.
+            sharpBtn.hidden = !(comic || pagedReady());
+            if (sharpBtn.hidden) closeSharpPanel();
+            applySharp();
+            spreadBtn.hidden = !(comic && landscape());
+            spreadBtn.setAttribute('aria-pressed', spreadPref ? 'true' : 'false');
+            spreadBtn.textContent = spreadPref ? '2 pages' : '1 page';
+        }
+
+        function shownImgs() { return cur.shown && cur.shown[1] ? [comicImg, comicImg2] : [comicImg]; }
+
         function fitComic() {
-            var w = comicImg.naturalWidth;
-            var h = comicImg.naturalHeight;
-            if (!w || !h) return;
+            var imgs = shownImgs();
             var availH = fitHeight();
-            var scale = Math.min(Math.max(200, stage.clientWidth - stagePad()) / w, availH / h);
+            var sizes = fitSpread(imgs.map(function (i) { return [i.naturalWidth, i.naturalHeight]; }),
+                Math.max(200, stage.clientWidth - stagePad()), availH, cur.zoom);
+            if (!sizes) return;
             cur.fitW = stage.clientWidth;
             cur.fitH = availH;
-            comicImg.style.width = Math.floor(w * scale) + 'px';
-            comicImg.style.height = Math.floor(h * scale) + 'px';
+            imgs.forEach(function (img, i) {
+                img.style.width = sizes[i].width + 'px';
+                img.style.height = sizes[i].height + 'px';
+            });
+            // A zoomed page pans inside the stage, which must not grow with it (no CSS cap on phones).
+            stage.style.maxHeight = viewer.classList.contains('rd-fs') ? '' : (availH + 2) + 'px';
             placeHandle();
         }
 
         function renderComic() {
             var me = cur;
             var ticket = ++me.renderId;
-            var n = me.page;
+            var pair = me.spread ? spreadFor(me.page, me.pages) : [me.page, null];
+            var imgs = pair[1] ? [comicImg, comicImg2] : [comicImg];
+            var left = imgs.length;
+            var failed = false;
+            me.shown = pair;
+            syncSpreadUi();
             showLoading('Chargement…');
-            comicImg.onload = function () {
-                if (cur !== me || ticket !== me.renderId) return;
-                comicImg.hidden = false;
-                fitComic();
-                hideLoading();
-                prefetchComic(me, n + 1);
-            };
-            comicImg.onerror = function () {
-                if (cur !== me || ticket !== me.renderId) return;
-                comicImg.hidden = true;
-                hideLoading();
-                showError('Impossible d’afficher cette page.');
-            };
             clearError();
-            comicImg.src = comicPageUrl(me.url, n);
+            if (!pair[1]) {
+                comicImg2.onload = comicImg2.onerror = null;
+                comicImg2.removeAttribute('src');
+                comicImg2.removeAttribute('data-page');
+                comicImg2.hidden = true;
+            }
+            imgs.forEach(function (img, i) {
+                img.onload = function () {
+                    if (cur !== me || ticket !== me.renderId || failed || --left > 0) return;
+                    comicBox.hidden = false;
+                    comicImg2.hidden = !pair[1];
+                    fitComic();
+                    hideLoading();
+                    var after = (pair[1] || pair[0]) + 1;
+                    prefetchComic(me, after > me.pages ? [] : me.spread ? spreadFor(after, me.pages) : [after]);
+                };
+                img.onerror = function () {
+                    if (cur !== me || ticket !== me.renderId || failed) return;
+                    failed = true;
+                    comicBox.hidden = true;
+                    hideLoading();
+                    showError('Impossible d’afficher cette page.');
+                };
+                img.setAttribute('data-page', String(pair[i]));
+                img.src = comicPageUrl(me.url, pair[i]);
+            });
         }
 
-        // One page ahead only: a new prefetch replaces (and cancels) the previous one.
-        function prefetchComic(me, n) {
-            if (me.next) { me.next.removeAttribute('src'); me.next = null; }
-            if (n > me.pages) return;
-            me.next = new win.Image();
-            me.next.src = comicPageUrl(me.url, n);
+        // The next page (or spread) only: a new prefetch replaces (and cancels) the previous one.
+        function prefetchComic(me, pages) {
+            (me.next || []).forEach(function (i) { i.removeAttribute('src'); });
+            me.next = pages.filter(function (n) { return n; }).map(function (n) {
+                var i = new win.Image();
+                i.src = comicPageUrl(me.url, n);
+                return i;
+            });
         }
+
+        // Brings the point under (cx, cy) - the stage centre by default - to the middle of the stage,
+        // or keeps it under the pointer when `stay` is set (wheel).
+        function setComicZoom(z, cx, cy, stay) {
+            if (!cur || cur.kind !== 'comic' || comicBox.hidden) return;
+            var sr = stage.getBoundingClientRect();
+            var br = comicBox.getBoundingClientRect();
+            if (cx === undefined) {
+                cx = sr.left + stage.clientWidth / 2;
+                cy = sr.top + stage.clientHeight / 2;
+            }
+            var fx = Math.min(1, Math.max(0, (cx - br.left) / Math.max(1, br.width)));
+            var fy = Math.min(1, Math.max(0, (cy - br.top) / Math.max(1, br.height)));
+            cur.zoom = z;
+            pdfPageLabel();
+            fitComic();
+            if (z <= 1) {
+                stage.scrollLeft = 0;
+                stage.scrollTop = 0;
+            } else {
+                var nb = comicBox.getBoundingClientRect();
+                var ns = stage.getBoundingClientRect();
+                stage.scrollLeft += nb.left + fx * nb.width - (stay ? cx : ns.left + stage.clientWidth / 2);
+                stage.scrollTop += nb.top + fy * nb.height - (stay ? cy : ns.top + stage.clientHeight / 2);
+            }
+        }
+
+        function comicZoomed() { return !!cur && cur.kind === 'comic' && cur.zoom > 1; }
 
         async function openComic(me) {
             showLoading('Chargement…');
@@ -742,6 +963,7 @@
             }
             me.pages = pages;
             me.page = 1;
+            me.spread = spreadWanted();
             pdfPageLabel();
             setProgressText(fractionOf(1, me.pages));
             renderComic();
@@ -952,7 +1174,6 @@
                 }
                 if (d) {
                     d.addEventListener('keydown', onKey);
-                    attachReveal(d);
                 }
             });
             var timer;
@@ -979,6 +1200,9 @@
             cur = null;
             seq++;
             hideLoading();
+            doc.documentElement.classList.remove('rd-reading');
+            if (tapTimer) { win.clearTimeout(tapTimer); tapTimer = null; }
+            pan = null;
             if (!me) return;
             if (me.task) { try { me.task.cancel(); } catch (e) { /* done */ } }
             if (me.loading) { try { me.loading.destroy(); } catch (e) { /* done */ } }
@@ -993,10 +1217,18 @@
                 unlockIframeSandbox();
             }
             canvas.width = canvas.height = 0;
-            if (me.next) me.next.removeAttribute('src');
-            comicImg.onload = comicImg.onerror = null;
-            comicImg.removeAttribute('src');
-            comicImg.hidden = true;
+            (me.next || []).forEach(function (i) { i.removeAttribute('src'); });
+            [comicImg, comicImg2].forEach(function (i) {
+                i.onload = i.onerror = null;
+                i.removeAttribute('src');
+                i.removeAttribute('data-page');
+            });
+            comicImg2.hidden = true;
+            comicBox.hidden = true;
+            spreadBtn.hidden = true;
+            sharpBtn.hidden = true;
+            closeSharpPanel();
+            stage.style.maxHeight = '';
         }
 
         function showLibrary() {
@@ -1036,12 +1268,15 @@
             var isPdf = b.kind === 'pdf';
             var isComic = b.kind === 'comic';
             var isPaged = isPdf || isComic;
+            doc.documentElement.classList.add('rd-reading');
+            viewer.setAttribute('data-kind', b.kind);
             canvas.hidden = true;
-            comicImg.hidden = true;
+            comicBox.hidden = true;
             epubHost.hidden = isPaged;
             stage.classList.toggle('rd-stage-epub', !isPaged);
+            stage.classList.toggle('rd-stage-comic', isComic);
             pageBox.hidden = !isPaged;
-            zoomBox.hidden = !isPdf;
+            zoomBox.hidden = !isPaged;
             progressEl.textContent = '';
             library.hidden = true;
             viewer.hidden = false;
@@ -1068,7 +1303,8 @@
                 return;
             }
             if (cur !== me) return;
-            backBtn.focus();
+            // Focus the page, not Back: Space then turns the page instead of leaving the book.
+            stage.focus({ preventScroll: true });
 
             if (target) {
                 bannerText.textContent = 'Reprendre à ' + target.percent + ' % ?';
@@ -1093,7 +1329,9 @@
         function step(dir) {
             if (!cur) return;
             if (cur.kind === 'pdf' || cur.kind === 'comic') {
-                if (pagedReady() && clampPage(cur.page + dir, cur.pages) !== cur.page) goPdf(cur.page + dir, true);
+                if (!pagedReady()) return;
+                var to = cur.kind === 'comic' && cur.spread ? stepSpread(cur.page, cur.pages, dir) : cur.page + dir;
+                if (clampPage(to, cur.pages) !== cur.page) goPdf(to, true);
             }
             else if (cur.view) {
                 dismissBanner();
@@ -1101,12 +1339,33 @@
             }
         }
 
+        // dir 0 goes back to fit. The centre of the visible area stays in the centre.
         function zoom(dir) {
+            if (cur && cur.kind === 'comic') { setComicZoom(dir ? comicZoomStep(cur.zoom, dir) : 1); return; }
             if (!cur || cur.kind !== 'pdf' || !cur.doc) return;
-            var z = Math.round((cur.zoom + dir * ZOOM_STEP) * 100) / 100;
-            cur.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+            var z = dir ? Math.round((cur.zoom + dir * ZOOM_STEP) * 100) / 100 : 1;
+            z = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+            if (z === cur.zoom) return;
+            var me = cur;
+            var fx = (stage.scrollLeft + stage.clientWidth / 2) / Math.max(1, stage.scrollWidth);
+            var fy = (stage.scrollTop + stage.clientHeight / 2) / Math.max(1, stage.scrollHeight);
+            cur.zoom = z;
             pdfPageLabel();
-            renderPdf();
+            var id = me.renderId + 1;
+            renderPdf().then(function () {
+                if (cur !== me || me.renderId !== id) return;
+                stage.scrollLeft = fx * stage.scrollWidth - stage.clientWidth / 2;
+                stage.scrollTop = fy * stage.scrollHeight - stage.clientHeight / 2;
+            });
+        }
+
+        function stageEdges() {
+            var maxL = stage.scrollWidth - stage.clientWidth;
+            var maxT = stage.scrollHeight - stage.clientHeight;
+            return {
+                top: stage.scrollTop <= 1, bottom: stage.scrollTop >= maxT - 1,
+                left: stage.scrollLeft <= 1, right: stage.scrollLeft >= maxL - 1
+            };
         }
 
         function onKey(e) {
@@ -1129,23 +1388,35 @@
             var t = e.target;
             var tag = t && t.tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-            if (e.key === ' ' || e.key === 'Spacebar') {
-                if (tag === 'BUTTON' || tag === 'A') return;
+            // Space pages the book even from a bar button clicked with the mouse; only Back, the handle and links keep it.
+            if ((e.key === ' ' || e.key === 'Spacebar') && (tag === 'A' || t === backBtn || t === handle)) return;
+            if (e.key === 'f' && !e.shiftKey) { e.preventDefault(); toggleFs(); return; }
+            var paged = pagedReady();
+            var act = keyAction(e.key, e.shiftKey, paged && cur.zoom > 1, paged ? stageEdges() : null);
+            if (!act || (/^zoom/.test(act) && !paged)) return;
+            var dy = Math.max(40, Math.round(stage.clientHeight * KEY_SCROLL));
+            var dx = Math.max(40, Math.round(stage.clientWidth * KEY_SCROLL));
+            if (act === 'scroll-up' || act === 'scroll-down') {
+                // No vertical overflow in the stage (a zoomed PDF on a phone grows the page instead): native scroll.
+                if (stage.scrollHeight - stage.clientHeight <= 1) return;
                 e.preventDefault();
-                step(e.shiftKey ? -1 : 1);
+                stage.scrollBy(0, act === 'scroll-up' ? -dy : dy);
                 return;
             }
-            if (e.shiftKey) return;
-            if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); step(-1); }
-            else if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); step(1); }
-            else if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); jumpEnd(e.key === 'End'); }
-            else if (e.key === 'f') { e.preventDefault(); toggleFs(); }
+            e.preventDefault();
+            if (act === 'scroll-left' || act === 'scroll-right') stage.scrollBy(act === 'scroll-left' ? -dx : dx, 0);
+            else if (act === 'next' || act === 'prev') step(act === 'next' ? 1 : -1);
+            else if (act === 'first' || act === 'last') jumpEnd(act === 'last');
+            else zoom(act === 'zoom-in' ? 1 : act === 'zoom-out' ? -1 : 0);
         }
 
         function jumpEnd(last) {
             if (!cur) return;
             if (cur.kind === 'pdf' || cur.kind === 'comic') {
-                if (pagedReady() && cur.page !== (last ? cur.pages : 1)) goPdf(last ? cur.pages : 1, true);
+                if (!pagedReady()) return;
+                var to = last ? cur.pages : 1;
+                if (cur.kind === 'comic' && cur.spread) to = spreadFor(to, cur.pages)[0];
+                if (cur.page !== to) goPdf(to, true);
             } else if (cur.view) {
                 dismissBanner();
                 try { cur.view.goToFraction(last ? 1 : 0).catch(function () { /* edge */ }); } catch (e) { /* no api */ }
@@ -1234,7 +1505,7 @@
             var vr = viewer.getBoundingClientRect();
             var top = 0;
             var left = 0;
-            var pageEl = cur && cur.kind === 'comic' ? comicImg : canvas;
+            var pageEl = cur && cur.kind === 'comic' ? comicBox : canvas;
             if (cur && (cur.kind === 'pdf' || cur.kind === 'comic') && !pageEl.hidden) {
                 var cr = pageEl.getBoundingClientRect();
                 top = cr.top - sr.top;
@@ -1275,25 +1546,7 @@
         });
         bar.addEventListener('focusin', revealBar);
 
-        // Reveal gestures: scroll or wheel up, swipe down, mouse near the top edge.
-        var lastScrollTop = 0;
-        var pull = null;
-        function attachReveal(node) {
-            node.addEventListener('wheel', function (e) { if (e.deltaY < 0) revealBar(); }, { passive: true });
-            node.addEventListener('touchstart', function (e) {
-                pull = e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
-            }, { passive: true });
-            node.addEventListener('touchmove', function (e) {
-                if (!pull || e.touches.length !== 1) { pull = null; return; }
-                var dy = e.touches[0].clientY - pull.y;
-                var dx = e.touches[0].clientX - pull.x;
-                if (dy > PULL_PX && dy > Math.abs(dx) * 1.5) { pull = null; revealBar(); }
-            }, { passive: true });
-        }
-        attachReveal(viewer);
         stage.addEventListener('scroll', function () {
-            if (stage.scrollTop < lastScrollTop - 2) revealBar();
-            lastScrollTop = stage.scrollTop;
             placeHandle();
         });
 
@@ -1305,22 +1558,87 @@
             return f < ZONE_SIDE ? -1 : (f > 1 - ZONE_SIDE ? 1 : 0);
         }
         function zoneActive() { return pagedReady() && cur.zoom <= 1; }
-        stage.addEventListener('pointerdown', function (e) { downAt = { x: e.clientX, y: e.clientY }; });
-        stage.addEventListener('pointermove', function (e) {
-            if (e.pointerType !== 'mouse') return;
-            stage.style.cursor = zoneActive() && zoneOf(e) ? 'pointer' : '';
-        });
-        stage.addEventListener('click', function (e) {
+        function tapZone(z) {
             if (!zoneActive()) return;
+            if (z) step(z);
+            // The bar only comes back from its handle: a tap in the middle can hide it, never show it.
+            else if (isFs() && !viewer.classList.contains('rd-bar-hidden')) hideBar();
+        }
+        // Zoomed comic: the mouse drags the page around (touch pans natively, see .rd-stage-comic.rd-zoomed).
+        var pan = null;
+        stage.addEventListener('pointerdown', function (e) {
+            downAt = { x: e.clientX, y: e.clientY };
+            if (e.pointerType !== 'mouse' || e.button !== 0 || !comicZoomed()) return;
+            pan = { id: e.pointerId, x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop };
+            try { stage.setPointerCapture(e.pointerId); } catch (err) { /* pointer already gone */ }
+            e.preventDefault();
+        });
+        stage.addEventListener('pointermove', function (e) {
+            if (pan && e.pointerId === pan.id) {
+                stage.scrollLeft = pan.l - (e.clientX - pan.x);
+                stage.scrollTop = pan.t - (e.clientY - pan.y);
+                return;
+            }
+            if (e.pointerType !== 'mouse') return;
+            stage.style.cursor = comicZoomed() ? 'grab' : zoneActive() && zoneOf(e) ? 'pointer' : '';
+        });
+        function endPan(e) { if (pan && e.pointerId === pan.id) pan = null; }
+        stage.addEventListener('pointerup', endPan);
+        // The wheel zooms (comic around the pointer, PDF by its steps), one step per notch (a touchpad's small deltas add up).
+        // Ctrl+wheel (and touchpad pinch, sent as Ctrl+wheel) stays the browser's own zoom.
+        var wheelSum = 0;
+        stage.addEventListener('wheel', function (e) {
+            if (e.ctrlKey || e.metaKey || !pagedReady()) return;
+            if (cur.kind === 'pdf') {
+                e.preventDefault();
+                wheelSum += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1);
+                if (Math.abs(wheelSum) < WHEEL_STEP_PX) return;
+                var pdfDir = wheelSum < 0 ? 1 : -1;
+                wheelSum = 0;
+                zoom(pdfDir);
+                return;
+            }
+            if (cur.kind !== 'comic' || comicBox.hidden) return;
+            e.preventDefault();
+            wheelSum += e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 800 : 1);
+            if (Math.abs(wheelSum) < WHEEL_STEP_PX) return;
+            var dir = wheelSum < 0 ? 1 : -1;
+            wheelSum = 0;
+            var z = comicZoomStep(cur.zoom, dir);
+            if (z !== cur.zoom) setComicZoom(z, e.clientX, e.clientY, true);
+        }, { passive: false });
+        stage.addEventListener('pointercancel', endPan);
+        // Comics wait DOUBLE_TAP_MS before a single tap acts, so the first tap of a double tap never turns the page.
+        var tapTimer = null;
+        var lastTap = null;
+        stage.addEventListener('click', function (e) {
+            if (!pagedReady()) return;
             if (e.target && e.target.closest && e.target.closest('input,textarea,select,button,a,label')) return;
             if (downAt && Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y) > CLICK_SLOP_PX) return;
+            if (cur.kind === 'comic') {
+                var near = lastTap && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) <= HANDLE_SIZE;
+                if (tapTimer) {
+                    win.clearTimeout(tapTimer);
+                    tapTimer = null;
+                    if (near) {
+                        lastTap = null;
+                        setComicZoom(cur.zoom > 1 ? 1 : COMIC_TAP_ZOOM, e.clientX, e.clientY);
+                        return;
+                    }
+                    tapZone(lastTap.z);
+                }
+                var tap = lastTap = { x: e.clientX, y: e.clientY, z: zoneOf(e) };
+                tapTimer = win.setTimeout(function () {
+                    tapTimer = null;
+                    lastTap = null;
+                    tapZone(tap.z);
+                }, DOUBLE_TAP_MS);
+                return;
+            }
+            if (!zoneActive()) return;
             var sel = win.getSelection && win.getSelection();
             if (sel && String(sel).length && sel.anchorNode && stage.contains(sel.anchorNode)) return;
-            var z = zoneOf(e);
-            if (z) step(z);
-            else if (isFs()) {
-                if (viewer.classList.contains('rd-bar-hidden')) revealBar(); else hideBar();
-            }
+            tapZone(zoneOf(e));
         });
 
         // Horizontal swipe turns PDF pages; EPUB swipes are handled by foliate itself.
@@ -1349,6 +1667,44 @@
         nextBtn.addEventListener('click', function () { step(1); });
         zoomIn.addEventListener('click', function () { zoom(1); });
         zoomOut.addEventListener('click', function () { zoom(-1); });
+        function applySharp() {
+            var on = sharpPref > 0;
+            sharpMatrix.setAttribute('kernelMatrix', sharpKernel(sharpPref));
+            comicBox.classList.toggle('rd-sharp', on);
+            canvas.classList.toggle('rd-sharp', on);
+            sharpBtn.classList.toggle('rd-sharp-off', !on);
+            sharpRange.value = String(sharpPref);
+            sharpValue.textContent = on ? String(sharpPref) : 'off';
+        }
+        function closeSharpPanel() {
+            sharpPanel.hidden = true;
+            sharpBtn.setAttribute('aria-expanded', 'false');
+        }
+        sharpBtn.addEventListener('click', function () {
+            var open = sharpPanel.hidden;
+            sharpPanel.hidden = !open;
+            sharpBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            if (open) sharpRange.focus();
+        });
+        sharpRange.addEventListener('input', function () {
+            sharpPref = sharpLevel(sharpRange.value);
+            applySharp();
+        });
+        sharpRange.addEventListener('change', function () {
+            try { store.setItem(SHARP_KEY, String(sharpPref)); } catch (e) { /* quota or private mode */ }
+        });
+        sharpRange.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') { e.stopPropagation(); closeSharpPanel(); sharpBtn.focus(); }
+        });
+        doc.addEventListener('pointerdown', function (e) {
+            if (!sharpPanel.hidden && !sharpPanel.contains(e.target) && e.target !== sharpBtn) closeSharpPanel();
+        });
+        spreadBtn.addEventListener('click', function () {
+            spreadPref = !spreadPref;
+            try { store.setItem(SPREAD_KEY, spreadPref ? '1' : '0'); } catch (e) { /* quota or private mode */ }
+            syncSpreadUi();
+            if (pagedReady() && cur.kind === 'comic') goPdf(cur.page, false);
+        });
         backBtn.addEventListener('click', function () {
             if (!exitUrl) { showLibrary(); return; }
             flush();
@@ -1367,8 +1723,10 @@
         var resizeTimer = null;
         function refitPdf() {
             var me = cur;
-            if (me && me.kind === 'comic' && !comicImg.hidden) {
-                if (stage.clientWidth !== me.fitW || fitHeight() !== me.fitH) fitComic();
+            if (me && me.kind === 'comic' && me.pages > 0) {
+                syncSpreadUi();
+                if (spreadWanted() !== !!me.spread) goPdf(me.page, false);
+                else if (!comicBox.hidden && (stage.clientWidth !== me.fitW || fitHeight() !== me.fitH)) fitComic();
                 return;
             }
             if (!me || me.kind !== 'pdf' || !me.doc) return;
@@ -1382,7 +1740,6 @@
                 if (cur !== me || me.renderId !== id) return;
                 stage.scrollTop = fy * stage.scrollHeight;
                 stage.scrollLeft = fx * stage.scrollWidth;
-                lastScrollTop = stage.scrollTop;
             });
         }
         function scheduleRefit() {
@@ -1437,6 +1794,13 @@
         resumeTarget: resumeTarget,
         lastRead: lastRead,
         neighbor: neighbor,
+        spreadFor: spreadFor,
+        stepSpread: stepSpread,
+        fitSpread: fitSpread,
+        comicZoomStep: comicZoomStep,
+        keyAction: keyAction,
+        sharpLevel: sharpLevel,
+        sharpKernel: sharpKernel,
         needsScriptSandbox: needsScriptSandbox,
         init: init
     };
