@@ -34,7 +34,9 @@ class ServeFileRangeHttpTest extends TestCase
         file_put_contents(self::$fixture, self::$content);
 
         // Routeur de test : appelle serve_file() SANS définir XACCEL_PREFIX → service direct
-        self::$router = tempnam(sys_get_temp_dir(), 'sb_router_') . '.php';
+        $routerBase = tempnam(sys_get_temp_dir(), 'sb_router_');   // tempnam CRÉE ce fichier
+        self::$router = $routerBase . '.php';
+        @unlink($routerBase);
         $functions = realpath(__DIR__ . '/../functions.php');
         file_put_contents(self::$router, <<<PHP
         <?php
@@ -50,8 +52,11 @@ class ServeFileRangeHttpTest extends TestCase
         $port = (int)explode(':', stream_socket_get_name($probe, false))[1];
         fclose($probe);
 
+        // `exec` : sans lui proc_open lance un shell intermédiaire et proc_terminate
+        // ne tue que celui-ci — le serveur reste en vie indéfiniment (64 orphelins
+        // observés sur la machine, dont certains vieux de deux mois).
         $cmd = sprintf(
-            '%s -S 127.0.0.1:%d %s',
+            'exec %s -S 127.0.0.1:%d %s',
             escapeshellarg(PHP_BINARY),
             $port,
             escapeshellarg(self::$router)
@@ -77,8 +82,13 @@ class ServeFileRangeHttpTest extends TestCase
         if (is_resource(self::$proc)) {
             $status = proc_get_status(self::$proc);
             if ($status['running']) {
-                // tuer le process (et son groupe le cas échéant)
                 @proc_terminate(self::$proc, SIGTERM);
+                for ($i = 0; $i < 20 && proc_get_status(self::$proc)['running']; $i++) {
+                    usleep(50000);
+                }
+                if (proc_get_status(self::$proc)['running']) {
+                    @proc_terminate(self::$proc, SIGKILL);
+                }
             }
             proc_close(self::$proc);
         }

@@ -13,6 +13,9 @@ parameters:
         - cron/
         - handlers/
         - functions.php
+        - media_kinds.php
+        - comic.php
+        - views/
         - ctrl.php
         - db.php
         - auth.php

@@ -1,0 +1,2 @@
+pdfjs-dist 6.4.299 (Apache-2.0): build/pdf.min.mjs, build/pdf.worker.min.mjs. No wasm/, cmaps/ or standard_fonts/ copied.
+foliate-js 1.0.1 (MIT, npm): source modules + vendor/ (zip.js, fflate.js). Left out: reader*, ui, tests, rollup, dict, opds, quote-image.

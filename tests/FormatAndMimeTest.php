@@ -39,6 +39,7 @@ class FormatAndMimeTest extends TestCase
             'mkv' => ['mkv', 'video/x-matroska'],
             'mp3' => ['mp3', 'audio/mpeg'],
             'flac' => ['flac', 'audio/flac'],
+            'm4b' => ['m4b', 'audio/mp4'],
             'txt' => ['txt', null],
             'jpg' => ['jpg', null],
         ];

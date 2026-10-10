@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "test": "npx playwright test",
-    "test:headed": "npx playwright test --headed"
+    "test:headed": "npx playwright test --headed",
+    "test:unit": "node --test tests/unit/"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1"

@@ -55,6 +55,12 @@ if ($mime && str_starts_with($mime, 'video/')) {
         exit;
     }
 
+    // A HEAD would start a detached ffmpeg (and take the UHD slot) for a playlist nobody reads.
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'HEAD') {
+        header('Content-Type: application/vnd.apple.mpegurl');
+        exit;
+    }
+
     // Lancer ffmpeg HLS si pas déjà actif
     // flock protège contre les requêtes concurrentes qui lanceraient deux ffmpeg
     if (!is_dir($hlsDir)) mkdir($hlsDir, 0755, true);
@@ -92,6 +98,21 @@ if ($mime && str_starts_with($mime, 'video/')) {
 
         $hwEncoder = detect_hw_encoder();
         $fc = buildFilterGraph($quality, $audioTrack, $burnSub, $filterMode, $hwEncoder);
+
+        // Même plafond UHD que le transcode direct : Safari iOS passe par HLS et
+        // lancerait sinon un second décodage 2160p en parallèle.
+        $uhdHolder = uhdHolderId();
+        $uhdFp = null;
+        if (isUHDFile($db, $resolvedPath)) {
+            $uhdFp = acquireUHDSlot($uhdHolder);
+            if ($uhdFp === null) {
+                stream_log('HLS refused | UHD slot busy | ' . basename($resolvedPath));
+                http_response_code(503);
+                header('Content-Type: application/json');
+                echo json_encode(['error' => 'uhd_busy']);
+                exit;
+            }
+        }
 
         [$slotFp, $queued] = acquireStreamSlot();
         if ($queued) stream_log('HLS queued | ' . basename($resolvedPath));
@@ -133,6 +154,9 @@ if ($mime && str_starts_with($mime, 'video/')) {
 
         file_put_contents($pidFile, $pid);
         touch($hlsDir . '/.active');
+        // ffmpeg est détaché ici : noter son pid dans le verrou pour qu'un seek du
+        // même spectateur puisse le remplacer au lieu de se voir refuser son créneau.
+        uhdSlotRecordPid($uhdFp, $uhdHolder, (int)$pid);
 
         // Cleanup background : tient le flock tant que ffmpeg tourne, puis attend 2min d'inactivité
         $slotPath = $slotFp ? stream_get_meta_data($slotFp)['uri'] : '';
@@ -144,20 +168,24 @@ if ($mime && str_starts_with($mime, 'video/')) {
         // Watchdog : tue ffmpeg après 5 min d'inactivité (client déconnecté), sinon attend mort naturelle
         // Le check+rm est protégé par flock sur .startup.lock pour éviter le TOCTOU
         // (entre la lecture du pidFile et le rm -rf, un nouveau startup pourrait s'intercaler)
-        $cleanupBody = 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do '
+        $watchdog = 'while kill -0 ' . (int)$pid . ' 2>/dev/null; do '
             . 'inactive=$(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))); '
             . 'if [ $inactive -gt 300 ]; then kill -15 ' . (int)$pid . ' 2>/dev/null; sleep 2; kill -9 ' . (int)$pid . ' 2>/dev/null; break; fi; '
-            . 'sleep 30; done; '
-            . 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '
-            . '(flock -x 200; '
+            . 'sleep 30; done; ';
+        $reclaim = 'while [ $(($(date +%s) - $(stat -c %Y ' . $activeFile . ' 2>/dev/null || echo 0))) -lt 120 ]; do sleep 10; done; '
+            // fd 8, pas 200 : PHP exec() passe par /bin/sh = dash, qui refuse les
+            // descripteurs à plus d'un chiffre — toute la commande échouait au parse.
+            . '(flock -x 8; '
             . 'if [ -f ' . escapeshellarg($pidFile) . ' ] && [ "$(cat ' . escapeshellarg($pidFile) . ')" != "' . (int)$pid . '" ]; then exit 0; fi; '
             . 'rm -rf ' . escapeshellarg($hlsDir)
-            . ') 200>' . $startupLockFile;
-        $cleanupCmd = $slotPath
-            ? '(flock -x 9; ' . $cleanupBody . ') 9>' . escapeshellarg($slotPath) . ' >/dev/null 2>&1 &'
-            : '(' . $cleanupBody . ') >/dev/null 2>&1 &';
-        // Fermer le FD PHP avant exec — le shell cleanup reprend le lock via flock 9>
+            . ') 8>' . $startupLockFile;
+        $cleanupCmd = buildHlsCleanupCmd($watchdog, $reclaim, $slotPath);
+        // Pas de relais shell pour le verrou UHD : ffmpeg hérite le descripteur au
+        // lancement et tient le verrou jusqu'à sa mort. L'envelopper en plus dans le
+        // cleanup n'ajoutait rien et faisait tomber tout le cleanup (relais du slot,
+        // watchdog, rm) dès qu'acquireUHDSlot dégradait en flux mémoire.
         if ($slotFp) fclose($slotFp);
+        if ($uhdFp) fclose($uhdFp);
         exec($cleanupCmd);
     } else {
         // Session existante — marquer activité
