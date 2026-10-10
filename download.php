@@ -69,12 +69,10 @@ $stmt = $db->prepare("SELECT * FROM links WHERE token = :token");
 $stmt->execute([':token' => $token]);
 $link = $stmt->fetch();
 
-// Un lien dont le chemin n'est pas STRICTEMENT sous /home/<user>/ est un lien
-// interne (ex. le jeton 'home', qui pointe sur /home entier). Il n'est servi
-// que via browse.php, protege par Digest. Sinon ce point d'entree public
-// exposait tous les homes.
-if ($link && !defined('SHAREBOX_BROWSE_ENTRY')
-    && !preg_match('#^/home/[^/]+/#', rtrim($link['path'], '/') . '/')) {
+// Le jeton 'home' pointe sur BASE_PATH entier : il n'est servi que via browse.php,
+// protege par Digest. Sinon ce point d'entree public exposait tous les homes.
+// Le chemin ne suffit pas a le reconnaitre : la demo Docker partage BASE_PATH en public.
+if ($link && $token === 'home' && !defined('SHAREBOX_BROWSE_ENTRY')) {
     stream_log('ACCESS 403 | token=' . $token . ' | lien interne hors browse.php');
     http_response_code(403);
     afficher_erreur('Accès interdit', 'Ce lien nécessite une authentification.');
