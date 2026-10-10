@@ -36,6 +36,6 @@ foreach ($rd['books'] as $b) {
 echo '</ul></div>';
 // Not asc-reader-data: reader.js would mount itself without our libBase and open book.
 echo '<script type="application/json" id="sb-reader-data">' . page_json([
-    'books' => $rd['books'], 'open' => $rd['open'], 'libBase' => $rd['libBase'], 'storageToken' => $rd['storageToken'],
+    'books' => $rd['books'], 'open' => $rd['open'], 'libBase' => $rd['libBase'], 'storageToken' => $rd['storageToken'], 'backUrl' => $rd['backUrl'],
 ]) . '</script>';
 media_page_close(['reader.js', 'reader-boot.js']);

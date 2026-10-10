@@ -340,6 +340,8 @@
         var books = sortBooks(opts.books || []);
         var storage = opts.storage === undefined ? pickStorage(win) : opts.storage;
         var base = opts.libBase || libBase();
+        // Set when the host page has its own listing: Back leaves the reader instead of showing the library.
+        var exitUrl = opts.exitUrl || null;
         var byName = {};
         books.forEach(function (b) { byName[b.name] = b; });
 
@@ -394,10 +396,10 @@
         var viewer = tid(el(doc, 'section', 'rd-viewer', { 'aria-label': 'Lecture' }), 'rd-viewer');
         viewer.hidden = true;
         var bar = el(doc, 'div', 'rd-bar');
-        var backBtn = button(doc, 'Retour à la bibliothèque', '', 'rd-back');
+        var backBtn = button(doc, exitUrl ? 'Retour au dossier' : 'Retour à la bibliothèque', '', 'rd-back');
         backBtn.classList.add('rd-back-btn');
         backBtn.appendChild(doc.createTextNode('← '));
-        backBtn.appendChild(el(doc, 'span', 'rd-btn-label')).textContent = 'Bibliothèque';
+        backBtn.appendChild(el(doc, 'span', 'rd-btn-label')).textContent = exitUrl ? 'Dossier' : 'Bibliothèque';
         var titleEl = tid(el(doc, 'h2', 'rd-title'), 'rd-title');
         var prevBtn = button(doc, 'Page précédente', '‹', 'rd-prev');
         var nextBtn = button(doc, 'Page suivante', '›', 'rd-next');
@@ -1347,7 +1349,11 @@
         nextBtn.addEventListener('click', function () { step(1); });
         zoomIn.addEventListener('click', function () { zoom(1); });
         zoomOut.addEventListener('click', function () { zoom(-1); });
-        backBtn.addEventListener('click', showLibrary);
+        backBtn.addEventListener('click', function () {
+            if (!exitUrl) { showLibrary(); return; }
+            flush();
+            win.location.assign(exitUrl);
+        });
         pageInput.addEventListener('change', function () {
             if (cur && (cur.kind === 'pdf' || cur.kind === 'comic')) goPdf(pageInput.value, true);
         });
