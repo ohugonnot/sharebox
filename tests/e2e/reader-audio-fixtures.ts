@@ -12,6 +12,10 @@ export const HOSTILE_PDFS = [
 ];
 /** Page colours of bd/a-comic.cbz (4 pages) and bd/b-comic.cbr (first 2). */
 export const COMIC_COLORS: [number, number, number][] = [[220, 30, 30], [30, 200, 30], [30, 30, 220], [230, 220, 20]];
+/** Page colours of bd-long/long-comic.cbz (7 pages). */
+export const LONG_COMIC_COLORS: [number, number, number][] = [
+  [220, 30, 30], [30, 200, 30], [30, 30, 220], [230, 220, 20], [200, 30, 200], [30, 200, 200], [240, 140, 20],
+];
 export const HOSTILE_MP3S = ['"><script>.mp3', "it's <b>bold.mp3"];
 
 /** Minimal valid PDF, one text per page. */
@@ -80,6 +84,10 @@ export function createFixtures(): string {
     const bd = mk('bd');
     execFileSync('zip', ['-q', '-j', path.join(bd, 'a-comic.cbz'), ...[1, 2, 3, 4].map((n) => path.join(src, `0${n}.png`))]);
     execFileSync('rar', ['a', '-inul', '-ep', path.join(bd, 'b-comic.cbr'), '01.png', '02.png'], { cwd: src });
+    const longSrc = mk('.comic-long-src');
+    LONG_COMIC_COLORS.forEach((c, i) => ffmpeg('-f', 'lavfi', '-i', `color=c=${hex(c)}:s=240x340`, '-frames:v', '1', '-pix_fmt', 'rgb24', path.join(longSrc, `0${i + 1}.png`)));
+    execFileSync('zip', ['-q', '-j', path.join(mk('bd-long'), 'long-comic.cbz'), ...LONG_COMIC_COLORS.map((_, i) => path.join(longSrc, `0${i + 1}.png`))]);
+    fs.rmSync(longSrc, { recursive: true, force: true });
     fs.writeFileSync(path.join(mk('bd-corrupt'), 'broken.cbz'), Buffer.concat([Buffer.from('PK\x03\x04', 'latin1'), crypto.randomBytes(400)]));
     fs.rmSync(src, { recursive: true, force: true });
 
