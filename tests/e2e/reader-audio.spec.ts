@@ -540,17 +540,18 @@ test.describe('album: lecteur audio', () => {
 // ---------------------------------------------------------------- (3) mixte / video / (4) mp3seul
 
 test.describe('dossiers sans lecteur dédié', () => {
-  test('mixte: aucun bouton Lire/Écouter de dossier, la vidéo monte video#player', async ({ page }) => {
+  test('mixte: pas de bouton de dossier, la vidéo monte video#player, le PDF a sa flèche Lire', async ({ page }) => {
     const resp = await page.goto(url('mixte'));
     expect(resp!.headers()['content-security-policy']).toBeUndefined();
     await expect(toolbarLink(page, 'read')).toHaveCount(0);
     await expect(toolbarLink(page, 'listen')).toHaveCount(0);
     await expect(page.locator('a[href*="read=1"], a[href*="listen=1"]')).toHaveCount(0);
-    await expect(playBtn(page, 'notice.pdf')).toHaveCount(0);
+    await expect(playBtn(page, 'notice.pdf')).toHaveCount(1);
     await shot(page, 'mixte-listing');
     await playBtn(page, 'un.mp4').click();
     await expect(page.locator('video#player')).toBeAttached();
     await expect(page.locator('#asc-reader, #asc-audiobook')).toHaveCount(0);
+    await openBookFromListing(page, 'mixte', 'notice.pdf');
   });
 
   test('video: aucun bouton, play monte video#player comme avant', async ({ page }) => {

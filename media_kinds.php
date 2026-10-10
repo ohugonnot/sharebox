@@ -156,7 +156,7 @@ function book_readable(string $name, bool $epub = READER_EPUB_ENABLED): bool {
 
 /**
  * @param string[] $names
- * @return array{rowRead:bool, toolbar:?array{param:string, label:string}}
+ * @return array{toolbar:?array{param:string, label:string}}
  */
 function listing_actions(array $names, bool $epub = READER_EPUB_ENABLED): array {
     $kind = folder_media_kind($names, $epub);
@@ -167,6 +167,5 @@ function listing_actions(array $names, bool $epub = READER_EPUB_ENABLED): array 
     } elseif ($kind === 'library' && $nBooks >= 2) {
         $toolbar = ['param' => 'read', 'label' => 'Bibliothèque · ' . $nBooks . ' livres'];
     }
-    // A null kind with books means a video folder: the video player owns it.
-    return ['rowRead' => $kind !== null, 'toolbar' => $toolbar];
+    return ['toolbar' => $toolbar];
 }
