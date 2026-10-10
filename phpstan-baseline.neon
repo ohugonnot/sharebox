@@ -231,13 +231,7 @@ parameters:
 		-
 			message: '#^Ternary operator condition is always true\.$#'
 			identifier: ternary.alwaysTrue
-			count: 2
-			path: handlers/tmdb.php
-
-		-
-			message: '#^Undefined variable\: \$resolvedPath$#'
-			identifier: variable.undefined
-			count: 3
+			count: 1
 			path: handlers/tmdb.php
 
 		-
@@ -249,5 +243,5 @@ parameters:
 		-
 			message: '#^Variable \$resolvedPath might not be defined\.$#'
 			identifier: variable.undefined
-			count: 26
+			count: 29
 			path: handlers/tmdb.php

@@ -202,22 +202,10 @@ function comic_send_page(string $path, array $entry): bool {
 function comic_send_zip_page(string $path, array $entry): bool {
     $zip = new ZipArchive();
     if ($zip->open($path, ZipArchive::RDONLY) !== true) return false;
-    $in = $zip->getStreamIndex((int)$entry['zip']);
-    if ($in === false) {
-        $zip->close();
-        return false;
-    }
-    // The declared size can lie (zip bomb): count what really comes out.
-    $data = '';
-    while (!feof($in) && strlen($data) <= COMIC_MAX_PAGE_BYTES) {
-        $chunk = fread($in, 65536);
-        if ($chunk === false || $chunk === '') break;
-        $data .= $chunk;
-    }
-    $ok = feof($in) && strlen($data) <= COMIC_MAX_PAGE_BYTES && $data !== '';
-    fclose($in);
+    // The declared size can lie (zip bomb): read one byte past the cap to catch it.
+    $data = $zip->getFromIndex((int)$entry['zip'], COMIC_MAX_PAGE_BYTES + 1);
     $zip->close();
-    if (!$ok) return false;
+    if (!is_string($data) || $data === '' || strlen($data) > COMIC_MAX_PAGE_BYTES) return false;
     comic_page_headers($entry['name']);
     header('Content-Length: ' . strlen($data));
     echo $data;
