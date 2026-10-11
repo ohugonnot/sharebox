@@ -936,7 +936,8 @@ if ($action !== '') {
             #activity-search { width: 100%; }
             .activity-pager { justify-content: center; }
             .actions { flex-wrap: nowrap; }
-            .actions .btn { padding: .25rem .45rem; font-size: .72rem; }
+            .actions .btn { padding: .25rem .45rem; font-size: .72rem; min-height: 40px; }
+            .tab-btn { padding: .65rem .3rem; font-size: .76rem; flex: 1 1 auto; }
         }
         /* ── Streams actifs ── */
         .live-dot {
