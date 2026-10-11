@@ -22,7 +22,7 @@ test('module import touches no window/document and exposes the API', () => {
   assert.equal(typeof globalThis.window, 'undefined');
   assert.equal(typeof globalThis.document, 'undefined');
   for (const fn of ['storageKey', 'bookKind', 'sortBooks', 'clampPage', 'fractionOf', 'bookStatus', 'percent',
-    'loadState', 'saveProgress', 'shouldSave', 'resumeTarget', 'lastRead', 'neighbor', 'sortBooksBy', 'filterBooks', 'formatSize', 'comicPageUrl', 'comicCountUrl', 'spreadFor', 'stepSpread', 'keyAction', 'sharpLevel', 'sharpKernel', 'epubSize', 'epubCss', 'pinchZoom']) {
+    'loadState', 'saveProgress', 'shouldSave', 'resumeTarget', 'lastRead', 'neighbor', 'sortBooksBy', 'filterBooks', 'formatSize', 'comicPageUrl', 'comicCountUrl', 'spreadFor', 'stepSpread', 'keyAction', 'sharpLevel', 'sharpKernel', 'epubSize', 'epubCss', 'pinchZoom', 'recentBooks', 'statusText']) {
     assert.equal(typeof rd[fn], 'function', fn);
   }
 });
@@ -645,4 +645,23 @@ test('pinchZoom: scales the start zoom by the finger spread, bounded to 1..4', (
   assert.equal(rd.pinchZoom(1.5, 0, 100), 1.5, 'no start distance keeps the zoom');
   assert.equal(rd.pinchZoom(undefined, 100, 120), 1.2);
   assert.equal(rd.pinchZoom(9, 0, 0), 4);
+});
+
+// Regression: a first-time visitor saw "Nouveau" on all 63 books of a share (it meant "never opened").
+test('statusText: "Nouveau" only for a recent book, nothing for an old unread one', () => {
+  assert.equal(rd.statusText('new', 0, true), 'Nouveau');
+  assert.equal(rd.statusText('new', 0, false), '');
+  assert.equal(rd.statusText('new', 0, undefined), '');
+  assert.equal(rd.statusText('reading', 42, true), '42 %');
+  assert.equal(rd.statusText('done', 100, true), 'Terminé');
+});
+
+test('recentBooks: books from the last 14 days, none when every book is that recent', () => {
+  const now = 1_800_000_000;
+  const day = 86400;
+  const books = [{ name: 'old', mtime: now - 30 * day }, { name: 'new', mtime: now - 2 * day }, { name: 'edge', mtime: now - 14 * day }];
+  assert.deepEqual(rd.recentBooks(books, now), { new: true });
+  assert.deepEqual(rd.recentBooks([{ name: 'a', mtime: now - day }, { name: 'b', mtime: now }], now), {});
+  assert.deepEqual(rd.recentBooks([{ name: 'x' }, { name: 'y', mtime: 'junk' }], now), {});
+  assert.deepEqual(rd.recentBooks([], now), {});
 });

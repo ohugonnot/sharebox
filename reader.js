@@ -9,6 +9,7 @@
     'use strict';
 
     var DONE_AT = 0.98;
+    var NEW_DAYS = 14;
     var SAVE_GAP_MS = 1000;
     var ZOOM_MIN = 0.5;
     var ZOOM_MAX = 3;
@@ -439,10 +440,21 @@
         return tid(b, id);
     }
 
-    function statusText(status, pct) {
+    function statusText(status, pct, recent) {
         if (status === 'done') return 'Terminé';
         if (status === 'reading') return pct + ' %';
-        return 'Nouveau';
+        return recent ? 'Nouveau' : '';
+    }
+
+    // Names of the books added in the last NEW_DAYS; none when every book is that recent (a fresh share).
+    function recentBooks(books, nowSec) {
+        var limit = nowSec - NEW_DAYS * 86400;
+        var out = {};
+        var n = 0;
+        books.forEach(function (b) {
+            if (Number(b.mtime) > limit) { out[b.name] = true; n++; }
+        });
+        return n && n === books.length ? {} : out;
     }
 
     // currentScript is only set while the script runs, not when mount() fires later.
@@ -709,6 +721,7 @@
                 sortBtns[k].arrow.textContent = on ? (sortAsc ? '\u2191' : '\u2193') : '\u2195';
             });
             var shown = sortBooksBy(filterBooks(books, filterInput.value), sortKey, sortAsc);
+            var recent = recentBooks(books, Date.now() / 1000);
             countEl.textContent = shown.length + ' / ' + books.length;
             shown.forEach(function (b) {
                 var entry = state.files[b.name];
@@ -727,7 +740,7 @@
                 var dateEl = el(doc, 'span', 'rd-book-date');
                 dateEl.textContent = formatDate(b.mtime);
                 var statusEl = el(doc, 'span', 'rd-book-status');
-                statusEl.textContent = statusText(status, pct);
+                statusEl.textContent = statusText(status, pct, recent[b.name]);
                 open.appendChild(kindEl);
                 open.appendChild(nameEl);
                 open.appendChild(sizeEl);
@@ -2025,6 +2038,8 @@
         sortBooks: sortBooks,
         sortBooksBy: sortBooksBy,
         filterBooks: filterBooks,
+        recentBooks: recentBooks,
+        statusText: statusText,
         formatSize: formatSize,
         clampPage: clampPage,
         fractionOf: fractionOf,
