@@ -164,7 +164,7 @@ $resolvedPath = realpath($targetPath);
 if (!is_path_within($resolvedPath, $basePath)) {
     stream_log('ACCESS 403 | token=' . $token . ' | path traversal: ' . ($subPath ?: '(root)'));
     http_response_code(403);
-    afficher_erreur('Accès interdit', 'Ce chemin n\'est pas autorisé.');
+    afficher_erreur('Accès interdit', 'Ce chemin n\'est pas autorisé.', lien_retour($token, $subPath, false));
     exit;
 }
 
@@ -215,7 +215,7 @@ if ($readerAllowed && ($_GET['inline'] ?? '') === '1' && is_file($resolvedPath))
     $inlineMime = inline_mime($resolvedPath);
     if ($inlineMime === null) {
         http_response_code(404);
-        afficher_erreur('Introuvable', 'Ce fichier ne peut pas être affiché ici.');
+        afficher_erreur('Introuvable', 'Ce fichier ne peut pas être affiché ici.', lien_retour($token, $subPath, true));
         exit;
     }
     // A compressing proxy drops Content-Length, and pdf.js then fetches the whole file.
@@ -452,7 +452,7 @@ if (is_dir($resolvedPath)) {
 }
 
 http_response_code(404);
-afficher_erreur('Introuvable', 'Ce fichier n\'existe pas.');
+afficher_erreur('Introuvable', 'Ce fichier n\'existe pas.', lien_retour($token, $subPath, true));
 exit;
 
 // ============================================================================
@@ -533,6 +533,9 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 
     $baseUrl = '/dl/' . htmlspecialchars($token);
     $shareNameHtml = htmlspecialchars($shareName);
+    $folderName = $subPath !== '' ? basename($subPath) : $shareName;
+    $folderNameHtml = htmlspecialchars($folderName);
+    $pageTitleHtml = $subPath !== '' ? $folderNameHtml . ' — ' . $shareNameHtml : $shareNameHtml;
     $css = css_public();
     $hasFolders = count($folders) > 0;
 
@@ -584,7 +587,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
     <meta name="theme-color" content="#0c0e14">
     <link rel="manifest" href="/share/manifest.json">
     <link rel="icon" type="image/svg+xml" href="/share/favicon.svg">
-    <title>{$shareNameHtml}</title>
+    <title>{$pageTitleHtml}</title>
     <style>{$css}
 @keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
 @keyframes fadeScale { from{opacity:0;transform:scale(.92)} to{opacity:1;transform:none} }
@@ -737,7 +740,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 <div class="page">
     <div class="header">
         <div class="header-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="color:var(--accent)"><path d="M2 6a2 2 0 012-2h5l2 2h9a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6z"/></svg></div>
-        <div class="header-title">{$shareNameHtml}</div>
+        <div class="header-title">{$folderNameHtml}</div>
     </div>
     <nav class="breadcrumb">{$breadcrumb}</nav>
 HTML;
@@ -2425,9 +2428,19 @@ HTML;
     echo '</div></body></html>';
 }
 
-function afficher_erreur(string $titre, string $message): void {
+/** Link to the folder the visitor can fall back to; null at the link root. */
+function lien_retour(string $token, string $subPath, bool $parent): ?string {
+    $subPath = trim($subPath, '/');
+    if ($subPath === '') return null;
+    $parentPath = (!$parent || str_contains($subPath, '..')) ? '' : dirname($subPath);
+    return '/dl/' . rawurlencode($token) . ($parentPath !== '' && $parentPath !== '.' ? '?p=' . rawurlencode($parentPath) : '');
+}
+
+function afficher_erreur(string $titre, string $message, ?string $retour = null): void {
     $titreHtml = htmlspecialchars($titre);
     $messageHtml = htmlspecialchars($message);
+    $retourHtml = htmlspecialchars($retour ?? '/');
+    $historyAttr = $retour === null ? ' onclick="if(document.referrer&&history.length>1){history.back();return false}"' : '';
     $css = css_public();
 
     echo <<<HTML
@@ -2446,14 +2459,21 @@ function afficher_erreur(string $titre, string $message): void {
     .card-icon { width: 56px; height: 56px; background: rgba(239,83,80,.1); border-radius: var(--radius-md); display: flex; align-items: center; justify-content: center; margin: 0 auto 1.2rem; font-size: 1.6rem; }
     .card h2 { font-size: 1.2rem; font-weight: 700; margin-bottom: .5rem; color: var(--red); }
     .card p { color: var(--text-secondary); font-size: .9rem; line-height: 1.5; }
+    .card-icon svg { width: 28px; height: 28px; color: var(--red); }
+    .btn-back { display: inline-flex; align-items: center; gap: .4rem; margin-top: 1.5rem; padding: .55rem 1.1rem; border: 1px solid rgba(255,255,255,.12); border-radius: var(--radius-md); color: var(--text-secondary); font-size: .85rem; text-decoration: none; }
+    .btn-back:hover, .btn-back:focus-visible { color: #fff; border-color: rgba(255,255,255,.3); }
     </style>
 </head>
 <body>
 <div class="page">
     <div class="card">
-        <div class="card-icon">&#x26A0;&#xFE0F;</div>
+        <div class="card-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg></div>
         <h2>{$titreHtml}</h2>
         <p>{$messageHtml}</p>
+        <a class="btn-back" href="{$retourHtml}"{$historyAttr}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+            Retour
+        </a>
     </div>
 </div>
 </body>
