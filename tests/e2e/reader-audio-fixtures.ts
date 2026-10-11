@@ -88,6 +88,11 @@ export function createFixtures(): string {
     LONG_COMIC_COLORS.forEach((c, i) => ffmpeg('-f', 'lavfi', '-i', `color=c=${hex(c)}:s=240x340`, '-frames:v', '1', '-pix_fmt', 'rgb24', path.join(longSrc, `0${i + 1}.png`)));
     execFileSync('zip', ['-q', '-j', path.join(mk('bd-long'), 'long-comic.cbz'), ...LONG_COMIC_COLORS.map((_, i) => path.join(longSrc, `0${i + 1}.png`))]);
     fs.rmSync(longSrc, { recursive: true, force: true });
+    // Page 4 is a landscape (panoramic) page: it must stand alone in double-page mode.
+    const wideSrc = mk('.comic-wide-src');
+    LONG_COMIC_COLORS.slice(0, 6).forEach((c, i) => ffmpeg('-f', 'lavfi', '-i', `color=c=${hex(c)}:s=${i === 3 ? '480x240' : '240x340'}`, '-frames:v', '1', '-pix_fmt', 'rgb24', path.join(wideSrc, `0${i + 1}.png`)));
+    execFileSync('zip', ['-q', '-j', path.join(mk('bd-wide'), 'wide-comic.cbz'), ...[1, 2, 3, 4, 5, 6].map((n) => path.join(wideSrc, `0${n}.png`))]);
+    fs.rmSync(wideSrc, { recursive: true, force: true });
     fs.writeFileSync(path.join(mk('bd-corrupt'), 'broken.cbz'), Buffer.concat([Buffer.from('PK\x03\x04', 'latin1'), crypto.randomBytes(400)]));
     fs.rmSync(src, { recursive: true, force: true });
 

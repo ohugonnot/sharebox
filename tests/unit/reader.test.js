@@ -22,7 +22,7 @@ test('module import touches no window/document and exposes the API', () => {
   assert.equal(typeof globalThis.window, 'undefined');
   assert.equal(typeof globalThis.document, 'undefined');
   for (const fn of ['storageKey', 'bookKind', 'sortBooks', 'clampPage', 'fractionOf', 'bookStatus', 'percent',
-    'loadState', 'saveProgress', 'shouldSave', 'resumeTarget', 'lastRead', 'neighbor', 'sortBooksBy', 'filterBooks', 'formatSize', 'comicPageUrl', 'comicCountUrl', 'spreadFor', 'stepSpread', 'keyAction', 'sharpLevel', 'sharpKernel']) {
+    'loadState', 'saveProgress', 'shouldSave', 'resumeTarget', 'lastRead', 'neighbor', 'sortBooksBy', 'filterBooks', 'formatSize', 'comicPageUrl', 'comicCountUrl', 'spreadFor', 'stepSpread', 'keyAction', 'sharpLevel', 'sharpKernel', 'epubSize', 'epubCss', 'pinchZoom']) {
     assert.equal(typeof rd[fn], 'function', fn);
   }
 });
@@ -462,6 +462,62 @@ test('stepSpread: backward lands on the smallest page of the previous spread, st
   assert.equal(rd.stepSpread(6, 6, -1), 4);
 });
 
+test('spreadFor: an empty or missing wide map keeps the default grouping', () => {
+  for (const pages of [1, 2, 3, 6, 7]) {
+    for (let p = 1; p <= pages; p++) {
+      assert.deepEqual(rd.spreadFor(p, pages, {}), rd.spreadFor(p, pages), `${p}/${pages}`);
+      assert.deepEqual(rd.spreadFor(p, pages, undefined), rd.spreadFor(p, pages), `${p}/${pages}`);
+    }
+  }
+});
+
+test('spreadFor: a wide page stands alone and the pairing shifts after it', () => {
+  const w = { 4: true };
+  assert.deepEqual(rd.spreadFor(2, 8, w), [2, 3]);
+  assert.deepEqual(rd.spreadFor(3, 8, w), [2, 3]);
+  assert.deepEqual(rd.spreadFor(4, 8, w), [4, null]);
+  assert.deepEqual(rd.spreadFor(5, 8, w), [5, 6]);
+  assert.deepEqual(rd.spreadFor(6, 8, w), [5, 6]);
+  assert.deepEqual(rd.spreadFor(7, 8, w), [7, 8]);
+  assert.deepEqual(rd.spreadFor(8, 8, w), [7, 8]);
+});
+
+test('spreadFor: the page before a wide page stays alone', () => {
+  const w = { 5: true };
+  assert.deepEqual(rd.spreadFor(2, 7, w), [2, 3]);
+  assert.deepEqual(rd.spreadFor(4, 7, w), [4, null]);
+  assert.deepEqual(rd.spreadFor(5, 7, w), [5, null]);
+  assert.deepEqual(rd.spreadFor(6, 7, w), [6, 7]);
+});
+
+test('spreadFor: wide page right after the cover, wide last page', () => {
+  const w = { 2: true };
+  assert.deepEqual(rd.spreadFor(1, 6, w), [1, null]);
+  assert.deepEqual(rd.spreadFor(2, 6, w), [2, null]);
+  assert.deepEqual(rd.spreadFor(3, 6, w), [3, 4]);
+  assert.deepEqual(rd.spreadFor(6, 6, w), [5, 6]);
+  assert.deepEqual(rd.spreadFor(7, 7, { 7: true }), [7, null]);
+  assert.deepEqual(rd.spreadFor(6, 7, { 7: true }), [6, null]);
+  assert.deepEqual(rd.spreadFor(5, 7, { 7: true }), [4, 5]);
+  assert.deepEqual(rd.spreadFor(1, 3, { 1: true }), [1, null]);
+});
+
+test('stepSpread: across a wide page and at both ends', () => {
+  const w = { 4: true };
+  assert.equal(rd.stepSpread(1, 6, 1, w), 2);
+  assert.equal(rd.stepSpread(2, 6, 1, w), 4);
+  assert.equal(rd.stepSpread(4, 6, 1, w), 5);
+  assert.equal(rd.stepSpread(5, 6, 1, w), 5);
+  assert.equal(rd.stepSpread(6, 6, 1, w), 5);
+  assert.equal(rd.stepSpread(6, 6, -1, w), 4);
+  assert.equal(rd.stepSpread(5, 6, -1, w), 4);
+  assert.equal(rd.stepSpread(4, 6, -1, w), 2);
+  assert.equal(rd.stepSpread(3, 6, -1, w), 1);
+  assert.equal(rd.stepSpread(1, 6, -1, w), 1);
+  assert.equal(rd.stepSpread(6, 6, 1, { 6: true }), 6);
+  assert.equal(rd.stepSpread(6, 6, -1, { 6: true }), 4);
+});
+
 const EDGES_NONE = { top: false, bottom: false, left: false, right: false };
 const EDGES_ALL = { top: true, bottom: true, left: true, right: true };
 
@@ -541,4 +597,52 @@ test('sharpKernel: weights sum to 1, level 0 is the identity', () => {
     }
     assert.strictEqual(rd.sharpKernel(0), '0 0 0 0 1 0 0 0 0');
     assert.ok(Number(rd.sharpKernel(100).split(' ')[4]) > Number(rd.sharpKernel(50).split(' ')[4]));
+});
+
+test('epubSize: percent from storage, clamped to 80..160 by steps of 10', () => {
+  assert.equal(rd.epubSize(null), 100);
+  assert.equal(rd.epubSize(undefined), 100);
+  assert.equal(rd.epubSize(''), 100);
+  assert.equal(rd.epubSize('abc'), 100);
+  assert.equal(rd.epubSize('NaN'), 100);
+  assert.equal(rd.epubSize('120'), 120);
+  assert.equal(rd.epubSize(130), 130);
+  assert.equal(rd.epubSize('124'), 120);
+  assert.equal(rd.epubSize('125'), 130);
+  assert.equal(rd.epubSize('10'), 80);
+  assert.equal(rd.epubSize('999'), 160);
+  assert.equal(rd.epubSize('-5'), 80);
+});
+
+test('epubCss: theme colours plus the text size, unknown theme falls back to the site colours', () => {
+  const site = { bg: '#101010', fg: '#eeeeee', link: '#ff00aa' };
+  const s = rd.epubCss('site', 100, site);
+  assert.match(s, /background:#101010 !important/);
+  assert.match(s, /color:#eeeeee !important/);
+  assert.match(s, /a:link,a:visited\{color:#ff00aa !important\}/);
+  assert.match(s, /html\{font-size:100% !important\}/);
+  const sepia = rd.epubCss('sepia', 140, site);
+  assert.match(sepia, /background:#f4ecd8 !important/);
+  assert.match(sepia, /color:#5b4636 !important/);
+  assert.match(sepia, /font-size:140%/);
+  assert.match(rd.epubCss('light', 100, site), /background:#ffffff !important;color:#1a1a1a/);
+  assert.match(rd.epubCss('dark', 100, site), /background:#121212 !important;color:#e0e0e0/);
+  assert.equal(rd.epubCss('bogus', 100, site), s);
+  assert.equal(rd.epubCss(undefined, 100, site), s);
+  // Inherited object keys are not themes (the stored value is user-controlled).
+  assert.equal(rd.epubCss('constructor', 100, site), s);
+  assert.equal(rd.epubCss('__proto__', 100, site), s);
+  assert.match(rd.epubCss('sepia', 'junk', site), /font-size:100%/);
+  assert.match(rd.epubCss('site', 300), /font-size:160%/);
+  assert.doesNotMatch(rd.epubCss('site', 100), /undefined/);
+});
+
+test('pinchZoom: scales the start zoom by the finger spread, bounded to 1..4', () => {
+  assert.equal(rd.pinchZoom(1, 100, 200), 2);
+  assert.equal(rd.pinchZoom(2, 100, 150), 3);
+  assert.equal(rd.pinchZoom(2, 100, 25), 1);
+  assert.equal(rd.pinchZoom(3, 100, 1000), 4);
+  assert.equal(rd.pinchZoom(1.5, 0, 100), 1.5, 'no start distance keeps the zoom');
+  assert.equal(rd.pinchZoom(undefined, 100, 120), 1.2);
+  assert.equal(rd.pinchZoom(9, 0, 0), 4);
 });
