@@ -710,7 +710,7 @@ if ($action !== '') {
             padding: .4rem .7rem;
             border: none;
             border-radius: 6px;
-            font-family: 'Sora', sans-serif;
+            font-family: inherit;
             font-size: .75rem;
             font-weight: 500;
             cursor: pointer;
@@ -806,7 +806,7 @@ if ($action !== '') {
             border: 1px solid var(--border-strong);
             border-radius: 8px;
             color: var(--text);
-            font-family: 'Sora', sans-serif;
+            font-family: inherit;
             font-size: .88rem;
             outline: none;
             transition: border-color .2s;
@@ -1357,10 +1357,12 @@ async function api(action, data = null) {
 
 function formatBytes(bytes) {
     if (bytes === null || bytes === undefined) return '—';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-    return (bytes / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    const fr = (n, d) => n.toFixed(d).replace('.', ',');
+    if (bytes < 1024) return bytes + ' o';
+    if (bytes < 1024 * 1024) return fr(bytes / 1024, 1) + ' Ko';
+    if (bytes < 1024 * 1024 * 1024) return fr(bytes / 1024 / 1024, 1) + ' Mo';
+    if (bytes < 1024 * 1024 * 1024 * 1024) return fr(bytes / 1024 / 1024 / 1024, 2) + ' Go';
+    return fr(bytes / 1024 / 1024 / 1024 / 1024, 2) + ' To';
 }
 
 function esc(s) {
@@ -1554,7 +1556,7 @@ function loadActiveStreams() {
             const upd      = document.getElementById('streams-last-update');
             const dot      = document.getElementById('streams-live-dot');
             const cnt      = document.getElementById('streams-count');
-            if (upd) upd.textContent = new Date().toLocaleTimeString();
+            if (upd) upd.textContent = new Date().toLocaleTimeString('fr-FR');
 
             const streams = data.streams || [];
             if (dot) dot.classList.toggle('active', streams.length > 0);
@@ -1639,14 +1641,14 @@ async function loadTmdbStatus() {
             (failed > 0 ? '<span style="color:var(--red)">' + failed + ' échoués</span>' : '') +
             '<span style="color:var(--text-muted)">' + total + ' total</span>' +
             (matched > 0 ? '<span style="opacity:.5;font-size:.75rem">|</span>' +
-                '<span title="verified ≥80%" style="color:#3ddc84;font-size:.75rem">● ' + (conf.high || 0) + '</span>' +
-                '<span title="verified 50-79%" style="color:#f0a030;font-size:.75rem">● ' + (conf.medium || 0) + '</span>' +
-                (conf.low > 0 ? '<span title="verified <50%" style="color:#e8453c;font-size:.75rem">● ' + conf.low + '</span>' : '') +
-                '<span style="color:var(--text-muted);font-size:.75rem">avg ' + (conf.avg || 0) + '%</span>' : '');
+                '<span title="Correspondance fiable (≥ 80 %)" style="color:#3ddc84;font-size:.75rem">● ' + (conf.high || 0) + ' fiables</span>' +
+                '<span title="Correspondance moyenne (50 à 79 %)" style="color:#f0a030;font-size:.75rem">● ' + (conf.medium || 0) + ' moyens</span>' +
+                (conf.low > 0 ? '<span title="Correspondance faible (< 50 %)" style="color:#e8453c;font-size:.75rem">● ' + conf.low + ' faibles</span>' : '') +
+                '<span style="color:var(--text-muted);font-size:.75rem>moyenne ' + (conf.avg || 0) + ' %</span>' : '');
 
         barWrap.style.display = '';
         bar.style.width = pct + '%';
-        barLabel.textContent = pct + '% couvert — confiance moyenne ' + (conf.avg || 0) + '%';
+        barLabel.textContent = pct + ' % couvert — confiance moyenne ' + (conf.avg || 0) + ' %';
 
         if (res.scanning) {
             btn.textContent = 'Scan en cours...';
@@ -2116,10 +2118,10 @@ initAccordion('evenements-systeme', false);
     window.seedModalHash = null;
 
     function fmtBytes(b) {
-        if (b >= 1e12) return (b/1e12).toFixed(2) + ' TB';
-        if (b >= 1e9)  return (b/1e9).toFixed(2) + ' GB';
-        if (b >= 1e6)  return (b/1e6).toFixed(1) + ' MB';
-        return (b/1024).toFixed(0) + ' KB';
+        if (b >= 1e12) return (b/1e12).toFixed(2).replace('.', ',') + ' To';
+        if (b >= 1e9)  return (b/1e9).toFixed(2).replace('.', ',') + ' Go';
+        if (b >= 1e6)  return (b/1e6).toFixed(1).replace('.', ',') + ' Mo';
+        return (b/1024).toFixed(0) + ' Ko';
     }
     function fmtAge(ts) {
         if (!ts) return '—';

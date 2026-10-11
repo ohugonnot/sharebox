@@ -20,6 +20,8 @@ class ErrorAndTitleHttpTest extends TestCase
         mkdir(self::$work . '/share/Livres/Tome 1', 0755, true);
         mkdir(self::$work . '/share/' . self::XSS_DIR, 0755, true);
         file_put_contents(self::$work . '/share/Livres/note.txt', 'x');
+        file_put_contents(self::$work . '/share/Livres/film.mkv.meta', '');
+        file_put_contents(self::$work . '/share/Livres/roman.pdf', '%PDF-1.4');
         file_put_contents(self::$work . '/share/Livres/Tome 1/unknown.zzz', 'x');
 
         $vars = var_export(['db' => self::$work . '/db.sqlite', 'download' => realpath(__DIR__ . '/../download.php')], true);
@@ -157,5 +159,32 @@ class ErrorAndTitleHttpTest extends TestCase
         $esc = htmlspecialchars(self::XSS_DIR);
         $this->assertStringContainsString("<title>$esc — Partage</title>", $r['body']);
         $this->assertStringContainsString("<div class=\"header-title\">$esc</div>", $r['body']);
+    }
+
+    public function testListingHidesRtorrentMetaFiles(): void
+    {
+        $r = self::request('token=listtest&p=Livres');
+        $this->assertSame(200, $r['code']);
+        $this->assertStringContainsString('data-name="note.txt"', $r['body']);
+        $this->assertStringNotContainsString('film.mkv.meta', $r['body']);
+    }
+
+    public function testSearchAndZipSkipMetaFiles(): void
+    {
+        $r = self::request('token=listtest&q=film');
+        $this->assertSame(200, $r['code']);
+        $this->assertStringNotContainsString('film.mkv.meta', $r['body']);
+
+        $z = self::request('token=listtest&zip=1&p=Livres');
+        $this->assertStringContainsString('note.txt', $z['body']);
+        $this->assertStringNotContainsString('film.mkv.meta', $z['body']);
+    }
+
+    public function testBooksGetBookIconAndFilesWithoutPlayKeepAnEmptySlot(): void
+    {
+        $body = self::request('token=listtest&p=Livres')['body'];
+        $this->assertMatchesRegularExpression('/<div class="row-icon book">.*?data-name="roman\.pdf"|data-name="roman\.pdf"[^>]*>\s*<div class="row-icon book">/s', $body);
+        $this->assertSame(1, preg_match_all('/<span class="btn-play"[^>]*title="Lire"/', $body));
+        $this->assertSame(1, substr_count($body, '<span class="btn-play-slot"></span>'));
     }
 }

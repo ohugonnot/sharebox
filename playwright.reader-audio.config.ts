@@ -9,7 +9,7 @@ const launchOptions = {
 
 export default defineConfig({
   testDir: './tests/e2e',
-  testMatch: ['reader-audio.spec.ts', 'mobile-toolbar.spec.ts'],
+  testMatch: ['reader-audio.spec.ts', 'mobile-toolbar.spec.ts', 'polish.spec.ts'],
   timeout: 60000,
   expect: { timeout: 10000 },
   retries: 0,
