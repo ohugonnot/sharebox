@@ -177,6 +177,29 @@ html.rd-reading [data-rd-chrome] { display: none !important; }
 .rd-sharp-panel[hidden] { display: none; }
 .rd-sharp-range { width: min(14rem, 50vw); min-height: 44px; accent-color: var(--as-accent, currentColor); }
 .rd-sharp-value { min-width: 2.2rem; text-align: right; font-variant-numeric: tabular-nums; color: var(--as-muted); }
+.rd-epub-panel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    margin-top: .35rem;
+    padding: .6rem .8rem;
+    background: var(--as-raised);
+    border: 1px solid var(--as-border);
+    border-radius: 10px;
+    color: var(--as-text, inherit);
+}
+.rd-epub-panel[hidden] { display: none; }
+.rd-epub-row { display: flex; align-items: center; gap: .6rem; }
+.rd-epub-themes { flex-wrap: wrap; gap: .35rem; }
+.rd-epub-size { width: min(12rem, 45vw); min-height: 44px; accent-color: var(--as-accent, currentColor); }
+.rd-epub-value { min-width: 3rem; text-align: right; font-variant-numeric: tabular-nums; color: var(--as-muted); }
+.rd-epub-theme[aria-pressed="true"] { border-color: var(--as-accent, currentColor); color: var(--as-accent, inherit); }
+/* No pinch-zoom: two fingers on a comic zoom the reader (reader.js), not the page. */
+.rd-stage-comic { touch-action: pan-y; }
 .rd-stage-comic.rd-zoomed { touch-action: pan-x pan-y; }
 .rd-stage-epub { overflow: hidden; height: calc(100vh - 11rem); height: calc(100dvh - 11rem); text-align: left; }
 .rd-stage-epub { touch-action: auto; }
@@ -216,6 +239,8 @@ html.rd-reading [data-rd-chrome] { display: none !important; }
 }
 .rd-viewer.rd-fs { touch-action: pan-y pinch-zoom; }
 .rd-viewer.rd-pseudo-fs { position: fixed; inset: 0; z-index: 2000; }
+/* !important beats the inline cursor the stage sets for page zones and panning. */
+.rd-viewer.rd-idle, .rd-viewer.rd-idle * { cursor: none !important; }
 .rd-fs .rd-bar {
     position: absolute;
     top: env(safe-area-inset-top, 0px);

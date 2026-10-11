@@ -372,6 +372,22 @@ test.describe('bd: liseuse CBZ/CBR', () => {
     expect(pageNumbers(reqs), 'page 4 must not be fetched while on page 2').not.toContain(4);
   });
 
+  test('préchargement: la page précédente est aussi demandée, sans y revenir', async ({ page }) => {
+    const reqs: string[] = [];
+    page.on('request', (r) => { if (/\.cbz/i.test(decodeURIComponent(r.url())) && /[?&]page=\d/.test(r.url())) reqs.push(r.url()); });
+    await openComic(page, 'bd-long', 'long-comic.cbz');
+    await imgLoaded(page);
+    await expect(tid(page, 'rd-epub-toggle'), 'text settings are EPUB only').toBeHidden();
+    await tid(page, 'rd-page-input').fill('5');
+    await tid(page, 'rd-page-input').press('Enter');
+    await expectPage(page, 5);
+    await expect.poll(() => pageNumbers(reqs), { message: 'page 6 preloaded from page 5' }).toContain(6);
+    await expect.poll(() => pageNumbers(reqs), { message: 'page 4 preloaded from page 5' }).toContain(4);
+    await page.waitForTimeout(500);
+    expect(pageNumbers(reqs), 'page 3 is neither shown nor next to page 5').not.toContain(3);
+    expect(await pageNo(page), 'still on page 5').toBe(5);
+  });
+
   test('reprise de lecture après rechargement', async ({ page }) => {
     await openComic(page, 'bd', 'a-comic.cbz');
     await imgLoaded(page);
@@ -479,6 +495,30 @@ test.describe('bd: liseuse CBZ/CBR', () => {
 });
 
 // ---------------------------------------------------------------- (2) album
+
+// Regression: the PDF stage kept its CSS cap (100dvh - 11rem) and cut the page bottom; the comic overflowed the window.
+test.describe('page entière à l\'écran', () => {
+  test.skip(() => prof() !== 'desktop', 'desktop project only');
+  const fits = (page: Page) => page.evaluate(() => {
+    const s = document.querySelector<HTMLElement>('[data-testid="rd-stage"]')!;
+    return { innerScroll: s.scrollHeight - s.clientHeight, pageScroll: document.documentElement.scrollHeight - innerHeight };
+  });
+
+  test('a PDF page fits in the stage and the window', async ({ page }) => {
+    await openBookFromListing(page, 'livres', 'a-book.pdf');
+    await expect.poll(async () => (await fits(page)).innerScroll).toBeLessThanOrEqual(2);
+    expect((await fits(page)).pageScroll).toBeLessThanOrEqual(0);
+  });
+
+  test('a comic page fits in the stage and the window', async ({ page }) => {
+    await page.goto(url('bd'));
+    await playBtn(page, 'a-comic.cbz').click();
+    await tid(page, 'rd-viewer').waitFor({ state: 'visible' });
+    await expect(page.locator('[data-testid="rd-viewer"] img[data-page="1"]')).toBeVisible();
+    await expect.poll(async () => (await fits(page)).innerScroll).toBeLessThanOrEqual(2);
+    expect((await fits(page)).pageScroll).toBeLessThanOrEqual(0);
+  });
+});
 
 test.describe('album: lecteur audio', () => {
   test('listing, pistes, cover, lecture, piste suivante, vitesse, reprise', async ({ page }) => {
@@ -885,6 +925,74 @@ test.describe('bd: ergonomie', () => {
     await expectShown(page, [4]);
   });
 
+  test('double page @landscape: a wide page stands alone and the pairing shifts after it', async ({ page }) => {
+    await open(page, 'bd-wide', 'wide-comic.cbz');
+    await tid(page, 'rd-spread-toggle').click();
+    await expectShown(page, [1]);
+    await tid(page, 'rd-next').click();
+    await expectShown(page, [2, 3]);
+    await tid(page, 'rd-next').click();
+    await expectShown(page, [4]);
+    await expectCounter(page, /^4 \| \/ 6$/);
+    await tid(page, 'rd-next').click();
+    await expectShown(page, [5, 6]);
+    await expectCounter(page, /5\s*[-–]\s*6/);
+    await tid(page, 'rd-prev').click();
+    await expectShown(page, [4]);
+    await tid(page, 'rd-prev').click();
+    await expectShown(page, [2, 3]);
+    await tid(page, 'rd-prev').click();
+    await expectShown(page, [1]);
+  });
+
+  // Regression: a wide page found by the previous-page prefetch changed the pairing but the pair on screen
+  // stayed, so Prev skipped a page and Next showed one twice.
+  test('double page @landscape: a wide page found by prefetch regroups the pair on screen', async ({ page }) => {
+    await open(page, 'bd-wide', 'wide-comic.cbz');
+    await tid(page, 'rd-spread-toggle').click();
+    await expectShown(page, [1]);
+    // Page 4 (wide) is unknown yet: page 6 first shows alone, then the prefetch of (4,5) finds page 4 wide.
+    await tid(page, 'rd-page-input').fill('6');
+    await tid(page, 'rd-page-input').press('Enter');
+    await expectShown(page, [5, 6]);
+    await tid(page, 'rd-prev').click();
+    await expectShown(page, [4]);
+  });
+
+  test('wake lock: asked when a book opens, asked again after the browser drops it, released on close', async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as any;
+      w.__wl = [];
+      Object.defineProperty(navigator, 'wakeLock', {
+        configurable: true,
+        value: {
+          request: (type: string) => {
+            w.__wl.push('request:' + type);
+            const lock = { released: false, release: () => { lock.released = true; w.__wl.push('release'); return Promise.resolve(); } };
+            w.__lock = lock;
+            return Promise.resolve(lock);
+          },
+        },
+      });
+    });
+    const calls = () => page.evaluate(() => (window as any).__wl);
+    await page.goto(url('bd'));
+    await toolbarLink(page, 'read').click();
+    await tid(page, 'rd-book').filter({ hasText: 'a-comic' }).click();
+    await pageImg(page, 1).waitFor({ state: 'visible' });
+    await expect.poll(calls).toEqual(['request:screen']);
+    // The browser drops the lock with a hidden tab; coming back asks again.
+    await page.evaluate(() => { (window as any).__lock.released = true; document.dispatchEvent(new Event('visibilitychange')); });
+    await expect.poll(calls).toEqual(['request:screen', 'request:screen']);
+    await tid(page, 'rd-back').click();
+    await expect(tid(page, 'rd-library')).toBeVisible();
+    await expect.poll(calls).toEqual(['request:screen', 'request:screen', 'release']);
+    // Library shown: no book, no new request.
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    await page.waitForTimeout(200);
+    expect(await calls()).toEqual(['request:screen', 'request:screen', 'release']);
+  });
+
   test('portrait phone: chrome hidden, big page, one-line bar, class removed on close', async ({ page }) => {
     test.skip(!isMobile(), 'mobile project only');
     await open(page, 'bd', 'a-comic.cbz');
@@ -924,20 +1032,23 @@ test.describe('bd: ergonomie', () => {
     const expectFit = (page: Page, base: { w: number; h: number }) =>
       expect.poll(async () => (await size(page)).w / base.w, { timeout: 5000 }).toBeLessThanOrEqual(1.05);
 
-    test('double tap zooms, zones are locked while zoomed, second double tap restores', async ({ page }) => {
+    test('double tap zooms, a side tap turns the page with the zoom kept, second double tap restores', async ({ page }) => {
       await open(page, 'bd', 'a-comic.cbz');
       const base = await size(page);
       await doubleTapAt(page, 0.5);
       await expectZoomed(page, base);
       await expectPage(page, 1);
 
+      await tid(page, 'rd-stage').evaluate((n) => { n.scrollTop = 40; });
       await tapAt(page, 0.95);
-      await page.waitForTimeout(400);
-      await expectPage(page, 1);
+      await expectPage(page, 2);
+      await pageImg(page, 2).waitFor({ state: 'visible' });
+      await expect.poll(async () => (await box(pageImg(page, 2))).width / base.w, { timeout: 5000 }).toBeGreaterThan(1.8);
+      expect(await tid(page, 'rd-stage').evaluate((n) => n.scrollTop), 'new page shows its top').toBe(0);
 
       await doubleTapAt(page, 0.5);
-      await expectFit(page, base);
-      await expectPage(page, 1);
+      await expect.poll(async () => (await box(pageImg(page, 2))).width / base.w, { timeout: 5000 }).toBeLessThanOrEqual(1.05);
+      await expectPage(page, 2);
     });
 
     test('zoom buttons work for a comic and the zoom survives a page change, top of page shown', async ({ page }) => {
@@ -1102,6 +1213,143 @@ test.describe('bd: ergonomie', () => {
     await expect(v).not.toHaveClass(/rd-bar-hidden/);
   });
 
+  // Regression: on a real Android phone (Brave) touch-action alone still let a pinch zoom the whole page.
+  test('a comic turns the browser pinch zoom off, fullscreen keeps it off, a PDF leaves it on', async ({ page }) => {
+    const meta = () => page.locator('meta[name="viewport"]').getAttribute('content');
+    const lock = ', maximum-scale=1, user-scalable=no';
+    await open(page, 'bd', 'a-comic.cbz');
+    const locked = (await meta())!;
+    expect(locked.endsWith(lock)).toBe(true);
+    await tid(page, 'rd-fullscreen').click();
+    expect(await meta()).toContain('viewport-fit=cover');
+    expect((await meta())!.split('user-scalable').length, 'lock written once').toBe(2);
+    await page.keyboard.press('f');
+    await expect(viewer(page)).not.toHaveClass(/rd-fs/);
+    expect(await meta(), 'leaving fullscreen keeps the lock and restores the rest').toBe(locked);
+
+    await page.goto(url('livres'));
+    await playBtn(page, 'a-book.pdf').click();
+    await viewer(page).waitFor({ state: 'visible' });
+    expect(await meta()).not.toContain('user-scalable');
+  });
+
+  test.describe('touch zoom', () => {
+    test.skip(() => !isMobile(), 'mobile project only');
+    /** CDP touch gesture: frames[i] holds every finger's point at step i (Playwright's touchscreen only taps). */
+    async function gesture(page: Page, frames: { x: number; y: number }[][]) {
+      const client = await page.context().newCDPSession(page);
+      const pts = (f: { x: number; y: number }[]) => f.map((p, id) => ({ x: Math.round(p.x), y: Math.round(p.y), id }));
+      await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: pts(frames[0]) });
+      for (const f of frames.slice(1)) {
+        await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: pts(f) });
+        await page.waitForTimeout(16);
+      }
+      await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await client.detach();
+    }
+    const steps = (n: number, at: (k: number) => { x: number; y: number }[]) => Array.from({ length: n + 1 }, (_, k) => at(k / n));
+    async function drag(page: Page, x0: number, x1: number, y: number) {
+      await gesture(page, steps(12, (k) => [{ x: x0 + (x1 - x0) * k, y }]));
+    }
+    const imgWidth = (page: Page) => pageImg(page, 1).evaluate((n) => n.getBoundingClientRect().width);
+
+    test('pinch zooms the comic (not the page), a zoomed drag only pans, a side tap turns the page', async ({ page }) => {
+      await open(page, 'bd', 'a-comic.cbz');
+      await expect.poll(() => imgWidth(page)).toBeGreaterThan(50);
+      const fitW = await imgWidth(page);
+      const b = (await tid(page, 'rd-stage').boundingBox())!;
+      const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+
+      await gesture(page, steps(12, (k) => [{ x: cx - 20 - 80 * k, y: cy }, { x: cx + 20 + 80 * k, y: cy }]));
+      await expect.poll(() => imgWidth(page), { message: 'reader zoom > 1' }).toBeGreaterThan(fitW * 1.5);
+      expect(await page.evaluate(() => window.visualViewport!.scale), 'browser page zoom untouched').toBe(1);
+      await expect(tid(page, 'rd-stage')).toHaveClass(/rd-zoomed/);
+      expect(await pageNo(page)).toBe(1);
+
+      // Zoomed: a horizontal drag pans and never turns the page, even when it reaches the edge.
+      const sl0 = await tid(page, 'rd-stage').evaluate((n) => n.scrollLeft);
+      await drag(page, cx + 80, cx - 80, cy);
+      await page.waitForTimeout(400);
+      expect(await pageNo(page), 'drag while zoomed keeps the page').toBe(1);
+      expect(await tid(page, 'rd-stage').evaluate((n) => n.scrollLeft), 'the drag panned').not.toBe(sl0);
+      await tid(page, 'rd-stage').evaluate((n) => { n.scrollLeft = n.scrollWidth; });
+      await drag(page, cx + 80, cx - 80, cy);
+      await page.waitForTimeout(400);
+      expect(await pageNo(page), 'drag from the right edge keeps the page').toBe(1);
+
+      // A tap on the right third turns the page; the zoom stays and the new page shows its top.
+      await page.touchscreen.tap(Math.round(b.x + b.width * 0.9), Math.round(cy));
+      await expectPage(page, 2);
+      await expect(tid(page, 'rd-stage')).toHaveClass(/rd-zoomed/);
+      expect(await tid(page, 'rd-stage').evaluate((n) => n.scrollTop)).toBe(0);
+    });
+
+    test('a pinch released near the fit snaps back to it and never turns the page', async ({ page }) => {
+      await open(page, 'bd', 'a-comic.cbz');
+      await expect.poll(() => imgWidth(page)).toBeGreaterThan(50);
+      const fitW = await imgWidth(page);
+      const b = (await tid(page, 'rd-stage').boundingBox())!;
+      const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+      // Fingers drift sideways a lot while spreading by 2 %: a multi-touch gesture is never a swipe.
+      await gesture(page, steps(12, (k) => [{ x: cx - 100 - 100 * k, y: cy }, { x: cx + 100 - 96 * k, y: cy }]));
+      await page.waitForTimeout(400);
+      await expect(tid(page, 'rd-stage')).not.toHaveClass(/rd-zoomed/);
+      expect(Math.abs((await imgWidth(page)) - fitW)).toBeLessThanOrEqual(1);
+      expect(await pageNo(page)).toBe(1);
+    });
+  });
+
+  test('zoomed comic: a mouse drag-pan starting in the right third never turns the page', async ({ page }) => {
+    test.skip(prof() !== 'desktop', 'desktop mouse only');
+    await open(page, 'bd', 'a-comic.cbz');
+    await tid(page, 'rd-zoom-in').click();
+    await tid(page, 'rd-zoom-in').click();
+    const stage = tid(page, 'rd-stage');
+    await expect.poll(() => stage.evaluate((el) => el.scrollWidth > el.clientWidth + 20)).toBe(true);
+    const b = (await stage.boundingBox())!;
+    const y = b.y + b.height / 2;
+    const sl0 = await stage.evaluate((n) => n.scrollLeft);
+    await page.mouse.move(b.x + b.width * 0.9, y);
+    await page.mouse.down();
+    await page.mouse.move(b.x + b.width * 0.5, y, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    expect(await pageNo(page), 'a drag is not a tap').toBe(1);
+    expect(await stage.evaluate((n) => n.scrollLeft), 'the drag panned').not.toBe(sl0);
+  });
+
+  test('zoomed pdf: a tap on the right third turns the page', async ({ page }) => {
+    await openBookFromListing(page, 'livres', 'a-book.pdf');
+    await tid(page, 'rd-zoom-in').click();
+    await expect(tid(page, 'rd-stage')).toHaveClass(/rd-zoomed/);
+    await tapStage(page, 0.9);
+    await expectPage(page, 2);
+    await expect(tid(page, 'rd-stage')).toHaveClass(/rd-zoomed/);
+  });
+
+  test('fullscreen: the cursor hides when the mouse stays still, comes back on move, bar stays hidden', async ({ page }) => {
+    test.skip(prof() !== 'desktop', 'desktop mouse only');
+    await open(page, 'bd', 'a-comic.cbz');
+    const v = viewer(page);
+    await tid(page, 'rd-fullscreen').click();
+    await expect(v).toHaveClass(/rd-bar-hidden/, { timeout: 6000 });
+    const b = (await tid(page, 'rd-stage').boundingBox())!;
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+    await expect(v).not.toHaveClass(/rd-idle/);
+    await page.waitForTimeout(2700);
+    await expect(v).toHaveClass(/rd-idle/);
+    expect(await tid(page, 'rd-stage').evaluate((n) => getComputedStyle(n).cursor)).toBe('none');
+    await expect(v).toHaveClass(/rd-bar-hidden/);
+    await page.mouse.move(b.x + b.width / 2 + 30, b.y + b.height / 2 + 10);
+    await expect(v).not.toHaveClass(/rd-idle/);
+    await expect(v, 'moving the mouse never brings the bar back').toHaveClass(/rd-bar-hidden/);
+    // Out of fullscreen the cursor never hides.
+    await page.keyboard.press('f');
+    await expect(v).not.toHaveClass(/rd-fs/);
+    await page.waitForTimeout(2700);
+    await expect(v).not.toHaveClass(/rd-idle/);
+  });
+
   test('wheel zooms a PDF', async ({ page }) => {
     test.skip(isMobile(), 'desktop wheel');
     await page.goto(url('livres'));
@@ -1190,5 +1438,98 @@ test.describe('bd: ergonomie', () => {
     await expectPage(page, 2);
     await tapStage(page, 0.9);
     await expectPage(page, 3);
+  });
+});
+
+test.describe('epub: réglages du texte', () => {
+  // EPUB is off in sharebox (foliate-js is not shipped): a stand-in foliate-view renders one same-origin
+  // chapter frame and applies setStyles there, so the real reader.js wiring and CSS are checked.
+  const FAKE_FOLIATE = `
+    class FakeView extends HTMLElement {
+      async open() {
+        const frame = document.createElement('iframe');
+        frame.setAttribute('data-testid', 'fake-chapter');
+        frame.style.cssText = 'width:100%;height:300px;border:0';
+        this.appendChild(frame);
+        const d = frame.contentDocument;
+        d.open();
+        d.write('<!doctype html><html><head><style id="rd"></style></head><body><p>Chapitre un</p></body></html>');
+        d.close();
+        this.book = { transformTarget: new EventTarget(), sections: [{ id: 'c1' }], destroy() {} };
+        this.renderer = { setStyles: (css) => { frame.contentDocument.getElementById('rd').textContent = css; } };
+      }
+      async init() { setTimeout(() => this.dispatchEvent(new CustomEvent('relocate', { detail: { fraction: 0, cfi: 'epubcfi(/6/2)' } })), 0); }
+      close() {}
+      prev() { return Promise.resolve(); }
+      next() { return Promise.resolve(); }
+      goTo() { return Promise.resolve(); }
+      goToFraction() { return Promise.resolve(); }
+    }
+    customElements.define('foliate-view', FakeView);`;
+  const HARNESS = `<!doctype html><html lang="fr"><head><meta charset="utf-8"><link rel="icon" href="data:,">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="/share/reader-theme.css"><link rel="stylesheet" href="/share/reader.css"></head>
+    <body><div id="asc-reader"></div><script src="/share/reader.js"></script><script>
+    AscReader.init({ root: document.getElementById('asc-reader'), token: 'epub-harness', libBase: '/share/__fake/',
+      books: [{ name: 'Roman.epub', url: '/share/__fake/roman.epub', kind: 'epub', size: 1000 }] }).open('Roman.epub');
+    </script></body></html>`;
+
+  async function openHarness(page: Page) {
+    await page.route('**/share/__epub-harness.html', (r) => r.fulfill({ contentType: 'text/html; charset=utf-8', body: HARNESS }));
+    await page.route('**/share/__fake/foliate/view.js', (r) => r.fulfill({ contentType: 'text/javascript', body: FAKE_FOLIATE }));
+    await page.route('**/share/__fake/roman.epub', (r) => r.fulfill({ contentType: 'application/epub+zip', body: 'PK' }));
+    await page.goto(`${srv.base}/share/__epub-harness.html`);
+    await tid(page, 'rd-viewer').waitFor({ state: 'visible' });
+    await tid(page, 'fake-chapter').waitFor();
+  }
+  const chapter = (page: Page) => tid(page, 'fake-chapter').evaluate((f: HTMLIFrameElement) => {
+    const d = f.contentDocument!;
+    return { size: getComputedStyle(d.documentElement).fontSize, bg: getComputedStyle(d.body).backgroundColor, fg: getComputedStyle(d.body).color };
+  });
+  const setSize = (page: Page, v: string) => tid(page, 'rd-epub-size').evaluate((n: HTMLInputElement, val) => {
+    n.value = val; n.dispatchEvent(new Event('input', { bubbles: true })); n.dispatchEvent(new Event('change', { bubbles: true }));
+  }, v);
+  const SEPIA = 'rgb(244, 236, 216)';
+
+  test('Aa: size and theme applied live to the chapter, remembered after a reload', async ({ page }) => {
+    await openHarness(page);
+    await expect(tid(page, 'rd-sharp-toggle')).toBeHidden();
+    const toggle = tid(page, 'rd-epub-toggle');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveText('Aa');
+    expect((await chapter(page)).size, 'default size').toBe('16px');
+    await expect(tid(page, 'rd-epub-panel')).toBeHidden();
+    await toggle.click();
+    await expect(tid(page, 'rd-epub-panel')).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(tid(page, 'rd-epub-size')).toHaveValue('100');
+    await expect(tid(page, 'rd-epub-theme-site')).toHaveAttribute('aria-pressed', 'true');
+
+    await setSize(page, '140');
+    await expect(tid(page, 'rd-epub-panel')).toContainText('140 %');
+    await tid(page, 'rd-epub-theme-sepia').click();
+    await expect(tid(page, 'rd-epub-theme-sepia')).toHaveAttribute('aria-pressed', 'true');
+    await expect(tid(page, 'rd-epub-theme-site')).toHaveAttribute('aria-pressed', 'false');
+    expect(await chapter(page)).toEqual({ size: '22.4px', bg: SEPIA, fg: 'rgb(91, 70, 54)' });
+    expect(await tid(page, 'rd-epub-host').evaluate((n) => getComputedStyle(n).backgroundColor), 'margins match').toBe(SEPIA);
+
+    // Escape closes the panel without leaving the book.
+    await tid(page, 'rd-epub-theme-sepia').press('Escape');
+    await expect(tid(page, 'rd-epub-panel')).toBeHidden();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(tid(page, 'rd-viewer')).toBeVisible();
+
+    await page.reload();
+    await tid(page, 'fake-chapter').waitFor();
+    await expect.poll(() => chapter(page)).toEqual({ size: '22.4px', bg: SEPIA, fg: 'rgb(91, 70, 54)' });
+    await toggle.click();
+    await expect(tid(page, 'rd-epub-size')).toHaveValue('140');
+    await expect(tid(page, 'rd-epub-theme-sepia')).toHaveAttribute('aria-pressed', 'true');
+
+    // A press outside closes it; back to the site colours clears the margin colour.
+    await tid(page, 'rd-epub-theme-site').click();
+    expect(await tid(page, 'rd-epub-host').evaluate((n) => n.style.background)).toBe('');
+    await page.mouse.click(5, (await page.viewportSize())!.height - 5);
+    await expect(tid(page, 'rd-epub-panel')).toBeHidden();
   });
 });
