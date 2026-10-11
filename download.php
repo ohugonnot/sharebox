@@ -722,7 +722,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .gear-select:focus { border-color:var(--accent); }
 .gear-select option { background:#1a1d28; color:#e8eaf0; }
 @media(max-width:640px){.row-name{white-space:normal;word-break:break-word;font-size:.83rem}.row-ext{display:none}.search-box{width:115px}.row,.btn-media{min-height:44px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.5rem}}
-@media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-box{flex:1;width:auto;min-width:80px}.toolbar-info{display:none}.gear-panel{right:-1rem;min-width:240px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}}
+@media(max-width:480px){.page{padding:1.1rem .85rem 3rem}.row{padding:.45rem .75rem}.row-icon{width:28px;height:28px;margin-right:.55rem}.btn-zip{flex:1;justify-content:center}.search-wrap{order:-1;flex:1 1 100%}.search-box{flex:1;width:auto;min-width:80px;min-height:40px}.toolbar-info{display:none}.tb-icon,.tb-refresh{flex:none;width:40px;height:40px;padding:0;justify-content:center}.sort-btn,.btn-zip:not(.btn-media),.btn-search-go{min-height:40px}.sort-btn{padding:.28rem .8rem}.gear-panel{right:-1rem;min-width:240px}.grid-wrap{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}}
 /* ── Continue Watching ── */
 .cw-section{margin-bottom:1.5rem}
 .cw-title{font-size:.75rem;font-weight:700;color:var(--text-muted);margin-bottom:.5rem;text-transform:uppercase;letter-spacing:.06em}
@@ -777,7 +777,7 @@ HTML;
         if ($totalItems >= 10) {
             $baseUrlJs = htmlspecialchars(json_encode($baseUrl), ENT_QUOTES);
             $subPathJs = htmlspecialchars(json_encode($subPath), ENT_QUOTES);
-            echo '<div style="position:relative;display:inline-flex;align-items:center">';
+            echo '<div class="search-wrap" style="position:relative;display:inline-flex;align-items:center">';
             echo '<input class="search-box" id="main-search" type="text" placeholder="Rechercher..." '
                . 'oninput="filtrer(this.value);document.getElementById(\'search-go-btn\').classList.toggle(\'hidden\',!this.value.trim())" '
                . 'onkeydown="if(event.key===\'Enter\'&&this.value.trim()){event.preventDefault();lancerRechercheGlobale(BASE_URL,SUB_PATH)}">';
@@ -838,7 +838,7 @@ HTML;
         echo '</div></div></div>';
         echo '</div></div>'; // gear-panel, gear-wrap
 
-        echo '<button class="btn-zip" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);padding:.38rem .55rem" onclick="reloadAllPosters()" title="Recharger tous les posters de ce dossier">';
+        echo '<button class="btn-zip tb-refresh" style="background:transparent;border:1px solid var(--border);color:var(--text-secondary);padding:.38rem .55rem" onclick="reloadAllPosters()" title="Recharger tous les posters de ce dossier">';
         echo '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0115.34-6.36L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 01-15.34 6.36L3 16"/></svg>';
         echo '</button>';
 
