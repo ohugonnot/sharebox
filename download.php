@@ -437,7 +437,7 @@ if (is_dir($resolvedPath)) {
         header('X-Accel-Buffering: no');
 
         $zipTimeout = defined('ZIP_TIMEOUT') ? (int)ZIP_TIMEOUT : 3600;
-        $zipCmd = 'cd ' . escapeshellarg($parentDir) . ' && zip -r -0 - ' . escapeshellarg($baseName);
+        $zipCmd = 'cd ' . escapeshellarg($parentDir) . ' && zip -r -0 - ' . escapeshellarg($baseName) . ' -x ' . escapeshellarg('*.meta');
         passthru('timeout ' . $zipTimeout . ' sh -c ' . escapeshellarg($zipCmd));
         exit;
     }
@@ -523,7 +523,7 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
         $fullItem = $dirPath . '/' . $item;
         if (is_dir($fullItem)) {
             $folders[] = ['name' => $item, 'has_video' => dir_has_video($fullItem)];
-        } else {
+        } elseif (!str_ends_with($item, '.meta')) { // rtorrent leftovers
             $files[] = ['name' => $item, 'size' => filesize($fullItem)];
         }
     }
@@ -635,12 +635,14 @@ function afficher_listing(string $dirPath, string $basePath, string $token, stri
 .row-icon.aud { background:rgba(171,71,188,.12); }
 .row-icon.img { background:rgba(38,198,218,.1); }
 .row-icon.arc { background:rgba(239,83,80,.1); }
+.row-icon.book { background:rgba(121,134,203,.12); }
 .row-icon.file { background:rgba(66,165,245,.08); }
 .row-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.875rem; }
 .row-name.is-folder { color:var(--accent); font-weight:500; }
 .row-ext { color:var(--text-muted); font-size:.68rem; font-family:var(--font-mono); text-transform:uppercase; background:rgba(255,255,255,.04); padding:.1rem .35rem; border-radius:4px; flex-shrink:0; margin-left:.5rem; letter-spacing:.04em; }
 .row-meta { color:var(--text-muted); font-size:.78rem; font-family:var(--font-mono); margin-left:auto; padding-left:.6rem; white-space:nowrap; flex-shrink:0; }
 .btn-play { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; background:rgba(102,187,106,.12); color:var(--green); cursor:pointer; flex-shrink:0; margin-left:.5rem; transition:background .15s,transform .12s; border:1px solid rgba(102,187,106,.2); }
+.btn-play-slot { width:30px; margin-left:.5rem; flex-shrink:0; }
 .btn-play:hover { background:rgba(102,187,106,.22); border-color:rgba(102,187,106,.4); transform:scale(1.08); }
 .btn-play:active { transform:scale(.92); }
 .empty { text-align:center; padding:3rem 1rem; color:var(--text-muted); }
@@ -965,6 +967,9 @@ HTML;
         } elseif (in_array($ext, ['zip','rar','7z','tar','gz','bz2','xz','tgz','iso'])) {
             $iconClass = 'arc';
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#ef5350"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>';
+        } elseif (reader_kind($file['name']) !== null) {
+            $iconClass = 'book';
+            $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:#7986cb"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg>';
         } else {
             $iconClass = 'file';
             $iconSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:var(--blue)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
@@ -979,7 +984,9 @@ HTML;
         if ($ext) echo '<span class="row-ext">' . htmlspecialchars($ext) . '</span>';
         echo '<span class="row-meta">' . $size . '</span>';
         if ($canPlay) {
-            echo '<span class="btn-play" onclick="event.preventDefault();event.stopPropagation();location.href=\'' . htmlspecialchars($playUrl, ENT_QUOTES) . '\'" title="Lire"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>';
+            echo '<span class="btn-play" onclick="event.preventDefault();event.stopPropagation();location.href=\'' . htmlspecialchars($playUrl, ENT_QUOTES) . '\'" title="Lire" aria-label="Lire"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>';
+        } else {
+            echo '<span class="btn-play-slot"></span>';
         }
         echo '</a>';
     }
@@ -2204,7 +2211,7 @@ function afficher_search_results(string $basePath, string $token, string $shareN
     $searchRoot = rtrim($basePath, '/');
 
     $cmdDirs  = "timeout 10 find " . escapeshellarg($searchRoot) . " -mindepth 1 -maxdepth 8 -type d $iname ! -name '.*' 2>/dev/null | head -80";
-    $cmdFiles = "timeout 10 find " . escapeshellarg($searchRoot) . " -mindepth 1 -maxdepth 8 ! -type d $iname ! -name '.*' 2>/dev/null | head -50";
+    $cmdFiles = "timeout 10 find " . escapeshellarg($searchRoot) . " -mindepth 1 -maxdepth 8 ! -type d $iname ! -name '.*' ! -name '*.meta' 2>/dev/null | head -50";
 
     $dirLines  = array_filter(array_map('trim', explode("\n", shell_exec($cmdDirs)  ?? '')));
     $fileLines = array_filter(array_map('trim', explode("\n", shell_exec($cmdFiles) ?? '')));
