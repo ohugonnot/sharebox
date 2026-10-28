@@ -19,6 +19,8 @@ fi
 rm -rf "$MEDIA_DIR/cdrom" "$MEDIA_DIR/floppy" "$MEDIA_DIR/usb" 2>/dev/null || true
 
 echo "Demo-data: creating rich sample media..."
+# Lets the entrypoint auto-share only media we generated, never real files
+touch "$MEDIA_DIR/.sharebox-demo"
 
 # ── Build a reusable 10s demo clip with 2 audio tracks + 2 subtitle tracks ──
 # Video: colour bars + title overlay

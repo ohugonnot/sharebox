@@ -4,14 +4,14 @@ services:
       context: .
       dockerfile: Dockerfile.nvidia
     ports:
-      - "8080:80"
+      - "${SHAREBOX_PORT:-8080}:80"
     volumes:
       - sharebox-data:/data
       # - /path/to/your/media:/media:ro  # uncomment and set your media path
     environment:
       - SHAREBOX_ADMIN_USER=admin
       - SHAREBOX_ADMIN_PASS=changeme
-      - SHAREBOX_DEMO_DATA=true
+      - SHAREBOX_DEMO_DATA=false
       # - SHAREBOX_TMDB_API_KEY=your_tmdb_api_key
       # - SHAREBOX_STREAM_MAX_CONCURRENT=4
       # - SHAREBOX_STREAM_REMUX_ENABLED=false
