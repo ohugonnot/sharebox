@@ -4,7 +4,7 @@ set -e
 # ── Defaults ──────────────────────────────────────────────────────────────────
 MEDIA_DIR="${SHAREBOX_MEDIA_DIR:-/media/}"
 ADMIN_USER="${SHAREBOX_ADMIN_USER:-admin}"
-ADMIN_PASS="${SHAREBOX_ADMIN_PASS:-sharebox}"
+ADMIN_PASS="${SHAREBOX_ADMIN_PASS:-}"
 MAX_CONCURRENT="${SHAREBOX_STREAM_MAX_CONCURRENT:-4}"
 REMUX_ENABLED="${SHAREBOX_STREAM_REMUX_ENABLED:-false}"
 QUOTA_TB="${SHAREBOX_BANDWIDTH_QUOTA_TB:-100}"
@@ -67,13 +67,39 @@ upload_max_filesize = 100M
 PHPINI
 
 # ── Create admin user in DB (PHP session auth) ──────────────────────────────
+# Must run before the DB exists: first start is detected from its absence.
+FIRST_RUN=0
+[ -f /data/share.db ] || FIRST_RUN=1
+if [ -n "$ADMIN_PASS" ]; then
+    WEAK_PASS=0
+    case "$(printf '%s' "$ADMIN_PASS" | tr 'A-Z' 'a-z')" in changeme|sharebox|admin|password) WEAK_PASS=1 ;; esac
+    [ "${#ADMIN_PASS}" -lt 8 ] && WEAK_PASS=1
+    if [ "$WEAK_PASS" = "1" ]; then
+        if [ "$FIRST_RUN" = "1" ]; then
+            echo "ShareBox: SHAREBOX_ADMIN_PASS trop faible (8 caractères min., ni changeme/sharebox/admin/password)." >&2
+            echo "ShareBox: choisissez un mot de passe plus fort, ou retirez la variable pour en obtenir un aléatoire dans ces logs." >&2
+            exit 1
+        fi
+        echo "ShareBox: ATTENTION - SHAREBOX_ADMIN_PASS est faible ; changez le mot de passe admin dans l'interface."
+    fi
+fi
 export SHAREBOX_ADMIN_USER="$ADMIN_USER"
 export SHAREBOX_ADMIN_PASS="$ADMIN_PASS"
-php -r '
+GENERATED_PASS=$(php -d display_errors=stderr -r '
     require "/app/db.php";
     require "/app/auth.php";
-    ensure_admin_exists();
-' 2>/dev/null || true
+    $p = ensure_admin_exists();
+    if ($p !== null) echo $p;
+')
+if [ -n "$GENERATED_PASS" ]; then
+    echo "=============================================================="
+    echo " ShareBox - premier démarrage"
+    echo "   URL           : http://localhost:8080/share/  (adaptez hôte/port)"
+    echo "   Utilisateur   : $ADMIN_USER"
+    echo "   Mot de passe  : $GENERATED_PASS"
+    echo " Aucun fichier n'est partagé : créez un lien dans /share."
+    echo "=============================================================="
+fi
 chown www-data:www-data /data/share.db 2>/dev/null || true
 
 # Si le dossier média a un GID différent, ajouter www-data à ce groupe

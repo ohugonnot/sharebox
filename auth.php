@@ -142,8 +142,9 @@ function clear_rate_limit(string $ip): void {
 /**
  * Ensure at least one admin user exists (first-run bootstrap).
  * Uses SHAREBOX_ADMIN_USER / SHAREBOX_ADMIN_PASS env vars, or defaults to admin + random password.
+ * Returns the generated password, or null when none was generated.
  */
-function ensure_admin_exists(): void {
+function ensure_admin_exists(): ?string {
     $db = get_db();
     $count = (int)$db->query("SELECT COUNT(*) FROM users")->fetchColumn();
     if ($count === 0) {
@@ -153,6 +154,8 @@ function ensure_admin_exists(): void {
            ->execute([$user, password_hash($pass, PASSWORD_BCRYPT)]);
         if (!getenv('SHAREBOX_ADMIN_PASS')) {
             error_log("ShareBox: admin user '$user' created with password: $pass");
+            return $pass;
         }
     }
+    return null;
 }
