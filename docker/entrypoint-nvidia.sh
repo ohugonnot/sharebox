@@ -80,11 +80,11 @@ if [ -n "$ADMIN_PASS" ]; then
     [ "${#ADMIN_PASS}" -lt 8 ] && WEAK_PASS=1
     if [ "$WEAK_PASS" = "1" ]; then
         if [ "$FIRST_RUN" = "1" ]; then
-            echo "ShareBox: SHAREBOX_ADMIN_PASS trop faible (8 caractères min., ni changeme/sharebox/admin/password)." >&2
-            echo "ShareBox: choisissez un mot de passe plus fort, ou retirez la variable pour en obtenir un aléatoire dans ces logs." >&2
+            echo "ShareBox: SHAREBOX_ADMIN_PASS is too weak (min. 8 characters, not changeme/sharebox/admin/password)." >&2
+            echo "ShareBox: pick a stronger password, or unset the variable to get a random one in these logs." >&2
             exit 1
         fi
-        echo "ShareBox: ATTENTION - SHAREBOX_ADMIN_PASS est faible ; changez le mot de passe admin dans l'interface."
+        echo "ShareBox: WARNING - SHAREBOX_ADMIN_PASS is weak; change the admin password in the web UI."
     fi
 fi
 export SHAREBOX_ADMIN_USER="$ADMIN_USER"
@@ -97,11 +97,11 @@ GENERATED_PASS=$(php -d display_errors=stderr -r '
 ')
 if [ -n "$GENERATED_PASS" ]; then
     echo "=============================================================="
-    echo " ShareBox - premier démarrage"
-    echo "   URL           : http://localhost:8080/share/  (adaptez hôte/port)"
-    echo "   Utilisateur   : $ADMIN_USER"
-    echo "   Mot de passe  : $GENERATED_PASS"
-    echo " Aucun fichier n'est partagé : créez un lien dans /share."
+    echo " ShareBox - first start"
+    echo "   URL           : http://localhost:8080/share/  (adjust host/port)"
+    echo "   User          : $ADMIN_USER"
+    echo "   Password      : $GENERATED_PASS"
+    echo " Nothing is shared yet: create a link in /share."
     echo "=============================================================="
 fi
 chown www-data:www-data /data/share.db 2>/dev/null || true
