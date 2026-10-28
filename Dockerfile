@@ -4,6 +4,7 @@ RUN apk add --no-cache \
         nginx \
         ffmpeg \
         bash \
+        shadow \
         curl \
         sqlite-dev \
     && docker-php-ext-install pdo_sqlite \
