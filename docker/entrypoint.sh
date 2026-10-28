@@ -68,31 +68,32 @@ if [ -n "$MEDIA_GID" ] && [ "$MEDIA_GID" != "0" ] && [ "$MEDIA_GID" != "82" ]; t
     addgroup www-data mediagroup 2>/dev/null || true
 fi
 
-# ── Auto-share : créer un lien public vers /media si la DB est vide ────────
-# Pratique pour les démos — le dossier est partagé dès le premier lancement
-if [ ! -f /data/share.db ] || [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
-    SHAREBOX_AUTO_SHARE="yes"
-fi
-if [ "${SHAREBOX_AUTO_SHARE:-}" = "yes" ]; then
-    php -r '
-        $mediaDir = $argv[1];
-        require "/app/db.php";
-        $db = get_db();
-        // Upsert: create or fix the browse link
-        $db->prepare("INSERT INTO links (token, path, type, name) VALUES (?, ?, ?, ?)
-                      ON CONFLICT(token) DO UPDATE SET path = excluded.path")
-           ->execute(["browse", $mediaDir, "directory", "ShareBox Demo"]);
-        echo "Auto-share: /dl/browse -> $mediaDir\n";
-    ' -- "$MEDIA_DIR" 2>/dev/null || true
-    chown -R www-data:www-data /data
-fi
-
 # ── Demo data (optional) ────────────────────────────────────────────────────
 # Crée uniquement les médias d'exemple. Le matching des affiches est délégué au VRAI
 # worker (lancé en tâche de fond après le démarrage des services) : la démo emprunte
 # ainsi le même chemin de code qu'une install réelle, au lieu d'un seed en dur.
 if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
     /bin/sh /docker/demo-data.sh "$MEDIA_DIR"
+fi
+
+# ── Auto-share : lien public vers /media, seulement pour les médias de démo ──
+# Le marqueur est écrit par demo-data.sh : jamais de partage sur de vrais médias.
+if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
+    if [ -f "${MEDIA_DIR%/}/.sharebox-demo" ]; then
+        php -r '
+            $mediaDir = $argv[1];
+            require "/app/db.php";
+            $db = get_db();
+            // Upsert: create or fix the browse link
+            $db->prepare("INSERT INTO links (token, path, type, name) VALUES (?, ?, ?, ?)
+                          ON CONFLICT(token) DO UPDATE SET path = excluded.path")
+               ->execute(["browse", $mediaDir, "directory", "ShareBox Demo"]);
+            echo "Auto-share: /dl/browse -> $mediaDir\n";
+        ' -- "$MEDIA_DIR" 2>/dev/null || true
+        chown -R www-data:www-data /data
+    else
+        echo "ShareBox: SHAREBOX_DEMO_DATA=true but $MEDIA_DIR holds real files (no demo marker): nothing is shared."
+    fi
 fi
 
 # ── PHP limits (streaming + large uploads) ──────────────────────────────────
