@@ -40,6 +40,10 @@ if [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
     echo "define('TMDB_API_KEY', '$(sanitize "$SHAREBOX_TMDB_API_KEY")');" >> /app/config.php
 fi
 
+# ── Optional PUID/PGID: match the host owner of bind-mounted /data ──────────
+case "${PGID:-}" in ''|*[!0-9]*) [ -n "${PGID:-}" ] && echo "ShareBox: invalid PGID='$PGID', ignored" ;; *) groupmod -o -g "$PGID" www-data ;; esac
+case "${PUID:-}" in ''|*[!0-9]*) [ -n "${PUID:-}" ] && echo "ShareBox: invalid PUID='$PUID', ignored" ;; *) usermod -o -u "$PUID" www-data ;; esac
+
 # ── Permissions ──────────────────────────────────────────────────────────────
 mkdir -p /data /run/nginx
 chown www-data:www-data /data

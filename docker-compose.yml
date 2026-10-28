@@ -12,6 +12,8 @@ services:
       - SHAREBOX_ADMIN_USER=admin
       # - SHAREBOX_ADMIN_PASS=choose-a-strong-password  # unset = random password printed in `docker logs`
       - SHAREBOX_DEMO_DATA=false
+      # - PUID=1000  # match the host owner of bind-mounted /data and media
+      # - PGID=1000
       # - SHAREBOX_TMDB_API_KEY=your_tmdb_api_key    # enables poster grid
       # - SHAREBOX_STREAM_MAX_CONCURRENT=4
       # - SHAREBOX_STREAM_REMUX_ENABLED=false
