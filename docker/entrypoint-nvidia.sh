@@ -4,7 +4,7 @@ set -e
 # ── Defaults ──────────────────────────────────────────────────────────────────
 MEDIA_DIR="${SHAREBOX_MEDIA_DIR:-/media/}"
 ADMIN_USER="${SHAREBOX_ADMIN_USER:-admin}"
-ADMIN_PASS="${SHAREBOX_ADMIN_PASS:-sharebox}"
+ADMIN_PASS="${SHAREBOX_ADMIN_PASS:-}"
 MAX_CONCURRENT="${SHAREBOX_STREAM_MAX_CONCURRENT:-4}"
 REMUX_ENABLED="${SHAREBOX_STREAM_REMUX_ENABLED:-false}"
 QUOTA_TB="${SHAREBOX_BANDWIDTH_QUOTA_TB:-100}"
@@ -41,6 +41,20 @@ if [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
     echo "define('TMDB_API_KEY', '$(sanitize "$SHAREBOX_TMDB_API_KEY")');" >> /app/config.php
 fi
 
+# ── Optional PUID/PGID: match the host owner of bind-mounted /data ──────────
+if [ -n "${PGID:-}" ]; then
+    case "$PGID" in
+        0|*[!0-9]*) echo "ShareBox: invalid PGID='$PGID', ignored" ;;
+        *) groupmod -o -g "$PGID" www-data ;;
+    esac
+fi
+if [ -n "${PUID:-}" ]; then
+    case "$PUID" in
+        0|*[!0-9]*) echo "ShareBox: invalid PUID='$PUID', ignored" ;;
+        *) usermod -o -u "$PUID" www-data ;;
+    esac
+fi
+
 # ── Permissions ──────────────────────────────────────────────────────────────
 mkdir -p /data /run/php /run/nginx
 chown www-data:www-data /data
@@ -67,13 +81,43 @@ upload_max_filesize = 100M
 PHPINI
 
 # ── Create admin user in DB (PHP session auth) ──────────────────────────────
+# Must run before the DB exists: first start is detected from its absence.
+FIRST_RUN=0
+[ -f /data/share.db ] || FIRST_RUN=1
+if [ -n "$ADMIN_PASS" ]; then
+    WEAK_PASS=0
+    case "$(printf '%s' "$ADMIN_PASS" | tr 'A-Z' 'a-z')" in changeme|sharebox|admin|password) WEAK_PASS=1 ;; esac
+    [ "${#ADMIN_PASS}" -lt 8 ] && WEAK_PASS=1
+    if [ "$WEAK_PASS" = "1" ]; then
+        if [ "$FIRST_RUN" = "1" ]; then
+            echo "ShareBox: SHAREBOX_ADMIN_PASS is too weak (min. 8 characters, not changeme/sharebox/admin/password)." >&2
+            echo "ShareBox: pick a stronger password, or unset the variable to get a random one in these logs." >&2
+            exit 1
+        fi
+        echo "ShareBox: WARNING - SHAREBOX_ADMIN_PASS is weak; change the admin password in the web UI."
+    fi
+fi
 export SHAREBOX_ADMIN_USER="$ADMIN_USER"
 export SHAREBOX_ADMIN_PASS="$ADMIN_PASS"
-php -r '
+# error_log=/dev/null: auth.php also logs the password, which would repeat the banner.
+GENERATED_PASS=$(php -d display_errors=stderr -d error_log=/dev/null -r '
     require "/app/db.php";
     require "/app/auth.php";
-    ensure_admin_exists();
-' 2>/dev/null || true
+    $p = ensure_admin_exists();
+    if ($p !== null) echo $p;
+')
+if [ -n "$GENERATED_PASS" ]; then
+    # The log line is lost when the container is recreated; keep a root-only copy.
+    (umask 077; printf '%s\n' "$GENERATED_PASS" > /data/initial-admin-password)
+    echo "=============================================================="
+    echo " ShareBox - first start"
+    echo "   URL           : http://<host>:<port>/share/"
+    echo "   User          : $ADMIN_USER"
+    echo "   Password      : $GENERATED_PASS"
+    echo "   (also saved in /data/initial-admin-password)"
+    echo " Nothing is shared yet: create a link in /share."
+    echo "=============================================================="
+fi
 chown www-data:www-data /data/share.db 2>/dev/null || true
 
 # Si le dossier média a un GID différent, ajouter www-data à ce groupe
@@ -84,29 +128,43 @@ if [ -n "$MEDIA_GID" ] && [ "$MEDIA_GID" != "0" ] && [ "$MEDIA_GID" != "33" ]; t
     usermod -aG mediagroup www-data 2>/dev/null || true
 fi
 
-# ── Auto-share : créer un lien public vers /media si la DB est vide ────────
-# Pratique pour les démos — le dossier est partagé dès le premier lancement
-if [ ! -f /data/share.db ] || [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
-    SHAREBOX_AUTO_SHARE="yes"
-fi
-if [ "${SHAREBOX_AUTO_SHARE:-}" = "yes" ]; then
-    php -r '
-        $mediaDir = $argv[1];
-        require "/app/db.php";
-        $db = get_db();
-        $db->prepare("INSERT INTO links (token, path, type, name) VALUES (?, ?, ?, ?)
-                      ON CONFLICT(token) DO UPDATE SET path = excluded.path")
-           ->execute(["browse", $mediaDir, "directory", "ShareBox Demo"]);
-        echo "Auto-share: /dl/browse -> $mediaDir\n";
-    ' -- "$MEDIA_DIR" 2>/dev/null || true
-    chown -R www-data:www-data /data
-fi
-
 # ── Demo data (optional) ────────────────────────────────────────────────────
 # Crée uniquement les médias d'exemple ; les affiches sont matchées par le vrai worker
 # (lancé en tâche de fond après le démarrage) — même chemin de code qu'une install réelle.
 if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
     /bin/bash /docker/demo-data.sh "$MEDIA_DIR"
+fi
+
+# ── Stale demo link: an install created with the old DEMO_DATA=true default ──
+# would otherwise keep its real media public on /dl/browse.
+if [ "${SHAREBOX_DEMO_DATA:-}" != "true" ]; then
+    php -r '
+        require "/app/db.php";
+        $st = get_db()->prepare("DELETE FROM links WHERE token = ? AND name = ?");
+        $st->execute(["browse", "ShareBox Demo"]);
+        if ($st->rowCount() > 0) echo "ShareBox: removed the stale demo link /dl/browse (SHAREBOX_DEMO_DATA is not true).\n";
+    ' 2>/dev/null || true
+fi
+
+# ── Auto-share : lien public vers /media, seulement pour les médias de démo ──
+# Le marqueur est écrit par demo-data.sh : jamais de partage sur de vrais médias.
+if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
+    if [ -f "${MEDIA_DIR%/}/.sharebox-demo" ]; then
+        php -r '
+            $mediaDir = $argv[1];
+            require "/app/db.php";
+            $db = get_db();
+            // Upsert: create or fix the browse link
+            $db->prepare("INSERT INTO links (token, path, type, name) VALUES (?, ?, ?, ?)
+                          ON CONFLICT(token) DO UPDATE SET path = excluded.path")
+               ->execute(["browse", $mediaDir, "directory", "ShareBox Demo"]);
+            echo "Auto-share: /dl/browse -> $mediaDir\n";
+        ' -- "$MEDIA_DIR" 2>/dev/null || true
+        chown -R www-data:www-data /data
+        chown root:root /data/initial-admin-password 2>/dev/null || true
+    else
+        echo "ShareBox: SHAREBOX_DEMO_DATA=true but $MEDIA_DIR holds real files (no demo marker): nothing is shared."
+    fi
 fi
 
 # ── Cron (bandwidth history + hourly DB backup) ──────────────────────────────

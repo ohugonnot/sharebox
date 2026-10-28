@@ -13,12 +13,23 @@ REAL_CONTENT=$(find "$MEDIA_DIR" -mindepth 1 -maxdepth 1 \
     -not -name 'cdrom' -not -name 'floppy' -not -name 'usb' | head -1)
 if [ -n "$REAL_CONTENT" ]; then
     echo "Demo-data: $MEDIA_DIR already has content, skipping."
+    # Media made by an older image has no marker. Accept it only if it holds nothing
+    # but our own top-level names and our sample file; anything else is real.
+    OTHER=$(find "$MEDIA_DIR" -mindepth 1 -maxdepth 1 \
+        -not -name 'cdrom' -not -name 'floppy' -not -name 'usb' \
+        -not -name 'Series' -not -name 'Films' -not -name 'Anime' -not -name '.sharebox-demo' | head -1)
+    if [ -z "$OTHER" ] && [ -f "$MEDIA_DIR/Films/Inception.2010.1080p.BluRay.x264.mkv" ]; then
+        touch "$MEDIA_DIR/.sharebox-demo"
+        echo "Demo-data: existing content is demo media, marker set."
+    fi
     exit 0
 fi
 # Clean Alpine defaults
 rm -rf "$MEDIA_DIR/cdrom" "$MEDIA_DIR/floppy" "$MEDIA_DIR/usb" 2>/dev/null || true
 
 echo "Demo-data: creating rich sample media..."
+# Lets the entrypoint auto-share only media we generated, never real files
+touch "$MEDIA_DIR/.sharebox-demo"
 
 # ── Build a reusable 10s demo clip with 2 audio tracks + 2 subtitle tracks ──
 # Video: colour bars + title overlay

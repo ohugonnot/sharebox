@@ -12,7 +12,7 @@ export default defineConfig({
   use: {
     baseURL,
     ignoreHTTPSErrors: true,
-    // Sur Docker demo local : auth via login form (admin/changeme par default).
+    // Sur Docker demo local : auth via login form (admin/testpass par default).
     // Sur prod : Apache Digest via httpCredentials.
     httpCredentials: isLocal ? undefined : {
       username: process.env.SHAREBOX_TEST_USER || 'folken',

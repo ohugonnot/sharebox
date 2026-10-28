@@ -49,11 +49,11 @@ So I built ShareBox -- a single PHP app with zero external dependencies. No fram
 
 ```bash
 git clone https://github.com/ohugonnot/sharebox.git && cd sharebox
-# Demo content included — edit docker-compose.yml to add your own media
 docker compose up -d
+docker compose logs sharebox | grep -i password
 ```
 
-Open `http://localhost:8080/share` -- done. See [Installation](#installation) for other methods.
+Then open `http://<ip>:8080` and log in as `admin` with the password printed in the logs. If you do not set `SHAREBOX_ADMIN_PASS`, a random password is generated and shown once, at first start. Mount your media in `docker-compose.yml` (see [Installation](#installation)) **before the first start**; no demo content is created by default. The password is lost from the logs when the container is recreated: read it again with `docker compose exec sharebox cat /data/initial-admin-password`.
 
 ## Features
 
@@ -111,7 +111,7 @@ volumes:
   - /path/to/your/media:/media:ro
 environment:
   - SHAREBOX_ADMIN_USER=admin
-  - SHAREBOX_ADMIN_PASS=changeme
+  - SHAREBOX_ADMIN_PASS=choose-a-strong-password  # optional: random if omitted
   - SHAREBOX_TMDB_API_KEY=your_tmdb_api_key  # optional, for poster grid
 ```
 
@@ -119,16 +119,20 @@ environment:
 docker compose up -d
 ```
 
+If `SHAREBOX_ADMIN_PASS` is omitted, a random 16-character password is printed in `docker logs` at first start only (and saved in `/data/initial-admin-password`). A password shorter than 8 characters, or one of `changeme`, `sharebox`, `admin`, `password`, stops the container at first start (exit code 1). The host port is `${SHAREBOX_PORT:-8080}`. More options (bind mount for NAS, public demo, ghcr image): [docs/INSTALL.md](docs/INSTALL.md).
+
 <details>
 <summary>Environment variables</summary>
 
 | Variable | Default | Description |
 |---|---|---|
 | `SHAREBOX_ADMIN_USER` | `admin` | Admin panel username |
-| `SHAREBOX_ADMIN_PASS` | `sharebox` | Admin panel password |
+| `SHAREBOX_ADMIN_PASS` | *(random)* | Admin panel password; if unset, a random one is generated and logged once |
 | `SHAREBOX_MEDIA_DIR` | `/media/` | Media path inside the container |
 | `SHAREBOX_TMDB_API_KEY` | *(none)* | TMDB API key for poster grid |
-| `SHAREBOX_DEMO_DATA` | `false` | Create rich sample media (10s clips, dual audio/subtitles, TMDB posters) |
+| `SHAREBOX_DEMO_DATA` | `false` | Create rich sample media (10s clips, dual audio/subtitles, TMDB posters); only shared if `$MEDIA_DIR/.sharebox-demo` exists |
+| `SHAREBOX_PORT` | `8080` | Host port published by `docker-compose.yml` |
+| `PUID` / `PGID` | *(unset)* | Optional user and group IDs |
 | `SHAREBOX_STREAM_MAX_CONCURRENT` | `4` | Max simultaneous ffmpeg processes |
 | `SHAREBOX_STREAM_REMUX_ENABLED` | `false` | Enable remux for H.264 MKV |
 | `SHAREBOX_BANDWIDTH_QUOTA_TB` | `100` | Monthly bandwidth quota (TB) |
