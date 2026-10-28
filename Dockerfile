@@ -25,4 +25,7 @@ COPY . /app
 VOLUME ["/data", "/media"]
 EXPOSE 80
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS http://127.0.0.1/share/login.php || exit 1
+
 ENTRYPOINT ["/entrypoint.sh"]
