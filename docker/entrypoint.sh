@@ -41,8 +41,18 @@ if [ -n "${SHAREBOX_TMDB_API_KEY:-}" ]; then
 fi
 
 # ── Optional PUID/PGID: match the host owner of bind-mounted /data ──────────
-case "${PGID:-}" in ''|*[!0-9]*) [ -n "${PGID:-}" ] && echo "ShareBox: invalid PGID='$PGID', ignored" ;; *) groupmod -o -g "$PGID" www-data ;; esac
-case "${PUID:-}" in ''|*[!0-9]*) [ -n "${PUID:-}" ] && echo "ShareBox: invalid PUID='$PUID', ignored" ;; *) usermod -o -u "$PUID" www-data ;; esac
+if [ -n "${PGID:-}" ]; then
+    case "$PGID" in
+        0|*[!0-9]*) echo "ShareBox: invalid PGID='$PGID', ignored" ;;
+        *) groupmod -o -g "$PGID" www-data ;;
+    esac
+fi
+if [ -n "${PUID:-}" ]; then
+    case "$PUID" in
+        0|*[!0-9]*) echo "ShareBox: invalid PUID='$PUID', ignored" ;;
+        *) usermod -o -u "$PUID" www-data ;;
+    esac
+fi
 
 # ── Permissions ──────────────────────────────────────────────────────────────
 mkdir -p /data /run/nginx
@@ -73,18 +83,22 @@ if [ -n "$ADMIN_PASS" ]; then
 fi
 export SHAREBOX_ADMIN_USER="$ADMIN_USER"
 export SHAREBOX_ADMIN_PASS="$ADMIN_PASS"
-GENERATED_PASS=$(php -d display_errors=stderr -r '
+# error_log=/dev/null: auth.php also logs the password, which would repeat the banner.
+GENERATED_PASS=$(php -d display_errors=stderr -d error_log=/dev/null -r '
     require "/app/db.php";
     require "/app/auth.php";
     $p = ensure_admin_exists();
     if ($p !== null) echo $p;
 ')
 if [ -n "$GENERATED_PASS" ]; then
+    # The log line is lost when the container is recreated; keep a root-only copy.
+    (umask 077; printf '%s\n' "$GENERATED_PASS" > /data/initial-admin-password)
     echo "=============================================================="
     echo " ShareBox - first start"
-    echo "   URL           : http://localhost:8080/share/  (adjust host/port)"
+    echo "   URL           : http://<host>:<port>/share/"
     echo "   User          : $ADMIN_USER"
     echo "   Password      : $GENERATED_PASS"
+    echo "   (also saved in /data/initial-admin-password)"
     echo " Nothing is shared yet: create a link in /share."
     echo "=============================================================="
 fi
@@ -106,6 +120,17 @@ if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
     /bin/sh /docker/demo-data.sh "$MEDIA_DIR"
 fi
 
+# ── Stale demo link: an install created with the old DEMO_DATA=true default ──
+# would otherwise keep its real media public on /dl/browse.
+if [ "${SHAREBOX_DEMO_DATA:-}" != "true" ]; then
+    php -r '
+        require "/app/db.php";
+        $st = get_db()->prepare("DELETE FROM links WHERE token = ? AND name = ?");
+        $st->execute(["browse", "ShareBox Demo"]);
+        if ($st->rowCount() > 0) echo "ShareBox: removed the stale demo link /dl/browse (SHAREBOX_DEMO_DATA is not true).\n";
+    ' 2>/dev/null || true
+fi
+
 # ── Auto-share : lien public vers /media, seulement pour les médias de démo ──
 # Le marqueur est écrit par demo-data.sh : jamais de partage sur de vrais médias.
 if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
@@ -121,6 +146,7 @@ if [ "${SHAREBOX_DEMO_DATA:-}" = "true" ]; then
             echo "Auto-share: /dl/browse -> $mediaDir\n";
         ' -- "$MEDIA_DIR" 2>/dev/null || true
         chown -R www-data:www-data /data
+        chown root:root /data/initial-admin-password 2>/dev/null || true
     else
         echo "ShareBox: SHAREBOX_DEMO_DATA=true but $MEDIA_DIR holds real files (no demo marker): nothing is shared."
     fi

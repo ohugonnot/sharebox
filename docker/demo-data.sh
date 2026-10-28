@@ -13,6 +13,15 @@ REAL_CONTENT=$(find "$MEDIA_DIR" -mindepth 1 -maxdepth 1 \
     -not -name 'cdrom' -not -name 'floppy' -not -name 'usb' | head -1)
 if [ -n "$REAL_CONTENT" ]; then
     echo "Demo-data: $MEDIA_DIR already has content, skipping."
+    # Media made by an older image has no marker. Accept it only if it holds nothing
+    # but our own top-level names and our sample file; anything else is real.
+    OTHER=$(find "$MEDIA_DIR" -mindepth 1 -maxdepth 1 \
+        -not -name 'cdrom' -not -name 'floppy' -not -name 'usb' \
+        -not -name 'Series' -not -name 'Films' -not -name 'Anime' -not -name '.sharebox-demo' | head -1)
+    if [ -z "$OTHER" ] && [ -f "$MEDIA_DIR/Films/Inception.2010.1080p.BluRay.x264.mkv" ]; then
+        touch "$MEDIA_DIR/.sharebox-demo"
+        echo "Demo-data: existing content is demo media, marker set."
+    fi
     exit 0
 fi
 # Clean Alpine defaults

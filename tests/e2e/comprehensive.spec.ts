@@ -3,7 +3,7 @@
  *
  * Prerequisites (Docker demo):
  *   docker run -d --name sharebox-demo -p 8088:80 \
- *     -e SHAREBOX_ADMIN_USER=admin -e SHAREBOX_ADMIN_PASS=changeme \
+ *     -e SHAREBOX_ADMIN_USER=admin -e SHAREBOX_ADMIN_PASS=testpass \
  *     -e SHAREBOX_DEMO_DATA=true sharebox-demo
  *   SHAREBOX_TEST_URL=http://localhost:8088 npx playwright test comprehensive.spec.ts
  *
@@ -35,7 +35,7 @@ async function loginLocal(page: Page): Promise<void> {
   // Already logged in → redirect
   if (page.url().endsWith('/share/') || page.url().endsWith('/share')) return;
   await page.fill('input[name="username"]', process.env.SHAREBOX_TEST_USER ?? 'admin');
-  await page.fill('input[name="password"]', process.env.SHAREBOX_TEST_PASS ?? 'changeme');
+  await page.fill('input[name="password"]', process.env.SHAREBOX_TEST_PASS ?? 'testpass');
   await page.click('button[type="submit"]');
   await page.waitForURL(/\/share\/?$/, { timeout: 10000 });
 }
