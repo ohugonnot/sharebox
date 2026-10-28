@@ -11,3 +11,13 @@ config.php
 config.example.php
 test_router.php
 *.md
+docker-compose*.yml
+.env*
+node_modules/
+.worktrees/
+bench/
+test-results/
+playwright-report/
+.feature-loop/
+.claude/
+docs/
