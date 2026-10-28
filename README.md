@@ -53,7 +53,7 @@ docker compose up -d
 docker compose logs sharebox | grep -i password
 ```
 
-Then open `http://<ip>:8080` and log in as `admin` with the password printed in the logs. If you do not set `SHAREBOX_ADMIN_PASS`, a random password is generated and shown once, at first start. Mount your media in `docker-compose.yml` (see [Installation](#installation)); no demo content is created by default.
+Then open `http://<ip>:8080` and log in as `admin` with the password printed in the logs. If you do not set `SHAREBOX_ADMIN_PASS`, a random password is generated and shown once, at first start. Mount your media in `docker-compose.yml` (see [Installation](#installation)) **before the first start**; no demo content is created by default. The password is lost from the logs when the container is recreated: read it again with `docker compose exec sharebox cat /data/initial-admin-password`.
 
 ## Features
 
@@ -119,7 +119,7 @@ environment:
 docker compose up -d
 ```
 
-If `SHAREBOX_ADMIN_PASS` is omitted, a random 16-character password is printed in `docker logs` at first start only. A password shorter than 8 characters, or one of `changeme`, `sharebox`, `admin`, `password`, stops the container at first start (exit code 1). The host port is `${SHAREBOX_PORT:-8080}`. More options (bind mount for NAS, public demo, ghcr image): [docs/INSTALL.md](docs/INSTALL.md).
+If `SHAREBOX_ADMIN_PASS` is omitted, a random 16-character password is printed in `docker logs` at first start only (and saved in `/data/initial-admin-password`). A password shorter than 8 characters, or one of `changeme`, `sharebox`, `admin`, `password`, stops the container at first start (exit code 1). The host port is `${SHAREBOX_PORT:-8080}`. More options (bind mount for NAS, public demo, ghcr image): [docs/INSTALL.md](docs/INSTALL.md).
 
 <details>
 <summary>Environment variables</summary>
