@@ -63,7 +63,7 @@ final class ComicFixtures
 
     public static function rmrf(string $dir): void
     {
-        if (!preg_match('#/sb_comic[a-z]*_[0-9a-f]{12}#', $dir)) return;
+        if (!preg_match('#/sb_[a-z]+_[0-9a-f]{12}#', $dir)) return;
         shell_exec('rm -rf -- ' . escapeshellarg($dir));
     }
 }
