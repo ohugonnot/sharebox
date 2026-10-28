@@ -63,7 +63,7 @@ echo "$headers" | head -1 | grep -q ' 302' || fail "GET / is not a 302: $(echo "
 echo "$headers" | grep -qi '^location:.*/share/' || fail "GET / does not redirect to /share/"
 ok "GET / = 302 to /share/"
 
-pass="$(docker logs "$CNAME" 2>&1 | grep -i 'password' | grep -oE '[0-9a-f]{16}' | head -1 || true)"
+pass="$(docker logs "$CNAME" 2>&1 | grep -iE 'password|mot de passe' | grep -oE '[0-9a-f]{16}' | head -1 || true)"
 [ -n "$pass" ] || fail "no 16-hex generated password found in docker logs"
 ok "generated password found in logs"
 
