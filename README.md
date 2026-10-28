@@ -26,7 +26,7 @@ So I built ShareBox -- a single PHP app with zero external dependencies. No fram
 
 **[Try the demo](https://demo.anime-sanctuary.net/dl/browse?p=Films&view=grid)** -- no install needed. Netflix-style grid with TMDB posters, series, movies, and anime.
 
-[Admin panel](https://demo.anime-sanctuary.net/share/) -- `admin` / `demo2026`
+The admin panel is not open on the demo: run the [Quick Start](#quick-start) to try it locally in two minutes.
 
 ## How it compares
 
