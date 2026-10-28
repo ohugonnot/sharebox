@@ -50,7 +50,7 @@ So I built ShareBox -- a single PHP app with zero external dependencies. No fram
 ```bash
 git clone https://github.com/ohugonnot/sharebox.git && cd sharebox
 docker compose up -d
-docker compose logs sharebox | grep -iE "password|mot de passe"
+docker compose logs sharebox | grep -i password
 ```
 
 Then open `http://<ip>:8080` and log in as `admin` with the password printed in the logs. If you do not set `SHAREBOX_ADMIN_PASS`, a random password is generated and shown once, at first start. Mount your media in `docker-compose.yml` (see [Installation](#installation)); no demo content is created by default.
