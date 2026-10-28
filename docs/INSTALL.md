@@ -27,8 +27,26 @@ git clone https://github.com/ohugonnot/sharebox.git && cd sharebox
 docker compose up -d
 ```
 
-Open `http://localhost:8080/share` — done.  
-The default compose ships with demo content so you can see it working immediately.
+```bash
+docker compose logs sharebox | grep -i password
+```
+
+Open `http://<ip>:8080` (it redirects to `/share/`) and log in as `admin` with the password printed in the logs.  
+No demo content is created by default; mount your own media (next section).
+
+### Defaults
+
+| Setting | Default | Notes |
+|---|---|---|
+| `SHAREBOX_DEMO_DATA` | `false` | Demo media is only shared if the marker file `$MEDIA_DIR/.sharebox-demo` exists, never on real media |
+| `SHAREBOX_ADMIN_PASS` | random | If unset, 16 hex characters are generated and printed in a banner in `docker logs`, at first start only |
+| Weak password | refused | `changeme`, `sharebox`, `admin`, `password`, or fewer than 8 characters: the container exits with code 1 at first start; later starts only log a warning |
+| `SHAREBOX_PORT` | `8080` | Host port, used as `${SHAREBOX_PORT:-8080}` in `docker-compose.yml` |
+| `PUID` / `PGID` | unset | Optional; match the host owner of bind-mounted `/data` and media |
+| Healthcheck | built into the image | `docker ps` shows `healthy` once the app answers |
+| `/data` | named volume | Database and poster cache; see the bind mount alternative below |
+
+The generated password is printed once, at first start. Read it with `docker compose logs sharebox | grep -i password`; it stays available until the container is recreated.
 
 ### Use your own media
 
@@ -45,7 +63,7 @@ services:
       - /path/to/your/media:/media:ro   # <-- your media directory (read-only)
     environment:
       - SHAREBOX_ADMIN_USER=admin
-      - SHAREBOX_ADMIN_PASS=changeme
+      - SHAREBOX_ADMIN_PASS=choose-a-strong-password   # optional: random if omitted
       - SHAREBOX_TMDB_API_KEY=your_tmdb_api_key
     restart: unless-stopped
 
@@ -55,16 +73,57 @@ volumes:
 
 The `sharebox-data` named volume holds the SQLite database and poster cache — it persists across container restarts and rebuilds.
 
+### Bind mount for `/data` (NAS)
+
+To keep the data in a folder you can see and back up, replace the named volume with a path:
+
+```yaml
+    volumes:
+      - /volume1/docker/sharebox/data:/data
+      - /volume1/Media:/media:ro
+```
+
+and remove the `volumes: sharebox-data:` block at the bottom. Create the folder first. If the container cannot write to it, set `PUID` / `PGID` to the owner of the folder.
+
+### Prebuilt image (ghcr)
+
+Images are published to `ghcr.io/ohugonnot/sharebox` for `linux/amd64` and `linux/arm64`. `latest` follows `master`; version tags and `sha-…` tags are also pushed. To use it instead of building, replace `build: .` with `image: ghcr.io/ohugonnot/sharebox:latest` in `docker-compose.yml`.
+
+### Reproduce the public demo
+
+Keep this out of git: create a local `docker-compose.override.yml` next to `docker-compose.yml`. Compose reads it automatically.
+
+```yaml
+services:
+  sharebox:
+    ports: !override
+      - "127.0.0.1:8080:80"      # only a local reverse proxy can reach it
+    environment:
+      - SHAREBOX_ADMIN_USER=admin
+      - SHAREBOX_ADMIN_PASS=demo-password-here
+      - SHAREBOX_DEMO_DATA=true
+```
+
+**Pitfall:** `ports` lists from an override are *merged* with those of the base file, so without `!override` (or `!reset`) the container would also keep the public `8080:80` mapping. Always check the final result:
+
+```bash
+docker compose config | grep -A3 ports
+```
+
+Only `127.0.0.1:8080` must appear. Set `SHAREBOX_DEMO_DATA=true` explicitly; it is `false` by default. Use a strong password: the demo is public. `!override` needs a recent Docker Compose v2.
+
 <details>
 <summary>All environment variables</summary>
 
 | Variable | Default | Description |
 |---|---|---|
 | `SHAREBOX_ADMIN_USER` | `admin` | Admin panel username |
-| `SHAREBOX_ADMIN_PASS` | `sharebox` | Admin panel password (**change this**) |
+| `SHAREBOX_ADMIN_PASS` | *(random)* | Admin panel password; if unset, generated and logged once |
 | `SHAREBOX_MEDIA_DIR` | `/media/` | Media path inside the container |
 | `SHAREBOX_TMDB_API_KEY` | *(none)* | TMDB API key for poster grid |
-| `SHAREBOX_DEMO_DATA` | `false` | Seed sample media on first start |
+| `SHAREBOX_DEMO_DATA` | `false` | Seed sample media on first start (shared only if `$MEDIA_DIR/.sharebox-demo` exists) |
+| `SHAREBOX_PORT` | `8080` | Host port published by `docker-compose.yml` |
+| `PUID` / `PGID` | *(unset)* | Optional user and group IDs |
 | `SHAREBOX_STREAM_MAX_CONCURRENT` | `4` | Max simultaneous ffmpeg processes |
 | `SHAREBOX_STREAM_REMUX_ENABLED` | `false` | Enable remux for H.264 MKV (experimental) |
 | `SHAREBOX_BANDWIDTH_QUOTA_TB` | `100` | Monthly bandwidth quota for dashboard |
@@ -254,10 +313,12 @@ services:
       - /volume1/Media:/media:ro        # your Synology media folder
     environment:
       - SHAREBOX_ADMIN_USER=admin
-      - SHAREBOX_ADMIN_PASS=changeme
+      - SHAREBOX_ADMIN_PASS=choose-a-strong-password   # optional: random if omitted
       - SHAREBOX_TMDB_API_KEY=your_key
     restart: unless-stopped
 ```
+
+The image is multi-arch (amd64 and arm64) and has a built-in healthcheck. If `SHAREBOX_ADMIN_PASS` is omitted, read the generated password in the container's logs.
 
 5. Click **Build** — Container Manager pulls the image and starts the container.
 6. Access at `http://NAS-IP:8080/share`
@@ -296,9 +357,10 @@ If the CA template isn't available yet, add the container manually:
 | Name | `sharebox` |
 | Repository | `ghcr.io/ohugonnot/sharebox:latest` |
 | Port mapping | `8080 → 80` |
+| Architecture | amd64 and arm64 (same tag) |
 | Volume: data | `/mnt/user/appdata/sharebox` → `/data` |
 | Volume: media | `/mnt/user/Media` → `/media` (read-only) |
-| Env: `SHAREBOX_ADMIN_PASS` | `changeme` |
+| Env: `SHAREBOX_ADMIN_PASS` | a strong password (optional; random and logged once if omitted) |
 | Env: `SHAREBOX_TMDB_API_KEY` | your key |
 
 ---
