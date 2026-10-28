@@ -28,7 +28,7 @@ docker compose up -d
 ```
 
 ```bash
-docker compose logs sharebox | grep -i password
+docker compose logs sharebox | grep -iE "password|mot de passe"
 ```
 
 Open `http://<ip>:8080` (it redirects to `/share/`) and log in as `admin` with the password printed in the logs.  
@@ -46,7 +46,7 @@ No demo content is created by default; mount your own media (next section).
 | Healthcheck | built into the image | `docker ps` shows `healthy` once the app answers |
 | `/data` | named volume | Database and poster cache; see the bind mount alternative below |
 
-The generated password is printed once, at first start. Read it with `docker compose logs sharebox | grep -i password`; it stays available until the container is recreated.
+The generated password is printed once, at first start. Read it with `docker compose logs sharebox | grep -iE "password|mot de passe"`; it stays available until the container is recreated.
 
 ### Use your own media
 
