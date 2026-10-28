@@ -32,7 +32,13 @@ docker compose logs sharebox | grep -i password
 ```
 
 Open `http://<ip>:8080` (it redirects to `/share/`) and log in as `admin` with the password printed in the logs.  
-No demo content is created by default; mount your own media (next section).
+No demo content is created by default; mount your own media (next section) **before the first start**.
+
+The password is only printed in the logs at first start, and recreating the container (`docker compose up -d` after a change) loses that log. If you missed it, read the copy saved in the data volume:
+
+```bash
+docker compose exec sharebox cat /data/initial-admin-password
+```
 
 ### Defaults
 
@@ -46,7 +52,7 @@ No demo content is created by default; mount your own media (next section).
 | Healthcheck | built into the image | `docker ps` shows `healthy` once the app answers |
 | `/data` | named volume | Database and poster cache; see the bind mount alternative below |
 
-The generated password is printed once, at first start. Read it with `docker compose logs sharebox | grep -i password`; it stays available until the container is recreated.
+The generated password is printed once, at first start. Read it with `docker compose logs sharebox | grep -i password`; it is also saved (root-only, mode 0600) in `/data/initial-admin-password`, which survives container recreation.
 
 ### Use your own media
 
@@ -57,7 +63,7 @@ services:
   sharebox:
     build: .
     ports:
-      - "8080:80"
+      - "${SHAREBOX_PORT:-8080}:80"
     volumes:
       - sharebox-data:/data
       - /path/to/your/media:/media:ro   # <-- your media directory (read-only)
@@ -88,6 +94,8 @@ and remove the `volumes: sharebox-data:` block at the bottom. Create the folder 
 ### Prebuilt image (ghcr)
 
 Images are published to `ghcr.io/ohugonnot/sharebox` for `linux/amd64` and `linux/arm64`. `latest` follows `master`; version tags and `sha-…` tags are also pushed. To use it instead of building, replace `build: .` with `image: ghcr.io/ohugonnot/sharebox:latest` in `docker-compose.yml`.
+
+The `ghcr.io` package must be **public** for the Synology and Unraid guides (which pull the image without credentials). A package is private by default after its first publication: set it to public in the GitHub package settings.
 
 ### Reproduce the public demo
 
@@ -307,7 +315,7 @@ services:
   sharebox:
     image: ghcr.io/ohugonnot/sharebox:latest
     ports:
-      - "8080:80"
+      - "${SHAREBOX_PORT:-8080}:80"
     volumes:
       - /volume1/docker/sharebox/data:/data
       - /volume1/Media:/media:ro        # your Synology media folder

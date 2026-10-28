@@ -37,7 +37,7 @@ git clone https://github.com/ohugonnot/sharebox.git && cd sharebox
 docker compose -f docker-compose.nvidia.yml up -d
 ```
 
-Open `http://localhost:8080/dl/browse` — navigate to a video and click play.
+Open `http://localhost:8080/share/` and log in as `admin`. The password is random unless you set `SHAREBOX_ADMIN_PASS`: read it with `docker compose -f docker-compose.nvidia.yml logs sharebox`, or `docker compose -f docker-compose.nvidia.yml exec sharebox cat /data/initial-admin-password`. Mount your media, create a link, open it and click play.
 
 ### Verify GPU is in use
 
