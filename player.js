@@ -1,10 +1,55 @@
-var REMUX_ENABLED = PLAYER_CONFIG.remuxEnabled;
+var PlayerSeek = (function() {
+    // Merges a burst of seek requests into one commit on the last target.
+    function createCoalescer(o) {
+        var timer = null, target = null, delay = 0, held = false;
+        function arm() {
+            if (timer !== null) o.clearTimer(timer);
+            timer = o.setTimer(function() {
+                timer = null;
+                var t = target; target = null;
+                o.commit(t);
+            }, delay);
+        }
+        return {
+            request: function(t, delayMs) {
+                if (typeof t !== 'number' || isNaN(t)) return;
+                target = t; delay = delayMs;
+                if (!held) arm();
+            },
+            // While held (bar drag) nothing fires; release() arms the timer if a target waits.
+            hold: function() {
+                held = true;
+                if (timer !== null) { o.clearTimer(timer); timer = null; }
+            },
+            release: function() { held = false; if (target !== null) arm(); },
+            cancel: function() {
+                if (timer !== null) { o.clearTimer(timer); timer = null; }
+                target = null;
+            },
+            pending: function() { return target; }
+        };
+    }
+    function clampTarget(t, duration, endMargin) {
+        var max = duration - endMargin;
+        return Math.max(0, Math.min(max > 0 ? max : 0, t));
+    }
+    // Chained relative jumps start from the waiting target, not from the playhead.
+    function relativeTarget(pending, current, delta, duration, endMargin) {
+        var base = pending !== null ? pending : current;
+        var t = clampTarget(base + delta, duration, endMargin);
+        return delta > 0 && t < base ? base : t; // never move backwards on a forward jump
+    }
+    return { createCoalescer: createCoalescer, clampTarget: clampTarget, relativeTarget: relativeTarget };
+})();
+if (typeof module === 'object' && module.exports) module.exports = PlayerSeek;
+var REMUX_ENABLED = typeof PLAYER_CONFIG !== 'undefined' ? PLAYER_CONFIG.remuxEnabled : false;
 function plog(tag, msg, data) {
     var ts = new Date().toLocaleTimeString('fr-FR', {hour:'2-digit',minute:'2-digit',second:'2-digit',fractionalSecondDigits:1});
     if (data !== undefined) console.log('%c[' + ts + '] %c' + tag + '%c ' + msg, 'color:#888', 'color:#f0a030;font-weight:bold', 'color:inherit', data);
     else console.log('%c[' + ts + '] %c' + tag + '%c ' + msg, 'color:#888', 'color:#f0a030;font-weight:bold', 'color:inherit');
 }
 (function() {
+    if (typeof document === 'undefined') return;
     // ── DOM ──────────────────────────────────────────────────────────────────
     var player      = document.getElementById('player');
     var hintWrap    = document.getElementById('hint');
@@ -35,6 +80,9 @@ function plog(tag, msg, data) {
     var playerCard  = player.closest('.player-card') || player.parentNode;
     var playerCtrl  = document.querySelector('.player-controls');
     var isVideo     = PLAYER_CONFIG.isVideo;
+    var SEEK_DEBOUNCE_MS = Math.max(600, PLAYER_CONFIG.seekDebounceMs || 0);
+    var SEEK_STEP_DEBOUNCE_MS = 800;
+    var SEEK_END_MARGIN_S = 2;
     var base        = PLAYER_CONFIG.baseUrl;
     var pp          = PLAYER_CONFIG.pp;
     var episodeNav  = PLAYER_CONFIG.episodeNav;
@@ -95,9 +143,15 @@ function plog(tag, msg, data) {
         keyframeAbort: null,
         // timers
         fsHideTimer: null, videoWidthTimer: null,
-        seekDebounce: null, stallTimer: null, stallInterval: null,
+        failRetryTimer: null, stallTimer: null, stallInterval: null,
         autoNextTimer: null, positionSaveInterval: null
     };
+
+    var seekCo = PlayerSeek.createCoalescer({
+        commit: function(t) { commitSeek(t); },
+        setTimer: function(fn, ms) { return setTimeout(fn, ms); },
+        clearTimer: function(id) { clearTimeout(id); }
+    });
 
     // ── localStorage (try/catch : private browsing peut throw) ───────────────
     function lsGet(k, def) { try { var v = localStorage.getItem(k); return v !== null ? v : def; } catch(e) { return def; } }
@@ -115,6 +169,8 @@ function plog(tag, msg, data) {
         return m + ':' + (sec < 10 ? '0' : '') + sec;
     }
     function realTime() { return S.offset + (player.currentTime || 0); }
+    // A seek waiting for its debounce is where the viewer wants to be, not realTime().
+    function playPos() { var p = seekCo.pending(); return p !== null ? p : realTime(); }
     // Safari iOS : utiliser HLS au lieu de fMP4 (Safari coupe les streams fMP4 sans Range support)
     // Détection iPad Desktop Mode : platform peut être "MacIntel" ou futur "macOS" → /^Mac/
     var isIOS = (/iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream)
@@ -359,6 +415,8 @@ function plog(tag, msg, data) {
     function unlockSize() { player.style.minHeight = ''; }
 
     function startStream(resumeAt) {
+        seekCo.cancel(); S.seekPending = false;
+        clearTimeout(S.failRetryTimer);
         var mode = S.confirmed || S.step;
         if (mode === 'transcode') warnUHDTranscode();
         plog('STREAM', 'startStream mode=' + mode + ' resumeAt=' + (resumeAt || 0).toFixed(1) + ' audio=' + S.audioIdx + ' quality=' + S.quality + ' burnSub=' + S.burnSub);
@@ -469,7 +527,7 @@ function plog(tag, msg, data) {
     function onFail() {
         if (S.hasFailed) return;
         S.hasFailed = true;
-        var pos = realTime();
+        var pos = playPos();
         var errCode = player.error ? player.error.code : 0;
         plog('ERROR', 'onFail step=' + S.step + ' confirmed=' + S.confirmed + ' errCode=' + errCode + ' pos=' + pos.toFixed(1));
         sendTelemetry('fail', {mode: S.confirmed || S.step, error_code: errCode, extra: {pos: Math.round(pos), step: S.step, retries: S.failRetries}});
@@ -479,7 +537,7 @@ function plog(tag, msg, data) {
             S.hasFailed = false;
             plog('ERROR', 'network error → retry #' + S.failRetries);
             hint.textContent = 'Erreur r\u00E9seau, retry #' + S.failRetries + '...'; hint.className = 'player-hint';
-            setTimeout(function() {
+            S.failRetryTimer = setTimeout(function() {
                 // Ne pas retry si l'onglet est caché (évite les ffmpeg orphelins)
                 if (document.hidden) { plog('ERROR', 'tab hidden, deferring retry'); S.hasFailed = true; return; }
                 startStream(pos);
@@ -539,7 +597,7 @@ function plog(tag, msg, data) {
                 plog('STALL', 'watchdog retry #' + S.stallCount + ' timeout=' + stallTimeout() + 'ms readyState=' + player.readyState);
                 sendTelemetry('stall', {mode: S.confirmed || S.step, elapsed_ms: stallTimeout(), extra: {retry: S.stallCount, readyState: player.readyState}});
                 hint.textContent = 'Retry #' + S.stallCount + '...'; hint.className = 'player-hint';
-                startStream(realTime());
+                startStream(playPos());
             }
         }, stallTimeout());
     }
@@ -679,7 +737,7 @@ function plog(tag, msg, data) {
             this._emptyRetries = 0;
             plog('SUBS', 'load idx=' + idx + ' type=' + (this.types[idx]||'off') + ' wasBurning=' + (S.burnSub >= 0));
             var gen = ++this._gen;
-            var wasBurning = S.burnSub >= 0, pos = realTime();
+            var wasBurning = S.burnSub >= 0, pos = playPos();
             this.cues = []; this._idx = 0; S.burnSub = -1;
             if (this._div) this._div.innerHTML = '';
             this._syncTrack();
@@ -823,44 +881,56 @@ function plog(tag, msg, data) {
         var rect = seekBar.getBoundingClientRect();
         return Math.max(0, Math.min(1, ((e.touches ? e.touches[0].clientX : e.clientX) - rect.left) / rect.width));
     }
-    function seekToFraction(frac) {
-        var t = Math.max(0, Math.min(S.duration, frac * S.duration));
-        plog('SEEK', fmtTime(t) + ' (' + (frac*100).toFixed(0) + '%) mode=' + (S.confirmed||S.step));
+    function seekToFraction(frac) { seekTo(frac * S.duration, SEEK_DEBOUNCE_MS); }
+    function seekRelative(delta) {
+        var from = seekCo.pending();
+        if (from === null) from = realTime();
+        var margin = S.confirmed === 'native' ? 0 : SEEK_END_MARGIN_S;
+        var t = PlayerSeek.relativeTarget(seekCo.pending(), realTime(), delta, S.duration, margin);
+        if (delta > 0 && t <= from) return;
+        seekTo(t, SEEK_STEP_DEBOUNCE_MS);
+    }
+    function seekTo(t, delayMs) {
+        var isNative = S.confirmed === 'native';
+        t = isNative ? Math.max(0, Math.min(S.duration, t)) : PlayerSeek.clampTarget(t, S.duration, SEEK_END_MARGIN_S);
+        plog('SEEK', fmtTime(t) + ' (' + (t / S.duration * 100).toFixed(0) + '%) mode=' + (S.confirmed||S.step));
         S.seekPending = true;
         var pct = t / S.duration * 100;
         seekFill.style.width = pct + '%'; seekThumb.style.left = pct + '%'; timeCurrent.textContent = fmtTime(t);
-        clearTimeout(S.seekDebounce);
-        if (S.confirmed === 'native') {
+        if (isNative) {
+            seekCo.cancel();
             S.offset = 0; // safety: ensure no stale offset from an earlier unconfirmed seek
             S.seekPending = false; player.currentTime = t; hint.textContent = '';
             Subs.resetIdx(); Subs._syncTrack();
         } else {
-            var debounceMs = (S.confirmed === 'transcode') ? 600 : 300;
-            S.seekDebounce = setTimeout(function() {
-                if (player.paused) { S.seekPending = false; return; }
-                S.failRetries = 0; startStream(t); S.seekPending = false;
-                hint.textContent = 'Chargement \u00E0 ' + fmtTime(t) + '...'; hint.className = 'player-hint';
-                // Correction rétroactive : le coarse seek atterrit sur keyframe K ≤ t.
-                // On corrige S.offset = K pendant le démarrage du stream (avant le 1er frame).
-                if (t > 0) {
-                    var seekGen = ++S.seekGen;
-                    if (S.keyframeAbort) S.keyframeAbort.abort();
-                    var kfCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-                    S.keyframeAbort = kfCtrl;
-                    fetch(base + '?' + pp + 'keyframe=' + t.toFixed(1), kfCtrl ? {signal: kfCtrl.signal} : {})
-                        .then(function(r) { return r.json(); })
-                        .then(function(d) {
-                            if (seekGen === S.seekGen && typeof d.pts === 'number' && d.pts >= 0) {
-                                // Native mode uses player.currentTime for absolute position — S.offset must stay 0.
-                                // Updating it here would cause realTime() = offset + currentTime = 2× the seek target.
-                                if (S.confirmed !== 'native' && S.step !== 'native') S.offset = d.pts;
-                                Subs.resetIdx();
-                                Subs._syncTrack();
-                            }
-                        })
-                        .catch(function() {});
-                }
-            }, debounceMs);
+            hint.textContent = 'Chargement \u00E0 ' + fmtTime(t) + '...'; hint.className = 'player-hint';
+            clearStallWatchdog();
+            seekCo.request(t, (S.confirmed || S.step) === 'native' ? 300 : delayMs);
+        }
+    }
+    function commitSeek(t) {
+        if (player.paused) { S.seekPending = false; hint.textContent = ''; return; }
+        S.failRetries = 0; startStream(t); S.seekPending = false;
+        hint.textContent = 'Chargement \u00E0 ' + fmtTime(t) + '...'; hint.className = 'player-hint';
+        // Correction rétroactive : le coarse seek atterrit sur keyframe K ≤ t.
+        // On corrige S.offset = K pendant le démarrage du stream (avant le 1er frame).
+        if (t > 0) {
+            var seekGen = ++S.seekGen;
+            if (S.keyframeAbort) S.keyframeAbort.abort();
+            var kfCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            S.keyframeAbort = kfCtrl;
+            fetch(base + '?' + pp + 'keyframe=' + t.toFixed(1), kfCtrl ? {signal: kfCtrl.signal} : {})
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (seekGen === S.seekGen && typeof d.pts === 'number' && d.pts >= 0) {
+                        // Native mode uses player.currentTime for absolute position — S.offset must stay 0.
+                        // Updating it here would cause realTime() = offset + currentTime = 2× the seek target.
+                        if (S.confirmed !== 'native' && S.step !== 'native') S.offset = d.pts;
+                        Subs.resetIdx();
+                        Subs._syncTrack();
+                    }
+                })
+                .catch(function() {});
         }
     }
     player.addEventListener('timeupdate', function() {
@@ -883,12 +953,14 @@ function plog(tag, msg, data) {
             }
         }
     });
-    seekBar.addEventListener('mousedown',  function(e) { if (!S.duration) return; S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); });
-    seekBar.addEventListener('touchstart', function(e) { if (!S.duration || e.touches.length !== 1) return; var rect = seekBar.getBoundingClientRect(); var ty = e.touches[0].clientY; if (ty < rect.top - 10 || ty > rect.bottom + 10) return; e.preventDefault(); S.dragging = true; seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); if (seekTooltip) { var f = getFraction(e); seekTooltip.textContent = fmtTime(f * S.duration); seekTooltip.style.left = (f * 100) + '%'; seekTooltip.style.display = 'block'; } }, {passive:false});
+    seekBar.addEventListener('mousedown',  function(e) { if (!S.duration || e.button !== 0) return; S.dragging = true; seekCo.hold(); seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); });
+    seekBar.addEventListener('touchstart', function(e) { if (!S.duration || e.touches.length !== 1) return; var rect = seekBar.getBoundingClientRect(); var ty = e.touches[0].clientY; if (ty < rect.top - 10 || ty > rect.bottom + 10) return; e.preventDefault(); S.dragging = true; seekCo.hold(); seekBar.classList.add('dragging'); seekToFraction(getFraction(e)); if (seekTooltip) { var f = getFraction(e); seekTooltip.textContent = fmtTime(f * S.duration); seekTooltip.style.left = (f * 100) + '%'; seekTooltip.style.display = 'block'; } }, {passive:false});
     document.addEventListener('mousemove', function(e) { if (S.dragging) seekToFraction(getFraction(e)); }, _sig);
     seekBar.addEventListener('touchmove', function(e) { if (S.dragging) { e.preventDefault(); seekToFraction(getFraction(e)); if (seekTooltip) { var f = getFraction(e); seekTooltip.textContent = fmtTime(f * S.duration); seekTooltip.style.left = (f * 100) + '%'; seekTooltip.style.display = 'block'; } } }, {passive:false});
-    document.addEventListener('mouseup',   function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); } }, _sig);
-    document.addEventListener('touchend',  function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); if (seekTooltip) seekTooltip.style.display = 'none'; } }, _sig);
+    document.addEventListener('mouseup',   function()  { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); seekCo.release(); } }, _sig);
+    function endTouchDrag() { if (S.dragging) { S.dragging = false; seekBar.classList.remove('dragging'); if (seekTooltip) seekTooltip.style.display = 'none'; seekCo.release(); } }
+    document.addEventListener('touchend',  endTouchDrag, _sig);
+    document.addEventListener('touchcancel', endTouchDrag, _sig);
     var _thumbCache = {};
     var _thumbAbort = null;
     var _thumbDebounce = null;
@@ -984,7 +1056,7 @@ function plog(tag, msg, data) {
                 S.confirmed = S.step = bestMode;
                 plog('TRACK', 'audio changed → ' + S.audioIdx + ' mode=' + S.step);
                 hint.textContent = bestMode === 'native' ? '' : 'Changement de piste...'; hint.className = bestMode === 'native' ? 'player-hint' : 'player-hint transcoding';
-                saveCfg(); startStream(realTime());
+                saveCfg(); startStream(playPos());
             });
             if (!savedCfg) {
                 var prefAudio = lsGet('pref_audio', '');
@@ -1022,7 +1094,7 @@ function plog(tag, msg, data) {
                     S.quality = parseInt(sel3.value, 10) || 720; S.confirmed = 'transcode';
                     plog('TRACK', 'quality changed → ' + S.quality + 'p');
                     hint.textContent = 'Transcodage ' + S.quality + 'p...'; hint.className = 'player-hint transcoding';
-                    saveCfg(); startStream(realTime());
+                    saveCfg(); startStream(playPos());
                 });
                 var grpVideo = document.createElement('div'); grpVideo.className = 'track-group';
                 grpVideo.append(lbl3, sel3);
@@ -1039,12 +1111,12 @@ function plog(tag, msg, data) {
                         var optimal = chooseModeFromProbe(probeData);
                         if (optimal !== 'transcode') {
                             S.confirmed = S.step = optimal;
-                            hint.textContent = ''; saveCfg(); startStream(realTime()); return;
+                            hint.textContent = ''; saveCfg(); startStream(playPos()); return;
                         }
                     }
                     S.confirmed = 'transcode';
                     hint.textContent = 'Changement de filtre...'; hint.className = 'player-hint transcoding';
-                    saveCfg(); startStream(realTime());
+                    saveCfg(); startStream(playPos());
                 });
                 grpVideo.append(lbl4, sel4);
                 var sepV = document.createElement('div'); sepV.className = 'track-sep';
@@ -1180,10 +1252,9 @@ function plog(tag, msg, data) {
                 if (Math.abs(dx) < 30 || !S.duration) return;
                 e.preventDefault();
                 var skip = dx > 0 ? 10 : -10;
-                var t = Math.max(0, Math.min(S.duration, realTime() + skip));
                 osd.textContent = (skip > 0 ? '+' : '') + skip + 's'; osd.classList.add('visible');
                 clearTimeout(osdTimer); osdTimer = setTimeout(function() { osd.classList.remove('visible'); }, 800);
-                seekToFraction(t / S.duration);
+                seekRelative(skip);
             });
         })();
 
@@ -1207,8 +1278,7 @@ function plog(tag, msg, data) {
                     var isRight = (tx - rect.left) > rect.width / 2;
                     var skip = isRight ? 10 : -10;
                     if (!S.duration) return;
-                    var t = Math.max(0, Math.min(S.duration, realTime() + skip));
-                    seekToFraction(t / S.duration);
+                    seekRelative(skip);
                     osd.textContent = (skip > 0 ? '+' : '') + skip + 's';
                     osd.classList.add('visible');
                     clearTimeout(osdTimer);
@@ -1474,7 +1544,7 @@ function plog(tag, msg, data) {
             if (!document.hidden && S.hasFailed && !player.paused) {
                 plog('EVENT', 'tab visible again, retrying after deferred error');
                 S.hasFailed = false;
-                startStream(realTime());
+                startStream(playPos());
             }
         }, _sig);
 
@@ -1490,7 +1560,7 @@ function plog(tag, msg, data) {
                     lsSet(posKey, realTime().toFixed(1));
                     location.reload();
                 })
-                .catch(function() { startStream(realTime()); });
+                .catch(function() { startStream(playPos()); });
         });
         var grpPlayback = document.createElement('div'); grpPlayback.className = 'track-group';
         grpPlayback.appendChild(resyncBtn);
@@ -1500,7 +1570,7 @@ function plog(tag, msg, data) {
         modeBtn.title = 'Cliquer pour changer le mode de lecture';
         updateModeUI();
         modeBtn.addEventListener('click', function() {
-            var pos = realTime(), m = S.confirmed || S.step;
+            var pos = playPos(), m = S.confirmed || S.step;
             // Cycle : native → [remux si MKV+activé] → x264-480p → x264-720p → x264-1080p → native
             var allQ = [480, 576, 720, 1080].filter(function(q) { return q <= (S.videoHeight || 1080); });
             var probeNative = probeData ? chooseModeFromProbe(probeData) === 'native' : true;
@@ -1558,19 +1628,19 @@ function plog(tag, msg, data) {
             }
             else if (e.key === 'ArrowLeft') {
                 e.preventDefault();
-                if (S.duration) { seekToFraction(Math.max(0, realTime() - 10) / S.duration); showSeekOsd(-10); }
+                if (S.duration) { seekRelative(-10); showSeekOsd(-10); }
             }
             else if (e.key === 'ArrowRight') {
                 e.preventDefault();
-                if (S.duration) { seekToFraction(Math.min(S.duration, realTime() + 10) / S.duration); showSeekOsd(10); }
+                if (S.duration) { seekRelative(+10); showSeekOsd(+10); }
             }
             else if (e.key === 'j' || e.key === 'J') {
                 e.preventDefault();
-                if (S.duration) { seekToFraction(Math.max(0, realTime() - 30) / S.duration); showSeekOsd(-30); }
+                if (S.duration) { seekRelative(-30); showSeekOsd(-30); }
             }
             else if (e.key === 'l' || e.key === 'L') {
                 e.preventDefault();
-                if (S.duration) { seekToFraction(Math.min(S.duration, realTime() + 30) / S.duration); showSeekOsd(30); }
+                if (S.duration) { seekRelative(+30); showSeekOsd(+30); }
             }
             else if (e.key === 'ArrowUp') {
                 e.preventDefault();
@@ -1602,7 +1672,7 @@ function plog(tag, msg, data) {
             else if (e.key === 'r' || e.key === 'R') {
                 e.preventDefault();
                 if (S.confirmed === 'native') { player.currentTime = Math.max(0, player.currentTime - 3); }
-                else { hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(realTime()); }
+                else { hint.textContent = 'Resync...'; hint.className = 'player-hint'; startStream(playPos()); }
             }
             else if (e.key === 'p' || e.key === 'P') {
                 e.preventDefault();
@@ -1804,7 +1874,7 @@ function plog(tag, msg, data) {
                         S.step = S.confirmed = optimalMode;
                         hint.textContent = optimalMode === 'transcode' ? 'Transcodage en cours...' : 'Remux en cours...';
                         hint.className = 'player-hint transcoding';
-                        startStream(realTime());
+                        startStream(playPos());
                     }
                 }
                 // Si stream déjà démarré (fallback), applyProbe a juste mis à jour l'UI
@@ -1834,7 +1904,8 @@ function plog(tag, msg, data) {
         clearTimeout(S.videoWidthTimer);
         clearTimeout(stableTimer);
         clearTimeout(S.fsHideTimer);
-        clearTimeout(S.seekDebounce);
+        seekCo.cancel();
+        clearTimeout(S.failRetryTimer);
         if (Subs._ro) Subs._ro.disconnect();
         if (Subs._trackUrl) { URL.revokeObjectURL(Subs._trackUrl); Subs._trackUrl = null; }
         player.pause();
