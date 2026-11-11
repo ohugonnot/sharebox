@@ -11,7 +11,7 @@ define('XACCEL_PREFIX', '');
 define('DL_BASE_URL', '/dl/');
 define('STREAM_MAX_CONCURRENT', 4);
 define('STREAM_REMUX_ENABLED', false);
-define('STREAM_LOG', false);
+define('STREAM_LOG', getenv('SB_E2E_STREAM_LOG') ?: false);
 define('TRUSTED_AUTH_HEADER', 'REMOTE_USER');
 define('ADMIN_USER', 'e2e');
 define('AUTH_FAIL_SLEEP', 0);
