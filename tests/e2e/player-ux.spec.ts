@@ -18,7 +18,7 @@ import { test, expect, Page } from '@playwright/test';
 // Constants & helpers
 // ---------------------------------------------------------------------------
 
-const DEMO_BASE = process.env.SHAREBOX_TEST_URL ?? 'http://199.231.187.166:8282';
+const DEMO_BASE = process.env.SHAREBOX_TEST_URL ?? 'https://demo.anime-sanctuary.net';
 
 // Public browse root — auto-share token seeded by entrypoint.sh
 const BROWSE_ROOT = '/dl/browse';
