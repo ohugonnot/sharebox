@@ -142,7 +142,7 @@ If `SHAREBOX_ADMIN_PASS` is omitted, a random 16-character password is printed i
 ### One-line installer (Debian/Ubuntu)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ohugonnot/sharebox/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ohugonnot/sharebox/master/install.sh | sudo bash
 ```
 
 Installs PHP, ffmpeg, configures nginx or Apache, sets up HTTP basic auth.

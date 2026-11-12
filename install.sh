@@ -4,9 +4,9 @@
 # Self-hosted file sharing with built-in video streaming
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ohugonnot/sharebox/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/ohugonnot/sharebox/master/install.sh | sudo bash
 #   # or
-#   wget -qO- https://raw.githubusercontent.com/ohugonnot/sharebox/main/install.sh | sudo bash
+#   wget -qO- https://raw.githubusercontent.com/ohugonnot/sharebox/master/install.sh | sudo bash
 # ============================================================================
 
 set -euo pipefail
