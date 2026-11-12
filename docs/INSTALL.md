@@ -378,7 +378,7 @@ If the CA template isn't available yet, add the container manually:
 ### One-line installer (easiest)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ohugonnot/sharebox/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ohugonnot/sharebox/master/install.sh | sudo bash
 ```
 
 Prompts for media path, admin credentials, and web server choice. Installs everything and configures nginx or Apache automatically.
