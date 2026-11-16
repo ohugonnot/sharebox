@@ -15,7 +15,6 @@ define('STREAM_LOG', getenv('SB_E2E_STREAM_LOG') ?: false);
 define('TRUSTED_AUTH_HEADER', 'REMOTE_USER');
 define('ADMIN_USER', 'e2e');
 define('AUTH_FAIL_SLEEP', 0);
-define('AUTH_LOCKOUT_SLEEP', 0);
 define('PROBE_SLOT_DIR', $e2eDir);
 define('UHD_LOCK_PATH', $e2eDir . '/uhd.lock');
 ini_set('session.save_path', $e2eDir);

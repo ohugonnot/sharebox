@@ -139,6 +139,40 @@ function clear_rate_limit(string $ip): void {
     if (file_exists($file)) unlink($file);
 }
 
+/** Client key for rate limiting: REMOTE_ADDR only (forwarded headers are spoofable); IPv6 is cut to its /64. */
+function rate_limit_ip(): string {
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    $bin = @inet_pton($ip);
+    if ($bin !== false && strlen($bin) === 16 && !str_starts_with($bin, str_repeat("\0", 10) . "\xff\xff")) {
+        return inet_ntop(substr($bin, 0, 8) . str_repeat("\0", 8));
+    }
+    return $ip;
+}
+
+/** Counts one password attempt for (token, ip) in a fixed window; returns the new count. */
+function share_attempt(string $token, string $ip): int {
+    $db = get_db();
+    $now = time();
+    $cutoff = $now - AUTH_LOCKOUT_WINDOW;
+    $db->prepare("
+        INSERT INTO share_attempts (token, ip, count, first_ts) VALUES (:t, :ip, 1, :now)
+        ON CONFLICT(token, ip) DO UPDATE SET
+            count = CASE WHEN first_ts <= :cutoff THEN 1 ELSE count + 1 END,
+            first_ts = CASE WHEN first_ts <= :cutoff THEN :now ELSE first_ts END
+    ")->execute([':t' => $token, ':ip' => $ip, ':now' => $now, ':cutoff' => $cutoff]);
+    $stmt = $db->prepare("SELECT count FROM share_attempts WHERE token = :t AND ip = :ip");
+    $stmt->execute([':t' => $token, ':ip' => $ip]);
+    $count = (int)$stmt->fetchColumn();
+    if (mt_rand(0, 99) === 0) {
+        $db->prepare("DELETE FROM share_attempts WHERE first_ts <= :cutoff")->execute([':cutoff' => $cutoff]);
+    }
+    return $count;
+}
+
+function clear_share_attempts(string $token, string $ip): void {
+    get_db()->prepare("DELETE FROM share_attempts WHERE token = :t AND ip = :ip")->execute([':t' => $token, ':ip' => $ip]);
+}
+
 /**
  * Ensure at least one admin user exists (first-run bootstrap).
  * Uses SHAREBOX_ADMIN_USER / SHAREBOX_ADMIN_PASS env vars, or defaults to admin + random password.

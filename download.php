@@ -68,6 +68,7 @@ $db = get_db();
 $stmt = $db->prepare("SELECT * FROM links WHERE token = :token");
 $stmt->execute([':token' => $token]);
 $link = $stmt->fetch();
+$stmt->closeCursor(); // an open read cursor makes the later share_attempt() write fail at once with "database is locked"
 
 // Le jeton 'home' pointe sur BASE_PATH entier : il n'est servi que via browse.php,
 // protege par Digest. Sinon ce point d'entree public exposait tous les homes.
@@ -118,22 +119,21 @@ if ($link['password_hash'] !== null) {
     if (isset($_SESSION[$sessionKey]) && $_SESSION[$sessionKey] === true) {
         // Déjà authentifié
     } elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['password'])) {
-        $attemptsKey = 'share_attempts_' . $token;
-        $attempts = (int)($_SESSION[$attemptsKey] ?? 0);
-        if ($attempts >= AUTH_MAX_ATTEMPTS) {
+        $ip = rate_limit_ip();
+        $attempts = share_attempt($token, $ip);
+        if ($attempts > AUTH_MAX_ATTEMPTS) {
             stream_log('AUTH brute-force | token=' . $token . ' | attempts=' . $attempts);
-            sleep(AUTH_LOCKOUT_SLEEP);
+            http_response_code(429);
             afficher_formulaire_mdp($link['name'], 'Trop de tentatives. Réessayez plus tard.');
             exit;
         }
         if (!password_verify($_POST['password'], $link['password_hash'])) {
-            stream_log('AUTH fail | token=' . $token . ' | attempt=' . ($attempts + 1));
-            $_SESSION[$attemptsKey] = $attempts + 1;
+            stream_log('AUTH fail | token=' . $token . ' | attempt=' . $attempts);
             sleep(AUTH_FAIL_SLEEP);
             afficher_formulaire_mdp($link['name'], 'Mot de passe incorrect.');
             exit;
         }
-        unset($_SESSION[$attemptsKey]);
+        clear_share_attempts($token, $ip);
         $_SESSION[$sessionKey] = true;
         session_regenerate_id(true);
         stream_log('AUTH ok | token=' . $token);

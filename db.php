@@ -126,7 +126,7 @@ function get_db(): PDO {
 
     // ── Migrations one-shot via PRAGMA user_version ─────────────────────────
     $version = (int)$db->query('PRAGMA user_version')->fetchColumn();
-    $targetVersion = 21; // bump when adding migrations
+    $targetVersion = 22; // bump when adding migrations
     if ($version >= $targetVersion) return $db;
 
     if ($version < 1) {
@@ -374,7 +374,6 @@ function get_db(): PDO {
         $db->query('PRAGMA user_version = 20');
     }
 
-    /** @phpstan-ignore smaller.alwaysTrue */
     if ($version < 21) {
         // v21 : hauteur vidéo mémorisée à part. On ne peut pas la ranger dans
         // probe_cache : une entrée partielle y serait servie telle quelle au
@@ -387,6 +386,21 @@ function get_db(): PDO {
             )
         ");
         $db->query('PRAGMA user_version = 21');
+    }
+
+    /** @phpstan-ignore smaller.alwaysTrue */
+    if ($version < 22) {
+        // v22 : share-link password attempts, counted server-side per (token, ip)
+        $db->query("
+            CREATE TABLE IF NOT EXISTS share_attempts (
+                token TEXT NOT NULL,
+                ip TEXT NOT NULL,
+                count INTEGER NOT NULL,
+                first_ts INTEGER NOT NULL,
+                PRIMARY KEY (token, ip)
+            )
+        ");
+        $db->query('PRAGMA user_version = 22');
     }
 
     /** @phpstan-ignore smaller.alwaysTrue */
