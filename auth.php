@@ -2,7 +2,7 @@
 /**
  * Authentification PHP pour ShareBox
  * - require_auth() : redirige vers login si pas connecté
- * - Brute-force protection : 5 tentatives max par IP / 15 min
+ * - Brute-force protection : AUTH_LOGIN_MAX_ATTEMPTS tentatives max par IP / 15 min (share_attempt)
  */
 
 require_once __DIR__ . '/db.php';
@@ -88,57 +88,6 @@ function is_admin(): bool {
     return is_logged_in() && (($_SESSION['sharebox_role'] ?? '') === 'admin');
 }
 
-/**
- * Brute-force rate limiting (file-based, simple)
- */
-function check_rate_limit(string $ip): bool {
-    $file = sys_get_temp_dir() . '/sharebox_login_' . md5($ip);
-    if (!file_exists($file)) return true;
-
-    $fh = fopen($file, 'r');
-    if (!$fh) return true;
-    flock($fh, LOCK_SH);
-    $raw = stream_get_contents($fh);
-    flock($fh, LOCK_UN);
-    fclose($fh);
-
-    $data = json_decode($raw, true);
-    if (!$data) return true;
-
-    // Reset after 15 minutes
-    if (time() - $data['first'] > 900) {
-        unlink($file);
-        return true;
-    }
-
-    return $data['count'] < 5;
-}
-
-function record_failed_attempt(string $ip): void {
-    $file = sys_get_temp_dir() . '/sharebox_login_' . md5($ip);
-    $data = ['count' => 1, 'first' => time()];
-
-    $fh = fopen($file, 'c+');
-    if (!$fh) return;
-    flock($fh, LOCK_EX);
-    $raw = stream_get_contents($fh);
-    $existing = json_decode($raw, true);
-    if ($existing) {
-        $data = $existing;
-        $data['count']++;
-    }
-    ftruncate($fh, 0);
-    rewind($fh);
-    fwrite($fh, json_encode($data));
-    flock($fh, LOCK_UN);
-    fclose($fh);
-}
-
-function clear_rate_limit(string $ip): void {
-    $file = sys_get_temp_dir() . '/sharebox_login_' . md5($ip);
-    if (file_exists($file)) unlink($file);
-}
-
 /** Client key for rate limiting: REMOTE_ADDR only (forwarded headers are spoofable); IPv6 is cut to its /64. */
 function rate_limit_ip(): string {
     $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
@@ -154,15 +103,24 @@ function share_attempt(string $token, string $ip): int {
     $db = get_db();
     $now = time();
     $cutoff = $now - AUTH_LOCKOUT_WINDOW;
-    $db->prepare("
-        INSERT INTO share_attempts (token, ip, count, first_ts) VALUES (:t, :ip, 1, :now)
-        ON CONFLICT(token, ip) DO UPDATE SET
-            count = CASE WHEN first_ts <= :cutoff THEN 1 ELSE count + 1 END,
-            first_ts = CASE WHEN first_ts <= :cutoff THEN :now ELSE first_ts END
-    ")->execute([':t' => $token, ':ip' => $ip, ':now' => $now, ':cutoff' => $cutoff]);
-    $stmt = $db->prepare("SELECT count FROM share_attempts WHERE token = :t AND ip = :ip");
-    $stmt->execute([':t' => $token, ':ip' => $ip]);
-    $count = (int)$stmt->fetchColumn();
+    // One transaction: the write lock is held until the read, so a parallel request cannot bump the count in between.
+    $db->beginTransaction();
+    try {
+        $db->prepare("
+            INSERT INTO share_attempts (token, ip, count, first_ts) VALUES (:t, :ip, 1, :now)
+            ON CONFLICT(token, ip) DO UPDATE SET
+                count = CASE WHEN first_ts <= :cutoff THEN 1 ELSE count + 1 END,
+                first_ts = CASE WHEN first_ts <= :cutoff THEN :now ELSE first_ts END
+        ")->execute([':t' => $token, ':ip' => $ip, ':now' => $now, ':cutoff' => $cutoff]);
+        $stmt = $db->prepare("SELECT count FROM share_attempts WHERE token = :t AND ip = :ip");
+        $stmt->execute([':t' => $token, ':ip' => $ip]);
+        $count = (int)$stmt->fetchColumn();
+        $stmt->closeCursor(); // an open cursor makes later writes fail with "database is locked"
+        $db->commit();
+    } catch (\Throwable $e) {
+        if ($db->inTransaction()) $db->rollBack();
+        throw $e;
+    }
     if (mt_rand(0, 99) === 0) {
         $db->prepare("DELETE FROM share_attempts WHERE first_ts <= :cutoff")->execute([':cutoff' => $cutoff]);
     }

@@ -25,8 +25,15 @@ $error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+    $limitIp = rate_limit_ip();
 
-    if (!check_rate_limit($ip)) {
+    // Counted before password_verify so parallel requests cannot all pass a check-then-increment gap.
+    // A ':' never appears in a share token, so this key cannot collide with share_attempts rows.
+    // No catch on purpose: if the database fails, nobody is authenticated.
+    $attempts = share_attempt(':login', $limitIp);
+
+    if ($attempts > AUTH_LOGIN_MAX_ATTEMPTS) {
+        http_response_code(429);
         $error = 'Trop de tentatives. Réessayez dans 15 minutes.';
     } else {
         $username = trim($_POST['username'] ?? '');
@@ -37,9 +44,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt = $db->prepare("SELECT * FROM users WHERE username = ?");
             $stmt->execute([$username]);
             $user = $stmt->fetch();
+            $stmt->closeCursor(); // an open read cursor makes the next write fail with "database is locked"
 
             if ($user && password_verify($password, $user['password_hash'])) {
-                clear_rate_limit($ip);
+                clear_share_attempts(':login', $limitIp);
                 session_regenerate_id(true);
                 $_SESSION['sharebox_user'] = $user['username'];
                 $_SESSION['sharebox_role'] = $user['role'];
@@ -49,7 +57,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header('Location: /share/');
                 exit;
             } else {
-                record_failed_attempt($ip);
                 log_activity('login_fail', $username, $ip, null);
                 $error = 'Identifiants incorrects.';
             }

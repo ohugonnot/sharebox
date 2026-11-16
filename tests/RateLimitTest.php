@@ -2,14 +2,13 @@
 
 use PHPUnit\Framework\TestCase;
 
-/**
- * Tests pour le brute-force rate limiting de auth.php.
- * Les fichiers de compteur sont dans sys_get_temp_dir() — on utilise
- * une IP de test unique par suite pour éviter les collisions et on nettoie après.
- */
+/** Login attempt limiting: the ':login' key of share_attempts, counted per client IP. */
 class RateLimitTest extends TestCase
 {
-    private string $testIp;
+    private const KEY = ':login';
+
+    /** @var array<string, mixed> */
+    private array $serverBackup;
 
     public static function setUpBeforeClass(): void
     {
@@ -18,128 +17,90 @@ class RateLimitTest extends TestCase
 
     protected function setUp(): void
     {
-        // IP unique par test pour éviter les interférences entre cas
-        $this->testIp = '192.0.2.' . rand(1, 254) . '_' . uniqid();
-        $this->clearFile();
+        $this->serverBackup = $_SERVER;
+        get_db()->exec('DELETE FROM share_attempts');
     }
 
     protected function tearDown(): void
     {
-        $this->clearFile();
+        $_SERVER = $this->serverBackup;
+        get_db()->exec('DELETE FROM share_attempts');
     }
 
-    private function clearFile(): void
+    private function locked(string $ip): bool
     {
-        $file = sys_get_temp_dir() . '/sharebox_login_' . md5($this->testIp);
-        if (file_exists($file)) {
-            unlink($file);
+        return share_attempt(self::KEY, $ip) > AUTH_LOGIN_MAX_ATTEMPTS;
+    }
+
+    public function testFirstFiveAttemptsPassSixthIsLocked(): void
+    {
+        for ($i = 1; $i <= 5; $i++) {
+            $this->assertFalse($this->locked('198.51.100.1'), "attempt $i");
         }
+        $this->assertTrue($this->locked('198.51.100.1'), 'attempt 6');
+        $this->assertTrue($this->locked('198.51.100.1'), 'attempt 7');
     }
 
-    // ── Premier appel : aucune tentative enregistrée ─────────────────────────
-
-    public function testFirstAttemptNotRateLimited(): void
+    public function testSuccessClearsTheCounter(): void
     {
-        $this->assertTrue(check_rate_limit($this->testIp), 'Sans historique, la première tentative doit passer');
+        for ($i = 0; $i < 5; $i++) share_attempt(self::KEY, '198.51.100.1');
+        clear_share_attempts(self::KEY, '198.51.100.1');
+        $this->assertSame(1, share_attempt(self::KEY, '198.51.100.1'));
     }
 
-    // ── Sous le seuil : 4 échecs → encore autorisé ────────────────────────────
-
-    public function testBelowThresholdStillAllowed(): void
+    public function testIpsAreIndependent(): void
     {
-        for ($i = 0; $i < 4; $i++) {
-            record_failed_attempt($this->testIp);
-        }
-        $this->assertTrue(check_rate_limit($this->testIp), '4 échecs < 5 → doit encore passer');
+        for ($i = 0; $i < 6; $i++) share_attempt(self::KEY, '198.51.100.1');
+        $this->assertFalse($this->locked('198.51.100.2'));
     }
 
-    // ── Seuil atteint : 5 échecs → bloqué ────────────────────────────────────
-
-    public function testAfterFiveFailuresIsRateLimited(): void
+    public function testLoginKeyDoesNotTouchShareTokens(): void
     {
-        for ($i = 0; $i < 5; $i++) {
-            record_failed_attempt($this->testIp);
-        }
-        $this->assertFalse(check_rate_limit($this->testIp), 'Après 5 échecs, doit être rate-limité');
+        for ($i = 0; $i < 6; $i++) share_attempt(self::KEY, '198.51.100.1');
+        $this->assertSame(1, share_attempt('login', '198.51.100.1'));
+        clear_share_attempts(self::KEY, '198.51.100.1');
+        $this->assertSame(2, share_attempt('login', '198.51.100.1'));
     }
 
-    // ── Au-delà du seuil : 10 échecs → toujours bloqué ───────────────────────
-
-    public function testWellAboveThresholdIsRateLimited(): void
+    public function testExpiredWindowUnlocks(): void
     {
-        for ($i = 0; $i < 10; $i++) {
-            record_failed_attempt($this->testIp);
-        }
-        $this->assertFalse(check_rate_limit($this->testIp));
+        for ($i = 0; $i < 6; $i++) share_attempt(self::KEY, '198.51.100.1');
+        get_db()->prepare('UPDATE share_attempts SET first_ts = ? WHERE token = ?')
+            ->execute([time() - AUTH_LOCKOUT_WINDOW - 1, self::KEY]);
+        $this->assertFalse($this->locked('198.51.100.1'));
     }
-
-    // ── clear_rate_limit : réinitialise le compteur ───────────────────────────
-
-    public function testClearResetsRateLimit(): void
-    {
-        for ($i = 0; $i < 5; $i++) {
-            record_failed_attempt($this->testIp);
-        }
-        $this->assertFalse(check_rate_limit($this->testIp), 'Pré-condition : doit être bloqué avant le clear');
-
-        clear_rate_limit($this->testIp);
-
-        $this->assertTrue(check_rate_limit($this->testIp), 'Après clear, doit être débloqué');
-    }
-
-    // ── clear_rate_limit : idempotent sur IP inconnue ─────────────────────────
 
     public function testClearOnUnknownIpIsIdempotent(): void
     {
-        // Ne doit pas lever d'exception si le fichier n'existe pas
-        clear_rate_limit('198.51.100.99_unknown_' . uniqid());
-        $this->assertTrue(true); // Aucune exception levée
+        clear_share_attempts(self::KEY, '198.51.100.99');
+        $this->assertSame(0, (int)get_db()->query('SELECT COUNT(*) FROM share_attempts')->fetchColumn());
     }
 
-    // ── Fichier corrompu : doit passer (fail open) ────────────────────────────
-
-    public function testCorruptFileAllowsAccess(): void
+    public function testForwardedHeadersDoNotChangeTheKey(): void
     {
-        $file = sys_get_temp_dir() . '/sharebox_login_' . md5($this->testIp);
-        file_put_contents($file, '{invalid json{{');
-
-        $this->assertTrue(check_rate_limit($this->testIp), 'Fichier JSON corrompu → doit passer (fail open)');
+        $_SERVER['REMOTE_ADDR'] = '198.51.100.7';
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = '203.0.113.9';
+        $this->assertSame('198.51.100.7', rate_limit_ip());
     }
 
-    // ── Fichier vide : doit passer (fail open) ────────────────────────────────
-
-    public function testEmptyFileAllowsAccess(): void
+    public function testIpv6SharesTheSlash64Bucket(): void
     {
-        $file = sys_get_temp_dir() . '/sharebox_login_' . md5($this->testIp);
-        file_put_contents($file, '');
-
-        $this->assertTrue(check_rate_limit($this->testIp), 'Fichier vide → doit passer (fail open)');
+        $_SERVER['REMOTE_ADDR'] = '2001:db8:1:2:aaaa::1';
+        $a = rate_limit_ip();
+        $_SERVER['REMOTE_ADDR'] = '2001:db8:1:2:bbbb::2';
+        $this->assertSame($a, rate_limit_ip());
     }
 
-    // ── record_failed_attempt : incrémente correctement ──────────────────────
-
-    public function testRecordIncrements(): void
+    /** Fail closed: a broken database raises, it never reports "not locked". */
+    public function testDatabaseFailureRaises(): void
     {
-        record_failed_attempt($this->testIp);
-        record_failed_attempt($this->testIp);
-        record_failed_attempt($this->testIp);
-
-        $file = sys_get_temp_dir() . '/sharebox_login_' . md5($this->testIp);
-        $data = json_decode(file_get_contents($file), true);
-
-        $this->assertSame(3, $data['count'], 'Le compteur doit être à 3 après 3 appels');
-    }
-
-    // ── Expiration : données > 15 min → débloqué ─────────────────────────────
-
-    public function testExpiredWindowAllowsAccess(): void
-    {
-        $file = sys_get_temp_dir() . '/sharebox_login_' . md5($this->testIp);
-        // Simuler 5 tentatives vieilles de 16 minutes
-        $data = ['count' => 5, 'first' => time() - 960];
-        file_put_contents($file, json_encode($data));
-
-        $this->assertTrue(check_rate_limit($this->testIp), 'Fenêtre expirée → doit être débloqué');
-        $this->assertFileDoesNotExist($file, 'Le fichier expiré doit être supprimé');
+        $db = get_db();
+        $db->exec('ALTER TABLE share_attempts RENAME TO share_attempts_off');
+        try {
+            $this->expectException(PDOException::class);
+            share_attempt(self::KEY, '198.51.100.1');
+        } finally {
+            $db->exec('ALTER TABLE share_attempts_off RENAME TO share_attempts');
+        }
     }
 }

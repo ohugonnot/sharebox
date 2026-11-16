@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Reader and player code is copied from the portal by `tools/sync-reader.sh` (checksums in `reader/UPSTREAM.txt`).
 
 ### Security
+- **Login attempts are limited atomically in the database** — the counter is incremented before the password is checked (5 attempts per client IP / 15 min, IPv6 grouped by /64), so parallel requests can no longer all get through; a locked login answers HTTP 429, it is no longer a per-IP temp file, and it fails closed if the database is unavailable.
 - **Share-link password attempts are limited server-side** — the counter is now kept per token and client IP (IPv6 per /64) in the database, so dropping the session cookie no longer resets it. Reported by @marron22.
 - **Demo data is opt-in** — `SHAREBOX_DEMO_DATA` is `false` by default, and demo media is only auto-shared if the marker file `$MEDIA_DIR/.sharebox-demo` exists, so real media is never shared by the demo.
 - **No more default admin password in Docker** — if `SHAREBOX_ADMIN_PASS` is unset, a random 16-hex password is generated and printed once in `docker logs` at first start. `changeme`, `sharebox`, `admin`, `password`, or a password under 8 characters stops the container (exit 1) at first start; later starts only warn.

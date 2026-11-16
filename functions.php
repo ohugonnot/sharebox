@@ -20,6 +20,7 @@ const VMTOUCH_SIZE_LIMIT      = 2 * 1024 * 1024 * 1024; // page-cache warm only 
 const LOG_ROTATION_SIZE       = 5 * 1024 * 1024;        // rotate stream.log at 5 MB
 const LOG_ROTATION_COUNT      = 3;              // keep 3 rotated log files
 const AUTH_MAX_ATTEMPTS       = 10;             // password attempts before lockout
+const AUTH_LOGIN_MAX_ATTEMPTS = 5;              // login form attempts per client IP before lockout
 const AUTH_LOCKOUT_WINDOW     = 900;            // seconds before the attempt counter resets
 const AUTH_FAIL_SLEEP         = 1;              // sleep seconds per failed attempt
 
