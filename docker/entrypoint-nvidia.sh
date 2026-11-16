@@ -78,6 +78,9 @@ max_input_time = 300
 memory_limit = 512M
 post_max_size = 100M
 upload_max_filesize = 100M
+display_errors = Off
+log_errors = On
+error_log = /proc/self/fd/2
 PHPINI
 
 # ── Create admin user in DB (PHP session auth) ──────────────────────────────
