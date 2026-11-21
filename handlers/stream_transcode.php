@@ -89,11 +89,14 @@ $cmd = $buildTranscodeCmd($hwEncoder);
 [$slotFp, $queued] = acquireStreamSlot();
 if ($queued) { stream_log('TRANSCODE queued | ' . basename($resolvedPath)); header('X-Stream-Queued: 1'); }
 $shellPid = null;
-register_shutdown_function(function() use (&$slotFp, &$uhdFp, &$shellPid) {
+register_shutdown_function(function() use (&$slotFp, &$uhdFp, &$shellPid, &$proc, &$pipes) {
     // Kill process group to terminate ffmpeg even behind shell wrapper
     if ($shellPid) { @posix_kill(-$shellPid, SIGTERM); @posix_kill($shellPid, SIGTERM); }
     releaseStreamSlot($slotFp);
     releaseStreamSlot($uhdFp);
+    // Client gone mid-echo: PHP frees $proc without waiting. The zombie left behind keeps
+    // busybox `timeout` (Docker image) asleep for 4 h, since its watchdog still sees the pid.
+    if (is_resource($proc)) { fclose($pipes[1]); proc_close($proc); }
 });
 warmFileCache($resolvedPath);
 $proc = proc_open($cmd, [1 => ['pipe', 'w']], $pipes);

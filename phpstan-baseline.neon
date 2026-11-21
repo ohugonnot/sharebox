@@ -123,6 +123,12 @@ parameters:
 		-
 			message: '#^If condition is always false\.$#'
 			identifier: if.alwaysFalse
+			count: 2
+			path: handlers/stream_remux.php
+
+		-
+			message: '#^Offset 1 does not exist on null\.$#'
+			identifier: offsetAccess.notFound
 			count: 1
 			path: handlers/stream_remux.php
 
@@ -171,6 +177,12 @@ parameters:
 		-
 			message: '#^If condition is always false\.$#'
 			identifier: if.alwaysFalse
+			count: 2
+			path: handlers/stream_transcode.php
+
+		-
+			message: '#^Offset 1 does not exist on null\.$#'
+			identifier: offsetAccess.notFound
 			count: 1
 			path: handlers/stream_transcode.php
 
