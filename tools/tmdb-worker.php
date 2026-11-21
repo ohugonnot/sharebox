@@ -35,11 +35,13 @@ $dbRead->exec('PRAGMA busy_timeout = 10000');
 $db = new PDO('sqlite:' . DB_PATH, null, null, $dbOpts);
 $db->exec('PRAGMA journal_mode=WAL');
 $db->exec('PRAGMA busy_timeout = 30000');
+// No fsync per commit: it runs under the write lock and takes seconds on a busy disk.
+$db->exec('PRAGMA synchronous = NORMAL');
 
 // ── Phase 0: Discover folders recursively and populate folder_posters ──
 // Crawls BASE_PATH, respects TMDB_MIN_DEPTH and HIDDEN_DIRS.
 // Only inserts folders that don't already exist in the DB.
-function discover_folders(PDO $db): int {
+function discover_folders(PDO $db, string $cronLock): int {
     $basePath = rtrim(BASE_PATH, '/');
     $minDepth = defined('TMDB_MIN_DEPTH') ? (int)TMDB_MIN_DEPTH : 0;
     $hiddenDirs = defined('HIDDEN_DIRS') ? HIDDEN_DIRS : [];
@@ -65,13 +67,17 @@ function discover_folders(PDO $db): int {
                 return true;
             }
         ),
-        RecursiveIteratorIterator::SELF_FIRST
+        RecursiveIteratorIterator::SELF_FIRST,
+        RecursiveIteratorIterator::CATCH_GET_CHILD // one unreadable dir must not abort the whole walk
     );
     $iter->setMaxDepth(15);
 
-    $batch = 0;
-    $db->beginTransaction();
+    // Walk the disk first, write after: the write lock must never be held across disk I/O.
+    $paths = [];
+    $walked = 0;
     foreach ($iter as $dir) {
+        // A long walk must not look like a stale worker to the 15 min check.
+        if (++$walked % 500 === 0) @touch($cronLock);
         $path = $dir->getRealPath() ?: $dir->getPathname();
         $rel = ltrim(str_replace($basePath, '', $path), '/');
         $depth = substr_count($rel, '/') + 1;
@@ -80,43 +86,35 @@ function discover_folders(PDO $db): int {
         // Skip folders that contain only non-streamable files (CBR, EPUB, PDF, etc.).
         // Folders with subdirectories are kept — they might be series with season subfolders.
         $contents = @scandir($path, SCANDIR_SORT_NONE);
-        if ($contents !== false) {
-            $hasVideo = false;
-            $hasSubdir = false;
-            foreach ($contents as $item) {
-                if ($item === '.' || $item === '..') continue;
-                if (is_dir($path . '/' . $item)) { $hasSubdir = true; break; }
-                $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
-                if (in_array($ext, ['mp4','mkv','avi','m4v','mov','wmv','flv','webm','ts','m2ts','mpg','mpeg'], true)) {
-                    $hasVideo = true;
-                    break;
-                }
+        if ($contents === false) continue; // unreadable folder: nothing to match
+        $hasVideo = false;
+        $hasSubdir = false;
+        foreach ($contents as $item) {
+            if ($item === '.' || $item === '..') continue;
+            if (is_dir($path . '/' . $item)) { $hasSubdir = true; break; }
+            $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+            if (in_array($ext, ['mp4','mkv','avi','m4v','mov','wmv','flv','webm','ts','m2ts','mpg','mpeg'], true)) {
+                $hasVideo = true;
+                break;
             }
-            if (!$hasVideo && !$hasSubdir) continue;
         }
+        if (!$hasVideo && !$hasSubdir) continue;
 
-        try {
-            $stmt->execute([':p' => $path]);
-            if ($stmt->rowCount() > 0) $inserted++;
-        } catch (PDOException $e) {}
-
-        if (++$batch % 200 === 0) {
-            $db->commit();
-            $db->beginTransaction();
-        }
+        $paths[] = $path;
     }
-    $db->commit();
+
+    foreach (array_chunk($paths, 200) as $chunk) {
+        $db->beginTransaction();
+        foreach ($chunk as $path) {
+            try {
+                $stmt->execute([':p' => $path]);
+                if ($stmt->rowCount() > 0) $inserted++;
+            } catch (PDOException $e) {}
+        }
+        $db->commit();
+    }
 
     return $inserted;
-}
-
-try {
-    $discovered = discover_folders($db);
-    if ($discovered > 0) {
-        ai_log("DISCOVER | $discovered new folders found in " . BASE_PATH);
-    }
-} catch (Exception $e) {
-    ai_log('DISCOVER error: ' . $e->getMessage());
 }
 
 // ── Single lock file shared with web handler ──
@@ -161,12 +159,29 @@ rewind($cronFp);
 fwrite($cronFp, (string)getmypid());
 fflush($cronFp);
 
+// Under the lock: concurrent launchers must not each walk the whole disk.
+try {
+    $discovered = discover_folders($db, $cronLock);
+    if ($discovered > 0) {
+        ai_log("DISCOVER | $discovered new folders found in " . BASE_PATH);
+    }
+} catch (Exception $e) {
+    // A transaction left open here would hold the write lock for the whole run.
+    if ($db->inTransaction()) $db->rollBack();
+    ai_log('DISCOVER error: ' . $e->getMessage());
+}
+
 // ── Main loop: process until nothing left ──
 $prevPendingCount = '';
 $ctx = stream_context_create(['http' => ['timeout' => 5, 'ignore_errors' => true]]);
+$deadline = time() + 1800; // pending rows stay in DB, the next run resumes
 do {
     // Touch lock to reset mtime — prevents stale detection during legitimate long runs
     @touch($cronLock);
+    if (time() > $deadline) {
+        ai_log('SCAN | time budget reached, exiting');
+        break;
+    }
 
     $rows = $dbRead->query("SELECT rowid, path, match_attempts FROM folder_posters WHERE poster_url IS NULL AND (match_attempts IS NULL OR match_attempts < 3) LIMIT 200")->fetchAll();
     $pendingCount = count($rows);
@@ -257,6 +272,7 @@ do {
         $stmtType = $dbRead->prepare("SELECT folder_type FROM folder_posters WHERE path = :p");
         $stmtType->execute([':p' => $dir]);
         $typeRow = $stmtType->fetch();
+        $stmtType->closeCursor(); // an open cursor pins a stale read snapshot
         $isMoviesFolder = ($typeRow && ($typeRow['folder_type'] ?? 'series') === 'movies');
 
         if ($isMoviesFolder) {
@@ -303,6 +319,7 @@ do {
         $stmtP = $dbRead->prepare("SELECT tmdb_id, title, tmdb_type FROM folder_posters WHERE path = :p AND poster_url IS NOT NULL AND poster_url != '__none__'");
         $stmtP->execute([':p' => $dir]);
         $pRow = $stmtP->fetch();
+        $stmtP->closeCursor();
         if ($pRow) {
             $parentContext[$dir] = $pRow;
         }
@@ -310,6 +327,7 @@ do {
 
     foreach ($byDir as $dir => $names) {
         if (empty($names)) continue; // Skip if all entries were company matches
+        if (time() > $deadline) break;
         ai_log('SCAN | dir=' . basename($dir) . ' entries=' . count($names));
 
         // Detect if dir has season-like subfolders → prefer TV results
@@ -357,6 +375,9 @@ do {
 
         $found = 0;
         foreach ($titleToFiles as $key => $files) {
+            if (time() > $deadline) break;
+            // One pass can outlast the 15 min stale check: a healthy worker must not get killed.
+            @touch($cronLock);
             $first = $files[0];
             $attempt = $first['attempt'];
             $searchTitle = $first['title'];
@@ -604,6 +625,8 @@ foreach ($seasonRows as $sr) {
         $childRow = $db->prepare("SELECT poster_url FROM folder_posters WHERE path = ? AND tmdb_id = ?");
         $childRow->execute([$childPath, $sr['tmdb_id']]);
         $existing = $childRow->fetch();
+        // Else the UPDATE below fails (stale snapshot) if anyone wrote during the HTTP call.
+        $childRow->closeCursor();
         if (!$existing) continue;
 
         // For saga/arc folders, resolve to TMDB season number via name matching
@@ -681,12 +704,19 @@ $gcTotal = (int)$db->query("SELECT COUNT(*) FROM folder_posters")->fetchColumn()
 $gcOffset = $gcTotal > 1000 ? random_int(0, $gcTotal - 1000) : 0;
 $gcRows = $db->query("SELECT rowid, path FROM folder_posters LIMIT 1000 OFFSET $gcOffset")->fetchAll();
 $gcRemoved = 0;
-$db->beginTransaction();
+// Stat the disk first, delete after: no write lock across disk I/O.
+$gcDead = [];
 foreach ($gcRows as $gr) {
-    if (!is_link($gr['path']) && !file_exists($gr['path'])) {
-        $db->prepare("DELETE FROM folder_posters WHERE rowid = ?")->execute([$gr['rowid']]);
-        $gcRemoved++;
-    }
+    // Nearest existing ancestor not traversable (0700 home): a failed stat does not mean the folder is gone.
+    $anc = dirname($gr['path']);
+    while ($anc !== '/' && !file_exists($anc)) $anc = dirname($anc);
+    if (!is_executable($anc)) continue;
+    if (!is_link($gr['path']) && !file_exists($gr['path'])) $gcDead[] = $gr['rowid'];
+}
+$db->beginTransaction();
+foreach ($gcDead as $gcRowId) {
+    $db->prepare("DELETE FROM folder_posters WHERE rowid = ?")->execute([$gcRowId]);
+    $gcRemoved++;
 }
 $db->commit();
 if ($gcRemoved > 0) ai_log('GC | removed ' . $gcRemoved . ' orphan entries');
